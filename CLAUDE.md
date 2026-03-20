@@ -14,6 +14,10 @@ Terminal emulator and IDE-like environment for agentic development.
 - Qt UI via cxx-qt
 - Built/managed with cargo
 
+## Style
+
+- Import order: stdlib, then external crates, then local modules — separated by blank lines
+
 ## Development
 
 ```sh

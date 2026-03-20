@@ -1,5 +1,6 @@
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
+
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 pub struct PtyHandle {
     _child: Box<dyn portable_pty::Child + Send + Sync>,

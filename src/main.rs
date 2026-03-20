@@ -4,9 +4,10 @@ mod pty;
 mod terminal;
 mod ui;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 use std::io::Read;
 use std::thread;
+
+use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 
 fn main() {
     let cfg = config::Config::load();

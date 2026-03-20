@@ -1,7 +1,8 @@
-use cxx_qt_lib::QString;
 use std::io::Write;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
+
+use cxx_qt_lib::QString;
 
 use crate::terminal::SharedBuffer;
 
