@@ -1,5 +1,4 @@
 mod agent;
-mod config;
 mod pty;
 mod terminal;
 mod ui;
@@ -7,11 +6,11 @@ mod ui;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 
 fn main() {
-    let cfg = config::Config::new();
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
     let buffer = terminal::new_shared(24, 80);
 
     let mut pty_handle =
-        pty::PtyHandle::spawn(&cfg.shell, 24, 80).expect("failed to spawn PTY");
+        pty::PtyHandle::spawn(&shell, 24, 80).expect("failed to spawn PTY");
 
     let reader = pty_handle.take_reader();
     let writer = pty_handle.take_writer();
