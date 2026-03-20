@@ -7,7 +7,7 @@ mod ui;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 
 fn main() {
-    let cfg = config::Config::load();
+    let cfg = config::Config::new();
     let buffer = terminal::new_shared(24, 80);
 
     let mut pty_handle =

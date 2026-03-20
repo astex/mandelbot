@@ -8,8 +8,6 @@ cxx = "1.0"
 cxx-qt = "0.8"
 cxx-qt-lib = { version = "0.8", features = ["qt_full"] }
 portable-pty = "0.9"
-toml = "0.8"
-serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 cxx-qt-build = { version = "0.8", features = ["link_qt_object_files"] }
