@@ -4,9 +4,6 @@ mod pty;
 mod terminal;
 mod ui;
 
-use std::io::Read;
-use std::thread;
-
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 
 fn main() {
@@ -16,25 +13,10 @@ fn main() {
     let mut pty_handle =
         pty::PtyHandle::spawn(&cfg.shell, 24, 80).expect("failed to spawn PTY");
 
-    let mut reader = pty_handle.take_reader();
+    let reader = pty_handle.take_reader();
     let writer = pty_handle.take_writer();
 
-    // Background thread: PTY stdout -> terminal buffer
-    let read_buffer = buffer.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let mut tb = read_buffer.lock().unwrap();
-                    tb.feed(&buf[..n]);
-                }
-            }
-        }
-    });
-
-    ui::init_globals(buffer, writer);
+    ui::init_globals(buffer, writer, reader);
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();

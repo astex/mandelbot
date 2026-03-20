@@ -12,13 +12,7 @@ ApplicationWindow {
 
     TerminalView {
         id: terminal
-    }
-
-    Timer {
-        interval: 16
-        running: true
-        repeat: true
-        onTriggered: terminal.refresh()
+        Component.onCompleted: start_reader()
     }
 
     Text {
@@ -32,7 +26,6 @@ ApplicationWindow {
         wrapMode: Text.NoWrap
     }
 
-    // Invisible overlay to capture all key input
     FocusScope {
         anchors.fill: parent
         focus: true
