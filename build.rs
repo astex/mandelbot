@@ -5,6 +5,6 @@ fn main() {
         QmlModule::new("com.squeak.terminal")
             .qml_files(["qml/main.qml"]),
     )
-    .file("src/ui/mod.rs")
+    .file("src/ui.rs")
     .build();
 }
