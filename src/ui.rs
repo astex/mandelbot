@@ -1,15 +1,11 @@
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{container, text};
-use iced::{Color, Element, Fill, Font, Subscription, Theme};
+use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
 
 use crate::terminal::SharedBuffer;
-
-static PTY_READER: OnceLock<Mutex<Option<Box<dyn Read + Send>>>> = OnceLock::new();
-static PTY_BUFFER: OnceLock<SharedBuffer> = OnceLock::new();
-static PTY_WRITER: OnceLock<Arc<Mutex<Box<dyn Write + Send>>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -17,19 +13,25 @@ pub enum Message {
     KeyEvent(iced::keyboard::Event),
 }
 
-pub fn init(buffer: SharedBuffer, writer: Box<dyn Write + Send>, reader: Box<dyn Read + Send>) {
-    PTY_BUFFER.set(buffer).ok();
-    PTY_WRITER.set(Arc::new(Mutex::new(writer))).ok();
-    PTY_READER.set(Mutex::new(Some(reader))).ok();
-}
-
 pub struct Terminal {
     screen: String,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
 impl Terminal {
-    pub fn boot() -> (Self, iced::Task<Message>) {
-        (Self { screen: String::new() }, iced::Task::none())
+    pub fn new(
+        buffer: SharedBuffer,
+        writer: Box<dyn Write + Send>,
+        reader: Box<dyn Read + Send>,
+    ) -> (Self, Task<Message>) {
+        let terminal = Self {
+            screen: String::new(),
+            writer: Arc::new(Mutex::new(writer)),
+        };
+
+        let task = Task::run(pty_stream(buffer, reader), |msg| msg);
+
+        (terminal, task)
     }
 
     pub fn update(&mut self, message: Message) {
@@ -52,8 +54,7 @@ impl Terminal {
                         },
                     };
 
-                    let writer = PTY_WRITER.get().expect("writer not initialized");
-                    if let Ok(mut w) = writer.lock() {
+                    if let Ok(mut w) = self.writer.lock() {
                         let _ = w.write_all(&bytes);
                         let _ = w.flush();
                     }
@@ -80,10 +81,7 @@ impl Terminal {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            iced::keyboard::listen().map(Message::KeyEvent),
-            Subscription::run(pty_stream),
-        ])
+        iced::keyboard::listen().map(Message::KeyEvent)
     }
 
     pub fn theme(&self) -> Theme {
@@ -91,16 +89,12 @@ impl Terminal {
     }
 }
 
-fn pty_stream() -> impl iced::futures::Stream<Item = Message> {
+fn pty_stream(
+    buffer: SharedBuffer,
+    mut reader: Box<dyn Read + Send>,
+) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(32, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
         let (tx, mut rx) = iced::futures::channel::mpsc::channel::<String>(32);
-
-        let mut reader = PTY_READER
-            .get()
-            .and_then(|r| r.lock().ok()?.take())
-            .expect("PTY reader not initialized");
-
-        let buffer = PTY_BUFFER.get().expect("PTY buffer not initialized").clone();
 
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
