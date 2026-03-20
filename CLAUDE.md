@@ -11,7 +11,7 @@ Terminal emulator and IDE-like environment for agentic development.
 ## Tech Stack
 
 - Rust (edition 2024, toolchain pinned in rust-toolchain.toml)
-- Qt UI via cxx-qt
+- Iced UI (Elm architecture)
 - Built/managed with cargo
 
 ## Style
