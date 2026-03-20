@@ -7,8 +7,7 @@ use std::sync::Mutex;
 fn main() -> iced::Result {
     let buffer = terminal::new_shared(24, 80);
 
-    let mut pty_handle =
-        pty::PtyHandle::spawn("/bin/bash", 24, 80).expect("failed to spawn PTY");
+    let mut pty_handle = pty::PtyHandle::spawn("/bin/bash", 24, 80).expect("failed to spawn PTY");
 
     let reader = pty_handle.take_reader();
     let writer = pty_handle.take_writer();

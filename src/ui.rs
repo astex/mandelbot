@@ -93,35 +93,38 @@ fn pty_stream(
     buffer: SharedBuffer,
     mut reader: Box<dyn Read + Send>,
 ) -> impl iced::futures::Stream<Item = Message> {
-    iced::stream::channel(32, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-        let (tx, mut rx) = iced::futures::channel::mpsc::channel::<String>(32);
+    iced::stream::channel(
+        32,
+        |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let (tx, mut rx) = iced::futures::channel::mpsc::channel::<String>(32);
 
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let text = {
-                            let mut tb = buffer.lock().unwrap();
-                            tb.feed(&buf[..n]);
-                            tb.screen_text()
-                        };
-                        if tx.clone().try_send(text).is_err() {
-                            break;
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let text = {
+                                let mut tb = buffer.lock().unwrap();
+                                tb.feed(&buf[..n]);
+                                tb.screen_text()
+                            };
+                            if tx.clone().try_send(text).is_err() {
+                                break;
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
 
-        loop {
-            match rx.next().await {
-                Some(text) => {
-                    let _ = sender.send(Message::TerminalOutput(text)).await;
+            loop {
+                match rx.next().await {
+                    Some(text) => {
+                        let _ = sender.send(Message::TerminalOutput(text)).await;
+                    }
+                    None => break,
                 }
-                None => break,
             }
-        }
-    })
+        },
+    )
 }

@@ -34,8 +34,7 @@ impl TerminalBuffer {
                         i += 1;
                         // Collect parameter bytes
                         let param_start = i;
-                        while i < data.len()
-                            && (data[i] as char).is_ascii_digit()
+                        while i < data.len() && (data[i] as char).is_ascii_digit()
                             || (i < data.len() && data[i] == b';')
                             || (i < data.len() && data[i] == b'?')
                         {
@@ -197,7 +196,11 @@ impl TerminalBuffer {
 }
 
 fn parse_param(params: &[u8], default: u8) -> u8 {
-    let s: String = params.iter().filter(|b| b.is_ascii_digit()).map(|&b| b as char).collect();
+    let s: String = params
+        .iter()
+        .filter(|b| b.is_ascii_digit())
+        .map(|&b| b as char)
+        .collect();
     s.parse().unwrap_or(default)
 }
 
