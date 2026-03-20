@@ -1,4 +1,3 @@
-mod agent;
 mod pty;
 mod terminal;
 mod ui;
