@@ -1,7 +1,6 @@
 use vte::{Params, Perform};
 
 use crate::escape;
-use crate::keys;
 
 pub struct TerminalBuffer {
     lines: Vec<String>,
@@ -60,7 +59,6 @@ impl Perform for TerminalBuffer {
             self.advance_row();
         }
 
-        self.ensure_row_exists();
         let line = &mut self.lines[self.cursor_row];
         if self.cursor_col < line.len() {
             line.replace_range(self.cursor_col..self.cursor_col + 1, &c.to_string());
@@ -86,7 +84,7 @@ impl Perform for TerminalBuffer {
                 self.wrap_pending = false;
                 self.advance_row();
             }
-            keys::BACKSPACE => {
+            escape::BACKSPACE => {
                 if self.cursor_col > 0 {
                     self.cursor_col -= 1;
                 }
@@ -100,47 +98,34 @@ impl Perform for TerminalBuffer {
 
         match (action, first_param) {
             escape::ERASE_DISPLAY_CURSOR_TO_END => {
-                if self.cursor_row < self.lines.len() {
-                    self.lines[self.cursor_row].truncate(self.cursor_col);
-                }
+                self.lines[self.cursor_row].truncate(self.cursor_col);
                 self.lines.truncate(self.cursor_row + 1);
             }
             escape::ERASE_DISPLAY_START_TO_CURSOR => {
-                for r in 0..self.cursor_row {
-                    if r < self.lines.len() {
-                        self.lines[r].clear();
-                    }
-                }
-                if self.cursor_row < self.lines.len() {
-                    let line = &mut self.lines[self.cursor_row];
-                    let end = self.cursor_col.min(line.len());
-                    line.replace_range(..end, &" ".repeat(end));
-                }
-            }
-            escape::ERASE_DISPLAY_ENTIRE => {
-                for line in &mut self.lines {
+                for line in &mut self.lines[..self.cursor_row] {
                     line.clear();
                 }
+                let line = &mut self.lines[self.cursor_row];
+                let end = self.cursor_col.min(line.len());
+                line.replace_range(..end, &" ".repeat(end));
+            }
+            escape::ERASE_DISPLAY_ENTIRE => {
+                self.lines.clear();
+                self.lines.push(String::new());
                 self.cursor_row = 0;
                 self.cursor_col = 0;
             }
             escape::ERASE_LINE_CURSOR_TO_END => {
-                if self.cursor_row < self.lines.len() {
-                    self.lines[self.cursor_row].truncate(self.cursor_col);
-                }
+                self.lines[self.cursor_row].truncate(self.cursor_col);
             }
             escape::ERASE_LINE_START_TO_CURSOR => {
-                if self.cursor_row < self.lines.len() {
-                    let line = &mut self.lines[self.cursor_row];
-                    let end = self.cursor_col.min(line.len());
-                    line.replace_range(..end, &" ".repeat(end));
-                }
+                let line = &mut self.lines[self.cursor_row];
+                let end = self.cursor_col.min(line.len());
+                line.replace_range(..end, &" ".repeat(end));
             }
             escape::ERASE_LINE_ENTIRE => {
-                if self.cursor_row < self.lines.len() {
-                    self.lines[self.cursor_row].clear();
-                    self.cursor_col = 0;
-                }
+                self.lines[self.cursor_row].clear();
+                self.cursor_col = 0;
             }
             _ => {}
         }

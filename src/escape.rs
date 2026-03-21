@@ -1,3 +1,5 @@
+pub const BACKSPACE: u8 = 0x08;
+
 pub const ERASE_DISPLAY_CURSOR_TO_END: (char, u16) = ('J', 0);
 pub const ERASE_DISPLAY_START_TO_CURSOR: (char, u16) = ('J', 1);
 pub const ERASE_DISPLAY_ENTIRE: (char, u16) = ('J', 2);
