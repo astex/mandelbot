@@ -1,5 +1,7 @@
 use vte::{Params, Perform};
 
+use crate::keys;
+
 pub struct TerminalBuffer {
     lines: Vec<String>,
     cursor_row: usize,
@@ -59,8 +61,15 @@ impl Perform for TerminalBuffer {
 
         self.ensure_row_exists();
         let line = &mut self.lines[self.cursor_row];
-        line.push(c);
-        self.cursor_col = line.len();
+        if self.cursor_col < line.len() {
+            line.replace_range(self.cursor_col..self.cursor_col + 1, &c.to_string());
+        } else {
+            while line.len() < self.cursor_col {
+                line.push(' ');
+            }
+            line.push(c);
+        }
+        self.cursor_col += 1;
         if self.cursor_col >= self.cols {
             self.wrap_pending = true;
         }
@@ -68,19 +77,17 @@ impl Perform for TerminalBuffer {
 
     fn execute(&mut self, byte: u8) {
         match byte {
+            b'\r' => {
+                self.cursor_col = 0;
+                self.wrap_pending = false;
+            }
             b'\n' => {
                 self.wrap_pending = false;
                 self.advance_row();
             }
-            b'\r' => {}
-
-            0x08 => {
-                // Backspace
-                self.ensure_row_exists();
-                let line = &mut self.lines[self.cursor_row];
-                if !line.is_empty() {
-                    line.pop();
-                    self.cursor_col = line.len();
+            keys::BACKSPACE => {
+                if self.cursor_col > 0 {
+                    self.cursor_col -= 1;
                 }
             }
             _ => {}
@@ -92,7 +99,6 @@ impl Perform for TerminalBuffer {
 
         match action {
             'J' => {
-                // Erase in display
                 match first_param {
                     0 => {
                         if self.cursor_row < self.lines.len() {
@@ -123,7 +129,6 @@ impl Perform for TerminalBuffer {
                 }
             }
             'K' => {
-                // Erase in line
                 if self.cursor_row >= self.lines.len() {
                     return;
                 }
