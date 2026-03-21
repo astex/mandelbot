@@ -11,6 +11,7 @@ use crate::terminal::TerminalBuffer;
 #[derive(Debug, Clone)]
 pub enum Message {
     TerminalOutput(Vec<u8>),
+    ShellExited,
     KeyEvent(iced::keyboard::Event),
 }
 
@@ -39,12 +40,14 @@ impl Terminal {
         (terminal, task)
     }
 
-    pub fn update(&mut self, message: Message) {
+    pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TerminalOutput(bytes) => {
                 self.terminal_buffer.feed(&bytes);
                 self.screen = self.terminal_buffer.screen_text();
+                Task::none()
             }
+            Message::ShellExited => iced::exit(),
             Message::KeyEvent(event) => {
                 if let iced::keyboard::Event::KeyPressed { key, text, .. } = event {
                     use iced::keyboard::key::Named;
@@ -54,17 +57,18 @@ impl Terminal {
                         (Key::Named(Named::Enter), _) => vec![b'\r'],
                         (Key::Named(Named::Backspace), _) => vec![keys::DEL],
                         // TODO: arrow keys, tab, function keys, etc.
-                        (Key::Named(_), _) => return,
+                        (Key::Named(_), _) => return Task::none(),
                         (_, Some(chars)) if !chars.is_empty() => {
                             chars.to_string().into_bytes()
                         }
-                        _ => return,
+                        _ => return Task::none(),
                     };
 
                     let mut writer = self.writer.lock().unwrap();
                     let _ = writer.write_all(&bytes);
                     let _ = writer.flush();
                 }
+                Task::none()
             }
         }
     }
@@ -99,6 +103,8 @@ fn pty_stream(mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<It
     iced::stream::channel(
         32,
         |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let (exit_sender, exit_receiver) = iced::futures::channel::oneshot::channel::<()>();
+
             std::thread::spawn(move || {
                 let mut read_buffer = [0u8; 4096];
                 loop {
@@ -112,9 +118,11 @@ fn pty_stream(mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<It
                         }
                     }
                 }
+                let _ = sender.try_send(Message::ShellExited);
+                let _ = exit_sender.send(());
             });
 
-            std::future::pending::<()>().await;
+            let _ = exit_receiver.await;
         },
     )
 }
