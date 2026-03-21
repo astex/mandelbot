@@ -1,5 +1,6 @@
 use vte::{Params, Perform};
 
+use crate::escape;
 use crate::keys;
 
 pub struct TerminalBuffer {
@@ -97,53 +98,48 @@ impl Perform for TerminalBuffer {
     fn csi_dispatch(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
         let first_param = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
 
-        match action {
-            'J' => {
-                match first_param {
-                    0 => {
-                        if self.cursor_row < self.lines.len() {
-                            self.lines[self.cursor_row].truncate(self.cursor_col);
-                        }
-                        self.lines.truncate(self.cursor_row + 1);
+        match (action, first_param) {
+            escape::ERASE_DISPLAY_CURSOR_TO_END => {
+                if self.cursor_row < self.lines.len() {
+                    self.lines[self.cursor_row].truncate(self.cursor_col);
+                }
+                self.lines.truncate(self.cursor_row + 1);
+            }
+            escape::ERASE_DISPLAY_START_TO_CURSOR => {
+                for r in 0..self.cursor_row {
+                    if r < self.lines.len() {
+                        self.lines[r].clear();
                     }
-                    1 => {
-                        for r in 0..self.cursor_row {
-                            if r < self.lines.len() {
-                                self.lines[r].clear();
-                            }
-                        }
-                        if self.cursor_row < self.lines.len() {
-                            let line = &mut self.lines[self.cursor_row];
-                            let end = self.cursor_col.min(line.len());
-                            line.replace_range(..end, &" ".repeat(end));
-                        }
-                    }
-                    2 => {
-                        for line in &mut self.lines {
-                            line.clear();
-                        }
-                        self.cursor_row = 0;
-                        self.cursor_col = 0;
-                    }
-                    _ => {}
+                }
+                if self.cursor_row < self.lines.len() {
+                    let line = &mut self.lines[self.cursor_row];
+                    let end = self.cursor_col.min(line.len());
+                    line.replace_range(..end, &" ".repeat(end));
                 }
             }
-            'K' => {
-                if self.cursor_row >= self.lines.len() {
-                    return;
+            escape::ERASE_DISPLAY_ENTIRE => {
+                for line in &mut self.lines {
+                    line.clear();
                 }
-                let line = &mut self.lines[self.cursor_row];
-                match first_param {
-                    0 => line.truncate(self.cursor_col),
-                    1 => {
-                        let end = self.cursor_col.min(line.len());
-                        line.replace_range(..end, &" ".repeat(end));
-                    }
-                    2 => {
-                        line.clear();
-                        self.cursor_col = 0;
-                    }
-                    _ => {}
+                self.cursor_row = 0;
+                self.cursor_col = 0;
+            }
+            escape::ERASE_LINE_CURSOR_TO_END => {
+                if self.cursor_row < self.lines.len() {
+                    self.lines[self.cursor_row].truncate(self.cursor_col);
+                }
+            }
+            escape::ERASE_LINE_START_TO_CURSOR => {
+                if self.cursor_row < self.lines.len() {
+                    let line = &mut self.lines[self.cursor_row];
+                    let end = self.cursor_col.min(line.len());
+                    line.replace_range(..end, &" ".repeat(end));
+                }
+            }
+            escape::ERASE_LINE_ENTIRE => {
+                if self.cursor_row < self.lines.len() {
+                    self.lines[self.cursor_row].clear();
+                    self.cursor_col = 0;
                 }
             }
             _ => {}
