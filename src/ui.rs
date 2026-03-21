@@ -95,9 +95,7 @@ fn pty_stream(
 ) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
-        |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-            let (tx, mut rx) = iced::futures::channel::mpsc::channel::<String>(32);
-
+        |sender: iced::futures::channel::mpsc::Sender<Message>| async move {
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
                 loop {
@@ -109,7 +107,11 @@ fn pty_stream(
                                 tb.feed(&buf[..n]);
                                 tb.screen_text()
                             };
-                            if tx.clone().try_send(text).is_err() {
+                            if sender
+                                .clone()
+                                .try_send(Message::TerminalOutput(text))
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -117,14 +119,8 @@ fn pty_stream(
                 }
             });
 
-            loop {
-                match rx.next().await {
-                    Some(text) => {
-                        let _ = sender.send(Message::TerminalOutput(text)).await;
-                    }
-                    None => break,
-                }
-            }
+            // Keep the async future alive while the thread runs.
+            std::future::pending::<()>().await;
         },
     )
 }
