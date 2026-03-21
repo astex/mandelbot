@@ -1,4 +1,4 @@
-# Squeak
+# Mandelbot
 
 Terminal emulator and IDE-like environment for agentic development.
 
