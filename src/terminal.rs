@@ -1,3 +1,5 @@
+use crate::keys;
+
 pub struct TerminalBuffer {
     lines: Vec<String>,
     cursor_row: usize,
@@ -26,7 +28,7 @@ impl TerminalBuffer {
         while i < data.len() {
             let b = data[i];
             match b {
-                0x1b => {
+                keys::ESCAPE => {
                     i += 1;
                     if i < data.len() && data[i] == b'[' {
                         i += 1;
@@ -79,13 +81,13 @@ impl TerminalBuffer {
                     self.wrap_pending = false;
                     i += 1;
                 }
-                0x08 => {
+                keys::BACKSPACE => {
                     if self.cursor_col > 0 {
                         self.cursor_col -= 1;
                     }
                     i += 1;
                 }
-                b if b >= 0x20 => {
+                byte if byte >= keys::SPACE => {
                     // Deferred wrap: only advance row when the next char arrives
                     if self.wrap_pending {
                         self.wrap_pending = false;
@@ -106,7 +108,7 @@ impl TerminalBuffer {
                         self.lines.push(String::new());
                     }
                     let line = &mut self.lines[self.cursor_row];
-                    let ch = b as char;
+                    let ch = byte as char;
                     if self.cursor_col < line.len() {
                         line.replace_range(self.cursor_col..self.cursor_col + 1, &ch.to_string());
                     } else {
