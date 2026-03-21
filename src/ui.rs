@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
 
+use crate::pty;
 use crate::terminal::TerminalBuffer;
 
 #[derive(Debug, Clone)]
@@ -19,10 +20,13 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    pub fn new(
-        writer: Box<dyn Write + Send>,
-        reader: Box<dyn Read + Send>,
-    ) -> (Self, Task<Message>) {
+    pub fn boot() -> (Self, Task<Message>) {
+        let mut pty_handle =
+            pty::PtyHandle::spawn("/bin/bash", 24, 80).expect("failed to spawn PTY");
+
+        let reader = pty_handle.take_reader();
+        let writer = pty_handle.take_writer();
+
         let terminal = Self {
             terminal_buffer: TerminalBuffer::new(24, 80),
             screen: String::new(),
