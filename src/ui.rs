@@ -56,6 +56,7 @@ impl Terminal {
                     let bytes = match (key, text) {
                         (Key::Named(Named::Enter), _) => vec![b'\r'],
                         (Key::Named(Named::Backspace), _) => vec![keys::DEL],
+                        (Key::Named(Named::Space), _) => vec![keys::SPACE],
                         // TODO: arrow keys, tab, function keys, etc.
                         (Key::Named(_), _) => return Task::none(),
                         (_, Some(chars)) if !chars.is_empty() => {
