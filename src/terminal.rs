@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 pub struct TerminalBuffer {
     lines: Vec<String>,
     cursor_row: usize,
@@ -202,10 +200,4 @@ fn parse_param(params: &[u8], default: u8) -> u8 {
         .map(|&b| b as char)
         .collect();
     s.parse().unwrap_or(default)
-}
-
-pub type SharedBuffer = Arc<Mutex<TerminalBuffer>>;
-
-pub fn new_shared(rows: usize, cols: usize) -> SharedBuffer {
-    Arc::new(Mutex::new(TerminalBuffer::new(rows, cols)))
 }

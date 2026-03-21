@@ -4,39 +4,41 @@ use std::sync::{Arc, Mutex};
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
 
-use crate::terminal::SharedBuffer;
+use crate::terminal::TerminalBuffer;
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    TerminalOutput(String),
+    TerminalOutput(Vec<u8>),
     KeyEvent(iced::keyboard::Event),
 }
 
 pub struct Terminal {
+    terminal_buffer: TerminalBuffer,
     screen: String,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
 impl Terminal {
     pub fn new(
-        buffer: SharedBuffer,
         writer: Box<dyn Write + Send>,
         reader: Box<dyn Read + Send>,
     ) -> (Self, Task<Message>) {
         let terminal = Self {
+            terminal_buffer: TerminalBuffer::new(24, 80),
             screen: String::new(),
             writer: Arc::new(Mutex::new(writer)),
         };
 
-        let task = Task::run(pty_stream(buffer, reader), |msg| msg);
+        let task = Task::run(pty_stream(reader), |message| message);
 
         (terminal, task)
     }
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::TerminalOutput(s) => {
-                self.screen = s;
+            Message::TerminalOutput(bytes) => {
+                self.terminal_buffer.feed(&bytes);
+                self.screen = self.terminal_buffer.screen_text();
             }
             Message::KeyEvent(event) => {
                 if let iced::keyboard::Event::KeyPressed { key, text, .. } = event {
@@ -53,9 +55,9 @@ impl Terminal {
                         },
                     };
 
-                    if let Ok(mut w) = self.writer.lock() {
-                        let _ = w.write_all(&bytes);
-                        let _ = w.flush();
+                    if let Ok(mut writer) = self.writer.lock() {
+                        let _ = writer.write_all(&bytes);
+                        let _ = writer.flush();
                     }
                 }
             }
@@ -88,10 +90,7 @@ impl Terminal {
     }
 }
 
-fn pty_stream(
-    buffer: SharedBuffer,
-    mut reader: Box<dyn Read + Send>,
-) -> impl iced::futures::Stream<Item = Message> {
+fn pty_stream(mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
         |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
@@ -101,15 +100,8 @@ fn pty_stream(
                     match reader.read(&mut read_buffer) {
                         Ok(0) | Err(_) => break,
                         Ok(bytes_read) => {
-                            let text = {
-                                let mut terminal_buffer = buffer.lock().unwrap();
-                                terminal_buffer.feed(&read_buffer[..bytes_read]);
-                                terminal_buffer.screen_text()
-                            };
-                            if sender
-                                .try_send(Message::TerminalOutput(text))
-                                .is_err()
-                            {
+                            let bytes = read_buffer[..bytes_read].to_vec();
+                            if sender.try_send(Message::TerminalOutput(bytes)).is_err() {
                                 break;
                             }
                         }
