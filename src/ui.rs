@@ -61,10 +61,9 @@ impl Terminal {
                         _ => return,
                     };
 
-                    if let Ok(mut writer) = self.writer.lock() {
-                        let _ = writer.write_all(&bytes);
-                        let _ = writer.flush();
-                    }
+                    let mut writer = self.writer.lock().unwrap();
+                    let _ = writer.write_all(&bytes);
+                    let _ = writer.flush();
                 }
             }
         }
