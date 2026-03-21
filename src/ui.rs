@@ -96,15 +96,15 @@ fn pty_stream(
         32,
         |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
             std::thread::spawn(move || {
-                let mut buf = [0u8; 4096];
+                let mut read_buffer = [0u8; 4096];
                 loop {
-                    match reader.read(&mut buf) {
+                    match reader.read(&mut read_buffer) {
                         Ok(0) | Err(_) => break,
-                        Ok(n) => {
+                        Ok(bytes_read) => {
                             let text = {
-                                let mut tb = buffer.lock().unwrap();
-                                tb.feed(&buf[..n]);
-                                tb.screen_text()
+                                let mut terminal_buffer = buffer.lock().unwrap();
+                                terminal_buffer.feed(&read_buffer[..bytes_read]);
+                                terminal_buffer.screen_text()
                             };
                             if sender
                                 .try_send(Message::TerminalOutput(text))
