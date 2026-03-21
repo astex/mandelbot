@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
+use vte::Parser;
 
 use crate::keys;
 use crate::pty;
@@ -16,6 +17,7 @@ pub enum Message {
 }
 
 pub struct Terminal {
+    parser: Parser,
     terminal_buffer: TerminalBuffer,
     screen: String,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -30,6 +32,7 @@ impl Terminal {
         let writer = pty_handle.take_writer();
 
         let terminal = Self {
+            parser: Parser::new(),
             terminal_buffer: TerminalBuffer::new(24, 80),
             screen: String::new(),
             writer: Arc::new(Mutex::new(writer)),
@@ -43,7 +46,9 @@ impl Terminal {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TerminalOutput(bytes) => {
-                self.terminal_buffer.feed(&bytes);
+                for &byte in &bytes {
+                    self.parser.advance(&mut self.terminal_buffer, byte);
+                }
                 self.screen = self.terminal_buffer.screen_text();
                 Task::none()
             }

@@ -1,11 +1,6 @@
-use vte::{Params, Parser, Perform};
+use vte::{Params, Perform};
 
 pub struct TerminalBuffer {
-    parser: Parser,
-    state: ScreenState,
-}
-
-struct ScreenState {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
@@ -19,30 +14,19 @@ impl TerminalBuffer {
         let mut lines = Vec::with_capacity(rows);
         lines.push(String::new());
         Self {
-            parser: Parser::new(),
-            state: ScreenState {
-                lines,
-                cursor_row: 0,
-                cursor_col: 0,
-                rows,
-                cols,
-                wrap_pending: false,
-            },
-        }
-    }
-
-    pub fn feed(&mut self, data: &[u8]) {
-        for &byte in data {
-            self.parser.advance(&mut self.state, byte);
+            lines,
+            cursor_row: 0,
+            cursor_col: 0,
+            rows,
+            cols,
+            wrap_pending: false,
         }
     }
 
     pub fn screen_text(&self) -> String {
-        self.state.lines.join("\n")
+        self.lines.join("\n")
     }
-}
 
-impl ScreenState {
     fn scroll_up(&mut self) {
         if self.lines.len() > 1 {
             self.lines.remove(0);
@@ -65,7 +49,7 @@ impl ScreenState {
     }
 }
 
-impl Perform for ScreenState {
+impl Perform for TerminalBuffer {
     fn print(&mut self, c: char) {
         if self.wrap_pending {
             self.wrap_pending = false;
