@@ -1,7 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
 
@@ -95,7 +94,7 @@ fn pty_stream(
 ) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
-        |sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+        |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
                 loop {
@@ -108,7 +107,6 @@ fn pty_stream(
                                 tb.screen_text()
                             };
                             if sender
-                                .clone()
                                 .try_send(Message::TerminalOutput(text))
                                 .is_err()
                             {
@@ -119,7 +117,6 @@ fn pty_stream(
                 }
             });
 
-            // Keep the async future alive while the thread runs.
             std::future::pending::<()>().await;
         },
     )
