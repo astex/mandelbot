@@ -59,16 +59,8 @@ impl Perform for TerminalBuffer {
 
         self.ensure_row_exists();
         let line = &mut self.lines[self.cursor_row];
-        let s = c.to_string();
-        if self.cursor_col < line.len() {
-            line.replace_range(self.cursor_col..self.cursor_col + 1, &s);
-        } else {
-            while line.len() < self.cursor_col {
-                line.push(' ');
-            }
-            line.push(c);
-        }
-        self.cursor_col += 1;
+        line.push(c);
+        self.cursor_col = line.len();
         if self.cursor_col >= self.cols {
             self.wrap_pending = true;
         }
@@ -80,14 +72,15 @@ impl Perform for TerminalBuffer {
                 self.wrap_pending = false;
                 self.advance_row();
             }
-            b'\r' => {
-                self.cursor_col = 0;
-                self.wrap_pending = false;
-            }
+            b'\r' => {}
+
             0x08 => {
                 // Backspace
-                if self.cursor_col > 0 {
-                    self.cursor_col -= 1;
+                self.ensure_row_exists();
+                let line = &mut self.lines[self.cursor_row];
+                if !line.is_empty() {
+                    line.pop();
+                    self.cursor_col = line.len();
                 }
             }
             _ => {}
