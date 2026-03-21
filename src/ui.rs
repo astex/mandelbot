@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
 
+use crate::keys;
 use crate::pty;
 use crate::terminal::TerminalBuffer;
 
@@ -51,7 +52,7 @@ impl Terminal {
                             b"\r".to_vec()
                         }
                         iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace) => {
-                            vec![0x7f]
+                            vec![keys::DEL]
                         }
                         _ => match text {
                             Some(s) if !s.is_empty() => s.to_string().into_bytes(),

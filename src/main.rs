@@ -1,3 +1,4 @@
+mod keys;
 mod pty;
 mod terminal;
 mod ui;
