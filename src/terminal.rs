@@ -1,6 +1,11 @@
-use crate::keys;
+use vte::{Params, Parser, Perform};
 
 pub struct TerminalBuffer {
+    parser: Parser,
+    state: ScreenState,
+}
+
+struct ScreenState {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
@@ -14,192 +19,158 @@ impl TerminalBuffer {
         let mut lines = Vec::with_capacity(rows);
         lines.push(String::new());
         Self {
-            lines,
-            cursor_row: 0,
-            cursor_col: 0,
-            rows,
-            cols,
-            wrap_pending: false,
+            parser: Parser::new(),
+            state: ScreenState {
+                lines,
+                cursor_row: 0,
+                cursor_col: 0,
+                rows,
+                cols,
+                wrap_pending: false,
+            },
         }
     }
 
     pub fn feed(&mut self, data: &[u8]) {
-        let mut i = 0;
-        while i < data.len() {
-            let b = data[i];
-            match b {
-                keys::ESCAPE => {
-                    i += 1;
-                    if i < data.len() && data[i] == b'[' {
-                        i += 1;
-                        // Collect parameter bytes
-                        let param_start = i;
-                        while i < data.len() && (data[i] as char).is_ascii_digit()
-                            || (i < data.len() && data[i] == b';')
-                            || (i < data.len() && data[i] == b'?')
-                        {
-                            i += 1;
-                        }
-                        let params = &data[param_start..i];
-                        // Final byte — the command
-                        if i < data.len() {
-                            let cmd = data[i];
-                            match cmd {
-                                b'J' => {
-                                    // Erase in display
-                                    self.erase_display(params);
-                                }
-                                b'K' => {
-                                    // Erase in line
-                                    self.erase_line(params);
-                                }
-                                _ => {} // ignore other CSI sequences
-                            }
-                            i += 1;
-                        }
-                    } else if i < data.len() {
-                        // Non-CSI escape — skip one char
-                        i += 1;
-                    }
-                }
-                b'\n' => {
-                    self.wrap_pending = false;
-                    self.cursor_row += 1;
-                    if self.cursor_row >= self.rows {
-                        if self.lines.len() > 1 {
-                            self.lines.remove(0);
-                        }
-                        self.cursor_row = self.rows - 1;
-                    }
-                    while self.lines.len() <= self.cursor_row {
-                        self.lines.push(String::new());
-                    }
-                    i += 1;
-                }
-                b'\r' => {
-                    self.cursor_col = 0;
-                    self.wrap_pending = false;
-                    i += 1;
-                }
-                keys::BACKSPACE => {
-                    if self.cursor_col > 0 {
-                        self.cursor_col -= 1;
-                    }
-                    i += 1;
-                }
-                byte if byte >= keys::SPACE => {
-                    // Deferred wrap: only advance row when the next char arrives
-                    if self.wrap_pending {
-                        self.wrap_pending = false;
-                        self.cursor_col = 0;
-                        self.cursor_row += 1;
-                        if self.cursor_row >= self.rows {
-                            if self.lines.len() > 1 {
-                                self.lines.remove(0);
-                            }
-                            self.cursor_row = self.rows - 1;
-                        }
-                        while self.lines.len() <= self.cursor_row {
-                            self.lines.push(String::new());
-                        }
-                    }
-
-                    while self.lines.len() <= self.cursor_row {
-                        self.lines.push(String::new());
-                    }
-                    let line = &mut self.lines[self.cursor_row];
-                    let ch = byte as char;
-                    if self.cursor_col < line.len() {
-                        line.replace_range(self.cursor_col..self.cursor_col + 1, &ch.to_string());
-                    } else {
-                        while line.len() < self.cursor_col {
-                            line.push(' ');
-                        }
-                        line.push(ch);
-                    }
-                    self.cursor_col += 1;
-                    if self.cursor_col >= self.cols {
-                        self.wrap_pending = true;
-                    }
-                    i += 1;
-                }
-                _ => {
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    fn erase_display(&mut self, params: &[u8]) {
-        let mode = parse_param(params, 0);
-        match mode {
-            0 => {
-                // Clear from cursor to end of screen
-                if self.cursor_row < self.lines.len() {
-                    self.lines[self.cursor_row].truncate(self.cursor_col);
-                }
-                self.lines.truncate(self.cursor_row + 1);
-            }
-            1 => {
-                // Clear from start to cursor
-                for r in 0..self.cursor_row {
-                    if r < self.lines.len() {
-                        self.lines[r].clear();
-                    }
-                }
-                if self.cursor_row < self.lines.len() {
-                    let line = &mut self.lines[self.cursor_row];
-                    let fill: String = " ".repeat(self.cursor_col.min(line.len()));
-                    line.replace_range(..self.cursor_col.min(line.len()), &fill);
-                }
-            }
-            2 => {
-                // Clear entire screen
-                for line in &mut self.lines {
-                    line.clear();
-                }
-                self.cursor_row = 0;
-                self.cursor_col = 0;
-            }
-            _ => {}
-        }
-    }
-
-    fn erase_line(&mut self, params: &[u8]) {
-        let mode = parse_param(params, 0);
-        if self.cursor_row >= self.lines.len() {
-            return;
-        }
-        let line = &mut self.lines[self.cursor_row];
-        match mode {
-            0 => {
-                // Clear from cursor to end of line
-                line.truncate(self.cursor_col);
-            }
-            1 => {
-                // Clear from start to cursor
-                let end = self.cursor_col.min(line.len());
-                line.replace_range(..end, &" ".repeat(end));
-            }
-            2 => {
-                // Clear entire line
-                line.clear();
-                self.cursor_col = 0;
-            }
-            _ => {}
+        for &byte in data {
+            self.parser.advance(&mut self.state, byte);
         }
     }
 
     pub fn screen_text(&self) -> String {
-        self.lines.join("\n")
+        self.state.lines.join("\n")
     }
 }
 
-fn parse_param(params: &[u8], default: u8) -> u8 {
-    let s: String = params
-        .iter()
-        .filter(|b| b.is_ascii_digit())
-        .map(|&b| b as char)
-        .collect();
-    s.parse().unwrap_or(default)
+impl ScreenState {
+    fn scroll_up(&mut self) {
+        if self.lines.len() > 1 {
+            self.lines.remove(0);
+        }
+        self.cursor_row = self.rows - 1;
+    }
+
+    fn ensure_row_exists(&mut self) {
+        while self.lines.len() <= self.cursor_row {
+            self.lines.push(String::new());
+        }
+    }
+
+    fn advance_row(&mut self) {
+        self.cursor_row += 1;
+        if self.cursor_row >= self.rows {
+            self.scroll_up();
+        }
+        self.ensure_row_exists();
+    }
+}
+
+impl Perform for ScreenState {
+    fn print(&mut self, c: char) {
+        if self.wrap_pending {
+            self.wrap_pending = false;
+            self.cursor_col = 0;
+            self.advance_row();
+        }
+
+        self.ensure_row_exists();
+        let line = &mut self.lines[self.cursor_row];
+        let s = c.to_string();
+        if self.cursor_col < line.len() {
+            line.replace_range(self.cursor_col..self.cursor_col + 1, &s);
+        } else {
+            while line.len() < self.cursor_col {
+                line.push(' ');
+            }
+            line.push(c);
+        }
+        self.cursor_col += 1;
+        if self.cursor_col >= self.cols {
+            self.wrap_pending = true;
+        }
+    }
+
+    fn execute(&mut self, byte: u8) {
+        match byte {
+            b'\n' => {
+                self.wrap_pending = false;
+                self.advance_row();
+            }
+            b'\r' => {
+                self.cursor_col = 0;
+                self.wrap_pending = false;
+            }
+            0x08 => {
+                // Backspace
+                if self.cursor_col > 0 {
+                    self.cursor_col -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn csi_dispatch(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
+        let first_param = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
+
+        match action {
+            'J' => {
+                // Erase in display
+                match first_param {
+                    0 => {
+                        if self.cursor_row < self.lines.len() {
+                            self.lines[self.cursor_row].truncate(self.cursor_col);
+                        }
+                        self.lines.truncate(self.cursor_row + 1);
+                    }
+                    1 => {
+                        for r in 0..self.cursor_row {
+                            if r < self.lines.len() {
+                                self.lines[r].clear();
+                            }
+                        }
+                        if self.cursor_row < self.lines.len() {
+                            let line = &mut self.lines[self.cursor_row];
+                            let end = self.cursor_col.min(line.len());
+                            line.replace_range(..end, &" ".repeat(end));
+                        }
+                    }
+                    2 => {
+                        for line in &mut self.lines {
+                            line.clear();
+                        }
+                        self.cursor_row = 0;
+                        self.cursor_col = 0;
+                    }
+                    _ => {}
+                }
+            }
+            'K' => {
+                // Erase in line
+                if self.cursor_row >= self.lines.len() {
+                    return;
+                }
+                let line = &mut self.lines[self.cursor_row];
+                match first_param {
+                    0 => line.truncate(self.cursor_col),
+                    1 => {
+                        let end = self.cursor_col.min(line.len());
+                        line.replace_range(..end, &" ".repeat(end));
+                    }
+                    2 => {
+                        line.clear();
+                        self.cursor_col = 0;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
+    fn put(&mut self, _byte: u8) {}
+    fn unhook(&mut self) {}
+    fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
 }
