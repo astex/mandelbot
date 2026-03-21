@@ -53,6 +53,7 @@ impl Terminal {
                     let bytes = match (key, text) {
                         (Key::Named(Named::Enter), _) => vec![b'\r'],
                         (Key::Named(Named::Backspace), _) => vec![keys::DEL],
+                        (Key::Named(_), _) => return,
                         (_, Some(chars)) if !chars.is_empty() => {
                             chars.to_string().into_bytes()
                         }
