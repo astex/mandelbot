@@ -47,17 +47,16 @@ impl Terminal {
             }
             Message::KeyEvent(event) => {
                 if let iced::keyboard::Event::KeyPressed { key, text, .. } = event {
-                    let bytes = match key {
-                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
-                            vec![b'\r']
+                    use iced::keyboard::key::Named;
+                    use iced::keyboard::Key;
+
+                    let bytes = match (key, text) {
+                        (Key::Named(Named::Enter), _) => vec![b'\r'],
+                        (Key::Named(Named::Backspace), _) => vec![keys::DEL],
+                        (_, Some(chars)) if !chars.is_empty() => {
+                            chars.to_string().into_bytes()
                         }
-                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace) => {
-                            vec![keys::DEL]
-                        }
-                        _ => match text {
-                            Some(s) if !s.is_empty() => s.to_string().into_bytes(),
-                            _ => return,
-                        },
+                        _ => return,
                     };
 
                     if let Ok(mut writer) = self.writer.lock() {
