@@ -49,7 +49,7 @@ impl Terminal {
                 if let iced::keyboard::Event::KeyPressed { key, text, .. } = event {
                     let bytes = match key {
                         iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
-                            b"\r".to_vec()
+                            vec![b'\r']
                         }
                         iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace) => {
                             vec![keys::DEL]
