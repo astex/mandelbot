@@ -29,50 +29,73 @@ pub enum Message {
     WindowResized(Size),
 }
 
-pub struct Terminal {
-    parser: Parser,
-    terminal_buffer: TerminalBuffer,
-    screen: String,
-    master: Option<Arc<Mutex<Box<dyn MasterPty + Send>>>>,
-    writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
-    pty_cols: usize,
+pub enum Terminal {
+    WaitingForSize,
+    Running {
+        parser: Parser,
+        terminal_buffer: TerminalBuffer,
+        screen: String,
+        master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+        writer: Arc<Mutex<Box<dyn Write + Send>>>,
+        pty_cols: usize,
+    },
 }
 
 impl Terminal {
     pub fn boot() -> (Self, Task<Message>) {
-        let terminal = Self {
-            parser: Parser::new(),
-            terminal_buffer: TerminalBuffer::new(INITIAL_ROWS as usize),
-            screen: String::new(),
-            master: None,
-            writer: None,
-            pty_cols: INITIAL_COLS as usize,
-        };
-
-        (terminal, Task::none())
-    }
-
-    fn spawn_pty(&mut self, rows: usize, cols: usize) -> Task<Message> {
-        let (master, _child) =
-            pty::spawn_shell("/bin/bash", rows as u16, cols as u16).expect("failed to spawn PTY");
-
-        let reader = master.try_clone_reader().expect("failed to clone reader");
-        let writer = master.take_writer().expect("failed to take writer");
-
-        self.terminal_buffer = TerminalBuffer::new(rows);
-        self.master = Some(Arc::new(Mutex::new(master)));
-        self.writer = Some(Arc::new(Mutex::new(writer)));
-
-        Task::run(pty_stream(reader), |message| message)
+        (Self::WaitingForSize, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::WindowResized(size) if matches!(self, Self::WaitingForSize) => {
+                let cols = ((size.width - PADDING * 2.0) / CHAR_WIDTH).floor() as usize;
+                let rows = ((size.height - PADDING * 2.0) / CHAR_HEIGHT).floor() as usize;
+                let cols = cols.max(1);
+                let rows = rows.max(1);
+
+                let (master, _child) =
+                    pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
+                        .expect("failed to spawn PTY");
+
+                let reader = master.try_clone_reader().expect("failed to clone reader");
+                let writer = master.take_writer().expect("failed to take writer");
+
+                *self = Self::Running {
+                    parser: Parser::new(),
+                    terminal_buffer: TerminalBuffer::new(rows),
+                    screen: String::new(),
+                    master: Arc::new(Mutex::new(master)),
+                    writer: Arc::new(Mutex::new(writer)),
+                    pty_cols: cols,
+                };
+
+                Task::run(pty_stream(reader), |message| message)
+            }
+            _ if matches!(self, Self::WaitingForSize) => Task::none(),
+            _ => self.update_running(message),
+        }
+    }
+
+    fn update_running(&mut self, message: Message) -> Task<Message> {
+        let Self::Running {
+            parser,
+            terminal_buffer,
+            screen,
+            master,
+            writer,
+            pty_cols,
+        } = self
+        else {
+            unreachable!()
+        };
+
+        match message {
             Message::TerminalOutput(bytes) => {
                 for &byte in &bytes {
-                    self.parser.advance(&mut self.terminal_buffer, byte);
+                    parser.advance(terminal_buffer, byte);
                 }
-                self.screen = self.terminal_buffer.screen_text();
+                *screen = terminal_buffer.screen_text();
                 Task::none()
             }
             Message::ShellExited => iced::exit(),
@@ -93,11 +116,9 @@ impl Terminal {
                         _ => return Task::none(),
                     };
 
-                    if let Some(writer) = &self.writer {
-                        let mut writer = writer.lock().unwrap();
-                        let _ = writer.write_all(&bytes);
-                        let _ = writer.flush();
-                    }
+                    let mut writer = writer.lock().unwrap();
+                    let _ = writer.write_all(&bytes);
+                    let _ = writer.flush();
                 }
                 Task::none()
             }
@@ -107,18 +128,14 @@ impl Terminal {
                 let cols = cols.max(1);
                 let rows = rows.max(1);
 
-                if self.master.is_none() {
-                    return self.spawn_pty(rows, cols);
-                }
-
-                if rows == self.terminal_buffer.rows && cols == self.pty_cols {
+                if rows == terminal_buffer.rows && cols == *pty_cols {
                     return Task::none();
                 }
 
-                self.terminal_buffer.rows = rows;
-                self.pty_cols = cols;
+                terminal_buffer.rows = rows;
+                *pty_cols = cols;
 
-                let master = self.master.as_ref().unwrap().lock().unwrap();
+                let master = master.lock().unwrap();
                 let _ = master.resize(PtySize {
                     rows: rows as u16,
                     cols: cols as u16,
@@ -132,8 +149,13 @@ impl Terminal {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
+        let screen = match self {
+            Self::WaitingForSize => "",
+            Self::Running { screen, .. } => screen,
+        };
+
         container(
-            text(&self.screen)
+            text(screen)
                 .font(Font::MONOSPACE)
                 .size(14)
                 .color(Color::from_rgb(0.83, 0.83, 0.83)),
