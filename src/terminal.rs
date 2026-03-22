@@ -10,6 +10,8 @@ use iced::{font, Color, Font};
 
 use alacritty_terminal::Term;
 
+use crate::theme::TerminalTheme;
+
 pub struct TerminalBuffer {
     term: Term<VoidListener>,
     parser: ansi::Processor,
@@ -46,7 +48,7 @@ impl TerminalBuffer {
         self.term.resize(size);
     }
 
-    pub fn screen_spans(&self) -> Vec<text::Span<'static, (), Font>> {
+    pub fn screen_spans(&self, theme: &TerminalTheme) -> Vec<text::Span<'static, (), Font>> {
         let grid = self.term.grid();
         let display_offset = grid.display_offset();
         let cursor_point = grid.cursor.point;
@@ -85,6 +87,7 @@ impl TerminalBuffer {
                             current_bg,
                             current_flags,
                             current_is_cursor,
+                            theme,
                         ));
                         current_text.clear();
                     }
@@ -105,6 +108,7 @@ impl TerminalBuffer {
                     current_bg,
                     current_flags,
                     current_is_cursor,
+                    theme,
                 ));
             }
         }
@@ -113,18 +117,16 @@ impl TerminalBuffer {
     }
 }
 
-const DEFAULT_FG: Color = Color::from_rgb(0.83, 0.83, 0.83);
-const DEFAULT_BG: Color = Color::from_rgb(0.12, 0.12, 0.12);
-
 fn styled_span(
     content: &str,
     fg: AnsiColor,
     bg: AnsiColor,
     flags: Flags,
     is_cursor: bool,
+    theme: &TerminalTheme,
 ) -> text::Span<'static, (), Font> {
-    let mut fg_color = ansi_to_iced_color(fg);
-    let mut bg_color = ansi_to_iced_color_bg(bg);
+    let mut fg_color = ansi_to_iced_color(fg, theme);
+    let mut bg_color = ansi_to_iced_color_bg(bg, theme);
     let has_bg = !matches!(bg, AnsiColor::Named(NamedColor::Background));
 
     if is_cursor || flags.contains(Flags::INVERSE) {
@@ -148,48 +150,43 @@ fn styled_span(
     span
 }
 
-fn ansi_to_iced_color_bg(color: AnsiColor) -> Color {
+fn ansi_to_iced_color_bg(color: AnsiColor, theme: &TerminalTheme) -> Color {
     match color {
-        AnsiColor::Named(NamedColor::Background) => DEFAULT_BG,
-        other => ansi_to_iced_color(other),
+        AnsiColor::Named(NamedColor::Background) => theme.bg,
+        other => ansi_to_iced_color(other, theme),
     }
 }
 
-fn ansi_to_iced_color(color: AnsiColor) -> Color {
+fn ansi_to_iced_color(color: AnsiColor, theme: &TerminalTheme) -> Color {
     match color {
         AnsiColor::Named(named) => match named {
-            NamedColor::Black => Color::from_rgb(0.0, 0.0, 0.0),
-            NamedColor::Red => Color::from_rgb(0.8, 0.0, 0.0),
-            NamedColor::Green => Color::from_rgb(0.0, 0.8, 0.0),
-            NamedColor::Yellow => Color::from_rgb(0.8, 0.8, 0.0),
-            NamedColor::Blue => Color::from_rgb(0.3, 0.3, 1.0),
-            NamedColor::Magenta => Color::from_rgb(0.8, 0.0, 0.8),
-            NamedColor::Cyan => Color::from_rgb(0.0, 0.8, 0.8),
-            NamedColor::White => Color::from_rgb(0.75, 0.75, 0.75),
-            NamedColor::BrightBlack => Color::from_rgb(0.5, 0.5, 0.5),
-            NamedColor::BrightRed => Color::from_rgb(1.0, 0.33, 0.33),
-            NamedColor::BrightGreen => Color::from_rgb(0.33, 1.0, 0.33),
-            NamedColor::BrightYellow => Color::from_rgb(1.0, 1.0, 0.33),
-            NamedColor::BrightBlue => Color::from_rgb(0.5, 0.5, 1.0),
-            NamedColor::BrightMagenta => Color::from_rgb(1.0, 0.33, 1.0),
-            NamedColor::BrightCyan => Color::from_rgb(0.33, 1.0, 1.0),
-            NamedColor::BrightWhite => Color::from_rgb(1.0, 1.0, 1.0),
-            NamedColor::Foreground => DEFAULT_FG,
-            _ => DEFAULT_FG,
+            NamedColor::Black => theme.black,
+            NamedColor::Red => theme.red,
+            NamedColor::Green => theme.green,
+            NamedColor::Yellow => theme.yellow,
+            NamedColor::Blue => theme.blue,
+            NamedColor::Magenta => theme.magenta,
+            NamedColor::Cyan => theme.cyan,
+            NamedColor::White => theme.white,
+            NamedColor::BrightBlack => theme.bright_black,
+            NamedColor::BrightRed => theme.bright_red,
+            NamedColor::BrightGreen => theme.bright_green,
+            NamedColor::BrightYellow => theme.bright_yellow,
+            NamedColor::BrightBlue => theme.bright_blue,
+            NamedColor::BrightMagenta => theme.bright_magenta,
+            NamedColor::BrightCyan => theme.bright_cyan,
+            NamedColor::BrightWhite => theme.bright_white,
+            NamedColor::Foreground => theme.fg,
+            _ => theme.fg,
         },
-        AnsiColor::Spec(rgb) => {
-            Color::from_rgb8(rgb.r, rgb.g, rgb.b)
-        }
-        AnsiColor::Indexed(idx) => {
-            ansi_256_to_iced_color(idx)
-        }
+        AnsiColor::Spec(rgb) => Color::from_rgb8(rgb.r, rgb.g, rgb.b),
+        AnsiColor::Indexed(idx) => ansi_256_to_iced_color(idx, theme),
     }
 }
 
-fn ansi_256_to_iced_color(idx: u8) -> Color {
+fn ansi_256_to_iced_color(idx: u8, theme: &TerminalTheme) -> Color {
     match idx {
         0..=15 => {
-            // Standard colors — defer to named
             let named = match idx {
                 0 => NamedColor::Black,
                 1 => NamedColor::Red,
@@ -209,10 +206,9 @@ fn ansi_256_to_iced_color(idx: u8) -> Color {
                 15 => NamedColor::BrightWhite,
                 _ => unreachable!(),
             };
-            ansi_to_iced_color(AnsiColor::Named(named))
+            ansi_to_iced_color(AnsiColor::Named(named), theme)
         }
         16..=231 => {
-            // 6x6x6 color cube
             let idx = idx - 16;
             let r = (idx / 36) * 51;
             let g = ((idx / 6) % 6) * 51;
@@ -220,7 +216,6 @@ fn ansi_256_to_iced_color(idx: u8) -> Color {
             Color::from_rgb8(r, g, b)
         }
         232..=255 => {
-            // Grayscale ramp
             let gray = 8 + (idx - 232) * 10;
             Color::from_rgb8(gray, gray, gray)
         }
