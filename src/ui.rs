@@ -26,6 +26,7 @@ pub enum Message {
     TerminalOutput(Vec<u8>),
     ShellExited,
     KeyEvent(iced::keyboard::Event),
+    MouseEvent(iced::mouse::Event),
     WindowResized(Size),
 }
 
@@ -92,6 +93,7 @@ impl Terminal {
         match message {
             Message::TerminalOutput(bytes) => {
                 terminal_buffer.feed(&bytes);
+                terminal_buffer.scroll_to_bottom();
                 Task::none()
             }
             Message::ShellExited => iced::exit(),
@@ -112,6 +114,14 @@ impl Terminal {
                         (Key::Character(c), _) if modifiers.control() && c.as_ref() == "c" => {
                             vec![keys::CTRL_C]
                         }
+                        (Key::Named(Named::PageUp), _) if modifiers.shift() => {
+                            terminal_buffer.scroll(-(terminal_buffer.rows() as i32));
+                            return Task::none();
+                        }
+                        (Key::Named(Named::PageDown), _) if modifiers.shift() => {
+                            terminal_buffer.scroll(terminal_buffer.rows() as i32);
+                            return Task::none();
+                        }
                         (Key::Named(_), _) => return Task::none(),
                         (_, Some(chars)) if !chars.is_empty() => {
                             chars.to_string().into_bytes()
@@ -124,6 +134,17 @@ impl Terminal {
                 }
                 Task::none()
             }
+            Message::MouseEvent(iced::mouse::Event::WheelScrolled { delta }) => {
+                let lines = match delta {
+                    iced::mouse::ScrollDelta::Lines { y, .. } => y as i32,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => (y / CHAR_HEIGHT) as i32,
+                };
+                if lines != 0 {
+                    terminal_buffer.scroll(lines);
+                }
+                Task::none()
+            }
+            Message::MouseEvent(_) => Task::none(),
             Message::WindowResized(size) => {
                 let (rows, cols) = terminal_size(size);
 
@@ -170,6 +191,13 @@ impl Terminal {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             iced::keyboard::listen().map(Message::KeyEvent),
+            iced::event::listen_with(|event, _, _| {
+                if let iced::Event::Mouse(mouse_event) = event {
+                    Some(Message::MouseEvent(mouse_event))
+                } else {
+                    None
+                }
+            }),
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
         ])
     }
