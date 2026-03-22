@@ -8,8 +8,10 @@ use crate::keys;
 use crate::pty;
 use crate::terminal::TerminalBuffer;
 
-const CHAR_WIDTH: f32 = 7.0;
-const CHAR_HEIGHT: f32 = 18.4;
+const FONT_SIZE: f32 = 14.0;
+const LINE_HEIGHT: f32 = 1.3; // iced's default
+const CHAR_WIDTH: f32 = FONT_SIZE * 0.6;
+const CHAR_HEIGHT: f32 = FONT_SIZE * LINE_HEIGHT;
 const PADDING: f32 = 4.0;
 const INITIAL_ROWS: u16 = 24;
 const INITIAL_COLS: u16 = 80;
@@ -153,7 +155,7 @@ impl Terminal {
         container(
             rich_text(spans)
                 .font(Font::MONOSPACE)
-                .size(14),
+                .size(FONT_SIZE),
         )
         .padding(PADDING)
         .width(Fill)
