@@ -20,7 +20,7 @@ pub fn spawn_shell(
     })?;
 
     let mut cmd = CommandBuilder::new(shell);
-    cmd.env("TERM", "dumb");
+    cmd.env("TERM", "xterm");
     cmd.env("PROMPT_EOL_MARK", "");
 
     let child = pair.slave.spawn_command(cmd)?;
