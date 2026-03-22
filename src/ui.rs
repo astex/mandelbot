@@ -2,45 +2,68 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
 use iced::widget::{container, text};
-use iced::{Color, Element, Fill, Font, Subscription, Task, Theme};
+use iced::{Color, Element, Fill, Font, Size, Subscription, Task, Theme};
+use portable_pty::{MasterPty, PtySize};
 use vte::Parser;
 
 use crate::keys;
 use crate::pty;
 use crate::terminal::TerminalBuffer;
 
+const CHAR_WIDTH: f32 = 7.0;
+const CHAR_HEIGHT: f32 = 18.4;
+const PADDING: f32 = 4.0;
+const INITIAL_ROWS: u16 = 24;
+const INITIAL_COLS: u16 = 80;
+
+pub const INITIAL_WINDOW_SIZE: Size = Size {
+    width: INITIAL_COLS as f32 * CHAR_WIDTH + PADDING * 2.0,
+    height: INITIAL_ROWS as f32 * CHAR_HEIGHT + PADDING * 2.0,
+};
+
 #[derive(Debug, Clone)]
 pub enum Message {
     TerminalOutput(Vec<u8>),
     ShellExited,
     KeyEvent(iced::keyboard::Event),
+    WindowResized(Size),
 }
 
 pub struct Terminal {
     parser: Parser,
     terminal_buffer: TerminalBuffer,
     screen: String,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    master: Option<Arc<Mutex<Box<dyn MasterPty + Send>>>>,
+    writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
+    pty_cols: usize,
 }
 
 impl Terminal {
     pub fn boot() -> (Self, Task<Message>) {
-        let mut pty_handle =
-            pty::PtyHandle::spawn("/bin/bash", 24, 80).expect("failed to spawn PTY");
-
-        let reader = pty_handle.take_reader();
-        let writer = pty_handle.take_writer();
-
         let terminal = Self {
             parser: Parser::new(),
-            terminal_buffer: TerminalBuffer::new(24, 80),
+            terminal_buffer: TerminalBuffer::new(INITIAL_ROWS as usize),
             screen: String::new(),
-            writer: Arc::new(Mutex::new(writer)),
+            master: None,
+            writer: None,
+            pty_cols: INITIAL_COLS as usize,
         };
 
-        let task = Task::run(pty_stream(reader), |message| message);
+        (terminal, Task::none())
+    }
 
-        (terminal, task)
+    fn spawn_pty(&mut self, rows: usize, cols: usize) -> Task<Message> {
+        let (master, _child) =
+            pty::spawn_shell("/bin/bash", rows as u16, cols as u16).expect("failed to spawn PTY");
+
+        let reader = master.try_clone_reader().expect("failed to clone reader");
+        let writer = master.take_writer().expect("failed to take writer");
+
+        self.terminal_buffer = TerminalBuffer::new(rows);
+        self.master = Some(Arc::new(Mutex::new(master)));
+        self.writer = Some(Arc::new(Mutex::new(writer)));
+
+        Task::run(pty_stream(reader), |message| message)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -70,10 +93,39 @@ impl Terminal {
                         _ => return Task::none(),
                     };
 
-                    let mut writer = self.writer.lock().unwrap();
-                    let _ = writer.write_all(&bytes);
-                    let _ = writer.flush();
+                    if let Some(writer) = &self.writer {
+                        let mut writer = writer.lock().unwrap();
+                        let _ = writer.write_all(&bytes);
+                        let _ = writer.flush();
+                    }
                 }
+                Task::none()
+            }
+            Message::WindowResized(size) => {
+                let cols = ((size.width - PADDING * 2.0) / CHAR_WIDTH).floor() as usize;
+                let rows = ((size.height - PADDING * 2.0) / CHAR_HEIGHT).floor() as usize;
+                let cols = cols.max(1);
+                let rows = rows.max(1);
+
+                if self.master.is_none() {
+                    return self.spawn_pty(rows, cols);
+                }
+
+                if rows == self.terminal_buffer.rows() && cols == self.pty_cols {
+                    return Task::none();
+                }
+
+                self.terminal_buffer.resize(rows);
+                self.pty_cols = cols;
+
+                let master = self.master.as_ref().unwrap().lock().unwrap();
+                let _ = master.resize(PtySize {
+                    rows: rows as u16,
+                    cols: cols as u16,
+                    pixel_width: size.width as u16,
+                    pixel_height: size.height as u16,
+                });
+
                 Task::none()
             }
         }
@@ -86,7 +138,7 @@ impl Terminal {
                 .size(14)
                 .color(Color::from_rgb(0.83, 0.83, 0.83)),
         )
-        .padding(4)
+        .padding(PADDING)
         .width(Fill)
         .height(Fill)
         .style(|_theme| container::Style {
@@ -97,7 +149,10 @@ impl Terminal {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        iced::keyboard::listen().map(Message::KeyEvent)
+        Subscription::batch([
+            iced::keyboard::listen().map(Message::KeyEvent),
+            iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+        ])
     }
 
     pub fn theme(&self) -> Theme {
