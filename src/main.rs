@@ -9,5 +9,6 @@ fn main() -> iced::Result {
         .title("Mandelbot")
         .subscription(ui::Terminal::subscription)
         .theme(ui::Terminal::theme)
+        .window_size(ui::INITIAL_WINDOW_SIZE)
         .run()
 }

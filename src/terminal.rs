@@ -6,34 +6,22 @@ pub struct TerminalBuffer {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
-    rows: usize,
-    cols: usize,
-    wrap_pending: bool,
+    pub rows: usize,
 }
 
 impl TerminalBuffer {
-    pub fn new(rows: usize, cols: usize) -> Self {
-        let mut lines = Vec::with_capacity(rows);
-        lines.push(String::new());
+    pub fn new(rows: usize) -> Self {
         Self {
-            lines,
+            lines: Vec::new(),
             cursor_row: 0,
             cursor_col: 0,
             rows,
-            cols,
-            wrap_pending: false,
         }
     }
 
     pub fn screen_text(&self) -> String {
-        self.lines.join("\n")
-    }
-
-    fn scroll_up(&mut self) {
-        if self.lines.len() > 1 {
-            self.lines.remove(0);
-        }
-        self.cursor_row = self.rows - 1;
+        let start = self.lines.len().saturating_sub(self.rows);
+        self.lines[start..].join("\n")
     }
 
     fn ensure_row_exists(&mut self) {
@@ -44,21 +32,13 @@ impl TerminalBuffer {
 
     fn advance_row(&mut self) {
         self.cursor_row += 1;
-        if self.cursor_row >= self.rows {
-            self.scroll_up();
-        }
         self.ensure_row_exists();
     }
 }
 
 impl Perform for TerminalBuffer {
     fn print(&mut self, c: char) {
-        if self.wrap_pending {
-            self.wrap_pending = false;
-            self.cursor_col = 0;
-            self.advance_row();
-        }
-
+        self.ensure_row_exists();
         let line = &mut self.lines[self.cursor_row];
         if self.cursor_col < line.len() {
             line.replace_range(self.cursor_col..self.cursor_col + 1, &c.to_string());
@@ -69,19 +49,14 @@ impl Perform for TerminalBuffer {
             line.push(c);
         }
         self.cursor_col += 1;
-        if self.cursor_col >= self.cols {
-            self.wrap_pending = true;
-        }
     }
 
     fn execute(&mut self, byte: u8) {
         match byte {
             b'\r' => {
                 self.cursor_col = 0;
-                self.wrap_pending = false;
             }
             b'\n' => {
-                self.wrap_pending = false;
                 self.advance_row();
             }
             escape::BACKSPACE => {
@@ -98,10 +73,12 @@ impl Perform for TerminalBuffer {
 
         match (action, first_param) {
             escape::ERASE_DISPLAY_CURSOR_TO_END => {
+                self.ensure_row_exists();
                 self.lines[self.cursor_row].truncate(self.cursor_col);
                 self.lines.truncate(self.cursor_row + 1);
             }
             escape::ERASE_DISPLAY_START_TO_CURSOR => {
+                self.ensure_row_exists();
                 for line in &mut self.lines[..self.cursor_row] {
                     line.clear();
                 }
@@ -111,19 +88,21 @@ impl Perform for TerminalBuffer {
             }
             escape::ERASE_DISPLAY_ENTIRE => {
                 self.lines.clear();
-                self.lines.push(String::new());
                 self.cursor_row = 0;
                 self.cursor_col = 0;
             }
             escape::ERASE_LINE_CURSOR_TO_END => {
+                self.ensure_row_exists();
                 self.lines[self.cursor_row].truncate(self.cursor_col);
             }
             escape::ERASE_LINE_START_TO_CURSOR => {
+                self.ensure_row_exists();
                 let line = &mut self.lines[self.cursor_row];
                 let end = self.cursor_col.min(line.len());
                 line.replace_range(..end, &" ".repeat(end));
             }
             escape::ERASE_LINE_ENTIRE => {
+                self.ensure_row_exists();
                 self.lines[self.cursor_row].clear();
                 self.cursor_col = 0;
             }
