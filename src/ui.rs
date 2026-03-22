@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::keys;
 use crate::pty;
 use crate::terminal::TerminalBuffer;
-use crate::theme::{self, TerminalTheme};
+use crate::theme::TerminalTheme;
 
 const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 4.0;
@@ -72,10 +72,7 @@ impl Terminal {
                 let font_size = config.font_size;
                 let char_width = font_size * 0.6;
                 let char_height = font_size * LINE_HEIGHT;
-                let terminal_theme = match config.theme.as_str() {
-                    "light" => theme::solarized_light(),
-                    _ => theme::solarized_dark(),
-                };
+                let terminal_theme = config.terminal_theme();
                 let is_dark = terminal_theme.is_dark;
 
                 let (rows, cols) = terminal_size(size, char_width, char_height);
@@ -204,11 +201,7 @@ impl Terminal {
     pub fn view(&self) -> Element<'_, Message> {
         let (spans, font_size, bg) = match self {
             Self::WaitingForSize { config } => {
-                let t = match config.theme.as_str() {
-                    "light" => theme::solarized_light(),
-                    _ => theme::solarized_dark(),
-                };
-                (vec![], config.font_size, t.bg)
+                (vec![], config.font_size, config.terminal_theme().bg)
             }
             Self::Running {
                 terminal_buffer,

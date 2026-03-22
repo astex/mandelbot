@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::theme::{self, TerminalTheme};
+
 fn default_theme() -> String {
     "dark".to_string()
 }
@@ -38,6 +40,13 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn terminal_theme(&self) -> TerminalTheme {
+        match self.theme.as_str() {
+            "light" => theme::solarized_light(),
+            _ => theme::solarized_dark(),
+        }
+    }
+
     pub fn load() -> Self {
         if let Ok(json) = std::env::var("MANDELBOT_CONFIG") {
             return serde_json::from_str(&json)
