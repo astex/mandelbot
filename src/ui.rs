@@ -3,7 +3,6 @@ use std::io::{Read, Write};
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Size, Subscription, Task, Theme};
 use portable_pty::{MasterPty, PtySize};
-use vte::Parser;
 
 use crate::keys;
 use crate::pty;
@@ -37,7 +36,6 @@ fn terminal_size(window: Size) -> (usize, usize) {
 pub enum Terminal {
     WaitingForSize,
     Running {
-        parser: Parser,
         terminal_buffer: TerminalBuffer,
         screen: String,
         master: Box<dyn MasterPty + Send>,
@@ -67,8 +65,7 @@ impl Terminal {
                 let writer = master.take_writer().expect("failed to take writer");
 
                 *self = Self::Running {
-                    parser: Parser::new(),
-                    terminal_buffer: TerminalBuffer::new(rows),
+                    terminal_buffer: TerminalBuffer::new(rows, cols),
                     screen: String::new(),
                     master,
                     writer,
@@ -83,7 +80,6 @@ impl Terminal {
 
     fn update_running(&mut self, message: Message) -> Task<Message> {
         let Self::Running {
-            parser,
             terminal_buffer,
             screen,
             master,
@@ -96,9 +92,7 @@ impl Terminal {
 
         match message {
             Message::TerminalOutput(bytes) => {
-                for &byte in &bytes {
-                    parser.advance(terminal_buffer, byte);
-                }
+                terminal_buffer.feed(&bytes);
                 *screen = terminal_buffer.screen_text();
                 Task::none()
             }
@@ -135,11 +129,11 @@ impl Terminal {
             Message::WindowResized(size) => {
                 let (rows, cols) = terminal_size(size);
 
-                if rows == terminal_buffer.rows && cols == *pty_cols {
+                if rows == terminal_buffer.rows() && cols == *pty_cols {
                     return Task::none();
                 }
 
-                terminal_buffer.rows = rows;
+                terminal_buffer.resize(rows, cols);
                 *pty_cols = cols;
 
                 let _ = master.resize(PtySize {

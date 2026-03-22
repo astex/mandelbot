@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+alacritty_terminal = { version = "0.26.0-rc1", default-features = false }
 iced = "0.14"
 portable-pty = "0.9"
-vte = "0.13"
