@@ -6,7 +6,7 @@ pub struct TerminalBuffer {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_col: usize,
-    rows: usize,
+    pub rows: usize,
 }
 
 impl TerminalBuffer {
@@ -17,14 +17,6 @@ impl TerminalBuffer {
             cursor_col: 0,
             rows,
         }
-    }
-
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
-    pub fn resize(&mut self, rows: usize) {
-        self.rows = rows;
     }
 
     pub fn screen_text(&self) -> String {

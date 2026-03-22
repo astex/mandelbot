@@ -111,11 +111,11 @@ impl Terminal {
                     return self.spawn_pty(rows, cols);
                 }
 
-                if rows == self.terminal_buffer.rows() && cols == self.pty_cols {
+                if rows == self.terminal_buffer.rows && cols == self.pty_cols {
                     return Task::none();
                 }
 
-                self.terminal_buffer.resize(rows);
+                self.terminal_buffer.rows = rows;
                 self.pty_cols = cols;
 
                 let master = self.master.as_ref().unwrap().lock().unwrap();
