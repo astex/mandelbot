@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use iced::widget::{container, text};
+use iced::widget::{container, rich_text};
 use iced::{Color, Element, Fill, Font, Size, Subscription, Task, Theme};
 use portable_pty::{MasterPty, PtySize};
 
@@ -37,7 +37,6 @@ pub enum Terminal {
     WaitingForSize,
     Running {
         terminal_buffer: TerminalBuffer,
-        screen: String,
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
         pty_cols: usize,
@@ -66,7 +65,6 @@ impl Terminal {
 
                 *self = Self::Running {
                     terminal_buffer: TerminalBuffer::new(rows, cols),
-                    screen: String::new(),
                     master,
                     writer,
                     pty_cols: cols,
@@ -81,7 +79,6 @@ impl Terminal {
     fn update_running(&mut self, message: Message) -> Task<Message> {
         let Self::Running {
             terminal_buffer,
-            screen,
             master,
             writer,
             pty_cols,
@@ -93,7 +90,6 @@ impl Terminal {
         match message {
             Message::TerminalOutput(bytes) => {
                 terminal_buffer.feed(&bytes);
-                *screen = terminal_buffer.screen_text();
                 Task::none()
             }
             Message::ShellExited => iced::exit(),
@@ -149,16 +145,15 @@ impl Terminal {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let screen = match self {
-            Self::WaitingForSize => "",
-            Self::Running { screen, .. } => screen,
+        let spans = match self {
+            Self::WaitingForSize => vec![],
+            Self::Running { terminal_buffer, .. } => terminal_buffer.screen_spans(),
         };
 
         container(
-            text(screen)
+            rich_text(spans)
                 .font(Font::MONOSPACE)
-                .size(14)
-                .color(Color::from_rgb(0.83, 0.83, 0.83)),
+                .size(14),
         )
         .padding(PADDING)
         .width(Fill)

@@ -1,8 +1,13 @@
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Config;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::vte::ansi;
+use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor};
+
+use iced::widget::text;
+use iced::{font, Color, Font};
+
 use alacritty_terminal::Term;
 
 pub struct TerminalBuffer {
@@ -33,18 +38,129 @@ impl TerminalBuffer {
         self.term.resize(size);
     }
 
-    pub fn screen_text(&self) -> String {
+    pub fn screen_spans(&self) -> Vec<text::Span<'static, (), Font>> {
         let grid = self.term.grid();
-        let mut lines = Vec::new();
+        let mut spans = Vec::new();
+
         for row in 0..grid.screen_lines() {
+            if row > 0 {
+                spans.push(text::Span::new("\n"));
+            }
+
             let row_idx = alacritty_terminal::index::Line(row as i32);
-            let mut line = String::new();
+            let mut current_text = String::new();
+            let mut current_fg = AnsiColor::Named(NamedColor::Foreground);
+            let mut current_flags = Flags::empty();
+
             for col in 0..grid.columns() {
                 let cell = &grid[row_idx][alacritty_terminal::index::Column(col)];
-                line.push(cell.c);
+
+                if cell.fg != current_fg || cell.flags != current_flags {
+                    if !current_text.is_empty() {
+                        spans.push(styled_span(&current_text, current_fg, current_flags));
+                        current_text.clear();
+                    }
+                    current_fg = cell.fg;
+                    current_flags = cell.flags;
+                }
+
+                current_text.push(cell.c);
             }
-            lines.push(line.trim_end().to_string());
+
+            let trimmed = current_text.trim_end();
+            if !trimmed.is_empty() {
+                spans.push(styled_span(trimmed, current_fg, current_flags));
+            }
         }
-        lines.join("\n")
+
+        spans
+    }
+}
+
+fn styled_span(content: &str, fg: AnsiColor, flags: Flags) -> text::Span<'static, (), Font> {
+    let mut span = text::Span::new(content.to_string());
+    span = span.color(ansi_to_iced_color(fg));
+
+    if flags.contains(Flags::BOLD) {
+        span = span.font(Font {
+            weight: font::Weight::Bold,
+            ..Font::MONOSPACE
+        });
+    }
+
+    span
+}
+
+fn ansi_to_iced_color(color: AnsiColor) -> Color {
+    let default_fg = Color::from_rgb(0.83, 0.83, 0.83);
+
+    match color {
+        AnsiColor::Named(named) => match named {
+            NamedColor::Black => Color::from_rgb(0.0, 0.0, 0.0),
+            NamedColor::Red => Color::from_rgb(0.8, 0.0, 0.0),
+            NamedColor::Green => Color::from_rgb(0.0, 0.8, 0.0),
+            NamedColor::Yellow => Color::from_rgb(0.8, 0.8, 0.0),
+            NamedColor::Blue => Color::from_rgb(0.3, 0.3, 1.0),
+            NamedColor::Magenta => Color::from_rgb(0.8, 0.0, 0.8),
+            NamedColor::Cyan => Color::from_rgb(0.0, 0.8, 0.8),
+            NamedColor::White => Color::from_rgb(0.75, 0.75, 0.75),
+            NamedColor::BrightBlack => Color::from_rgb(0.5, 0.5, 0.5),
+            NamedColor::BrightRed => Color::from_rgb(1.0, 0.33, 0.33),
+            NamedColor::BrightGreen => Color::from_rgb(0.33, 1.0, 0.33),
+            NamedColor::BrightYellow => Color::from_rgb(1.0, 1.0, 0.33),
+            NamedColor::BrightBlue => Color::from_rgb(0.5, 0.5, 1.0),
+            NamedColor::BrightMagenta => Color::from_rgb(1.0, 0.33, 1.0),
+            NamedColor::BrightCyan => Color::from_rgb(0.33, 1.0, 1.0),
+            NamedColor::BrightWhite => Color::from_rgb(1.0, 1.0, 1.0),
+            NamedColor::Foreground => default_fg,
+            _ => default_fg,
+        },
+        AnsiColor::Spec(rgb) => {
+            Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+        }
+        AnsiColor::Indexed(idx) => {
+            ansi_256_to_iced_color(idx)
+        }
+    }
+}
+
+fn ansi_256_to_iced_color(idx: u8) -> Color {
+    match idx {
+        0..=15 => {
+            // Standard colors — defer to named
+            let named = match idx {
+                0 => NamedColor::Black,
+                1 => NamedColor::Red,
+                2 => NamedColor::Green,
+                3 => NamedColor::Yellow,
+                4 => NamedColor::Blue,
+                5 => NamedColor::Magenta,
+                6 => NamedColor::Cyan,
+                7 => NamedColor::White,
+                8 => NamedColor::BrightBlack,
+                9 => NamedColor::BrightRed,
+                10 => NamedColor::BrightGreen,
+                11 => NamedColor::BrightYellow,
+                12 => NamedColor::BrightBlue,
+                13 => NamedColor::BrightMagenta,
+                14 => NamedColor::BrightCyan,
+                15 => NamedColor::BrightWhite,
+                _ => unreachable!(),
+            };
+            ansi_to_iced_color(AnsiColor::Named(named))
+        }
+        16..=231 => {
+            // 6x6x6 color cube
+            let idx = idx - 16;
+            let r = (idx / 36) * 51;
+            let g = ((idx / 6) % 6) * 51;
+            let b = (idx % 6) * 51;
+            Color::from_rgb8(r, g, b)
+        }
+        232..=255 => {
+            // Grayscale ramp
+            let gray = 8 + (idx - 232) * 10;
+            Color::from_rgb8(gray, gray, gray)
+        }
     }
 }
