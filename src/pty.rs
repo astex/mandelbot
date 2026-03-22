@@ -20,7 +20,7 @@ pub fn spawn_shell(
     })?;
 
     let mut cmd = CommandBuilder::new(shell);
-    cmd.env("TERM", "xterm");
+    cmd.env("TERM", "xterm-256color");
     cmd.env("PROMPT_EOL_MARK", "");
 
     let child = pair.slave.spawn_command(cmd)?;
