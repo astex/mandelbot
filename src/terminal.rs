@@ -1,7 +1,7 @@
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::Config;
+use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor};
 
@@ -49,6 +49,8 @@ impl TerminalBuffer {
     pub fn screen_spans(&self) -> Vec<text::Span<'static, (), Font>> {
         let grid = self.term.grid();
         let display_offset = grid.display_offset();
+        let cursor_point = grid.cursor.point;
+        let show_cursor = self.term.mode().contains(TermMode::SHOW_CURSOR);
         let mut spans = Vec::new();
 
         for row in 0..grid.screen_lines() {
@@ -60,18 +62,36 @@ impl TerminalBuffer {
                 - display_offset;
             let mut current_text = String::new();
             let mut current_fg = AnsiColor::Named(NamedColor::Foreground);
+            let mut current_bg = AnsiColor::Named(NamedColor::Background);
             let mut current_flags = Flags::empty();
+            let mut current_is_cursor = false;
 
             for col in 0..grid.columns() {
                 let cell = &grid[row_idx][alacritty_terminal::index::Column(col)];
+                let is_cursor = show_cursor
+                    && display_offset == 0
+                    && cursor_point.line == row_idx
+                    && cursor_point.column.0 == col;
 
-                if cell.fg != current_fg || cell.flags != current_flags {
+                if cell.fg != current_fg
+                    || cell.bg != current_bg
+                    || cell.flags != current_flags
+                    || is_cursor != current_is_cursor
+                {
                     if !current_text.is_empty() {
-                        spans.push(styled_span(&current_text, current_fg, current_flags));
+                        spans.push(styled_span(
+                            &current_text,
+                            current_fg,
+                            current_bg,
+                            current_flags,
+                            current_is_cursor,
+                        ));
                         current_text.clear();
                     }
                     current_fg = cell.fg;
+                    current_bg = cell.bg;
                     current_flags = cell.flags;
+                    current_is_cursor = is_cursor;
                 }
 
                 current_text.push(cell.c);
@@ -79,7 +99,13 @@ impl TerminalBuffer {
 
             let trimmed = current_text.trim_end();
             if !trimmed.is_empty() {
-                spans.push(styled_span(trimmed, current_fg, current_flags));
+                spans.push(styled_span(
+                    trimmed,
+                    current_fg,
+                    current_bg,
+                    current_flags,
+                    current_is_cursor,
+                ));
             }
         }
 
@@ -87,9 +113,30 @@ impl TerminalBuffer {
     }
 }
 
-fn styled_span(content: &str, fg: AnsiColor, flags: Flags) -> text::Span<'static, (), Font> {
-    let mut span = text::Span::new(content.to_string());
-    span = span.color(ansi_to_iced_color(fg));
+const DEFAULT_FG: Color = Color::from_rgb(0.83, 0.83, 0.83);
+const DEFAULT_BG: Color = Color::from_rgb(0.12, 0.12, 0.12);
+
+fn styled_span(
+    content: &str,
+    fg: AnsiColor,
+    bg: AnsiColor,
+    flags: Flags,
+    is_cursor: bool,
+) -> text::Span<'static, (), Font> {
+    let mut fg_color = ansi_to_iced_color(fg);
+    let mut bg_color = ansi_to_iced_color_bg(bg);
+    let has_bg = !matches!(bg, AnsiColor::Named(NamedColor::Background));
+
+    if is_cursor || flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut fg_color, &mut bg_color);
+    }
+
+    let mut span = text::Span::new(content.to_string())
+        .color(fg_color);
+
+    if has_bg || is_cursor || flags.contains(Flags::INVERSE) {
+        span = span.background(bg_color);
+    }
 
     if flags.contains(Flags::BOLD) {
         span = span.font(Font {
@@ -101,9 +148,14 @@ fn styled_span(content: &str, fg: AnsiColor, flags: Flags) -> text::Span<'static
     span
 }
 
-fn ansi_to_iced_color(color: AnsiColor) -> Color {
-    let default_fg = Color::from_rgb(0.83, 0.83, 0.83);
+fn ansi_to_iced_color_bg(color: AnsiColor) -> Color {
+    match color {
+        AnsiColor::Named(NamedColor::Background) => DEFAULT_BG,
+        other => ansi_to_iced_color(other),
+    }
+}
 
+fn ansi_to_iced_color(color: AnsiColor) -> Color {
     match color {
         AnsiColor::Named(named) => match named {
             NamedColor::Black => Color::from_rgb(0.0, 0.0, 0.0),
@@ -122,8 +174,8 @@ fn ansi_to_iced_color(color: AnsiColor) -> Color {
             NamedColor::BrightMagenta => Color::from_rgb(1.0, 0.33, 1.0),
             NamedColor::BrightCyan => Color::from_rgb(0.33, 1.0, 1.0),
             NamedColor::BrightWhite => Color::from_rgb(1.0, 1.0, 1.0),
-            NamedColor::Foreground => default_fg,
-            _ => default_fg,
+            NamedColor::Foreground => DEFAULT_FG,
+            _ => DEFAULT_FG,
         },
         AnsiColor::Spec(rgb) => {
             Color::from_rgb8(rgb.r, rgb.g, rgb.b)
