@@ -29,6 +29,12 @@ pub enum Message {
     WindowResized(Size),
 }
 
+fn terminal_size(window: Size) -> (usize, usize) {
+    let cols = ((window.width - PADDING * 2.0) / CHAR_WIDTH).floor() as usize;
+    let rows = ((window.height - PADDING * 2.0) / CHAR_HEIGHT).floor() as usize;
+    (rows.max(1), cols.max(1))
+}
+
 pub enum Terminal {
     WaitingForSize,
     Running {
@@ -47,12 +53,12 @@ impl Terminal {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::WindowResized(size) if matches!(self, Self::WaitingForSize) => {
-                let cols = ((size.width - PADDING * 2.0) / CHAR_WIDTH).floor() as usize;
-                let rows = ((size.height - PADDING * 2.0) / CHAR_HEIGHT).floor() as usize;
-                let cols = cols.max(1);
-                let rows = rows.max(1);
+        match self {
+            Self::WaitingForSize => {
+                let Message::WindowResized(size) = message else {
+                    return Task::none();
+                };
+                let (rows, cols) = terminal_size(size);
 
                 let (master, _child) =
                     pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
@@ -72,7 +78,6 @@ impl Terminal {
 
                 Task::run(pty_stream(reader), |message| message)
             }
-            _ if matches!(self, Self::WaitingForSize) => Task::none(),
             _ => self.update_running(message),
         }
     }
@@ -123,10 +128,7 @@ impl Terminal {
                 Task::none()
             }
             Message::WindowResized(size) => {
-                let cols = ((size.width - PADDING * 2.0) / CHAR_WIDTH).floor() as usize;
-                let rows = ((size.height - PADDING * 2.0) / CHAR_HEIGHT).floor() as usize;
-                let cols = cols.max(1);
-                let rows = rows.max(1);
+                let (rows, cols) = terminal_size(size);
 
                 if rows == terminal_buffer.rows && cols == *pty_cols {
                     return Task::none();
