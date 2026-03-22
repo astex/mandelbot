@@ -1,25 +1,28 @@
 use std::io::{Read, Write};
 
 use iced::widget::{container, rich_text};
-use iced::{Color, Element, Fill, Font, Size, Subscription, Task, Theme};
+use iced::{Element, Fill, Font, Size, Subscription, Task, Theme};
 use portable_pty::{MasterPty, PtySize};
 
+use crate::config::Config;
 use crate::keys;
 use crate::pty;
 use crate::terminal::TerminalBuffer;
+use crate::theme::{self, TerminalTheme};
 
-const FONT_SIZE: f32 = 14.0;
 const LINE_HEIGHT: f32 = 1.3;
-const CHAR_WIDTH: f32 = FONT_SIZE * 0.6;
-const CHAR_HEIGHT: f32 = FONT_SIZE * LINE_HEIGHT;
 const PADDING: f32 = 4.0;
 const INITIAL_ROWS: u16 = 24;
 const INITIAL_COLS: u16 = 80;
 
-pub const INITIAL_WINDOW_SIZE: Size = Size {
-    width: INITIAL_COLS as f32 * CHAR_WIDTH + PADDING * 2.0,
-    height: INITIAL_ROWS as f32 * CHAR_HEIGHT + PADDING * 2.0,
-};
+pub fn initial_window_size(config: &Config) -> Size {
+    let char_width = config.font_size * 0.6;
+    let char_height = config.font_size * LINE_HEIGHT;
+    Size {
+        width: INITIAL_COLS as f32 * char_width + PADDING * 2.0,
+        height: INITIAL_ROWS as f32 * char_height + PADDING * 2.0,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -30,34 +33,50 @@ pub enum Message {
     WindowResized(Size),
 }
 
-fn terminal_size(window: Size) -> (usize, usize) {
-    let cols = ((window.width - PADDING * 2.0) / CHAR_WIDTH).floor() as usize;
-    let rows = ((window.height - PADDING * 2.0) / CHAR_HEIGHT).floor() as usize;
-    (rows.max(1), cols.max(1))
-}
-
 pub enum Terminal {
-    WaitingForSize,
+    WaitingForSize {
+        config: Config,
+    },
     Running {
         terminal_buffer: TerminalBuffer,
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
         pty_cols: usize,
+        terminal_theme: TerminalTheme,
+        font_size: f32,
+        char_width: f32,
+        char_height: f32,
+        is_dark: bool,
     },
 }
 
 impl Terminal {
     pub fn boot() -> (Self, Task<Message>) {
-        (Self::WaitingForSize, Task::none())
+        let config = Config::load();
+        (Self::WaitingForSize { config }, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match self {
-            Self::WaitingForSize => {
+            Self::WaitingForSize { config } => {
                 let Message::WindowResized(size) = message else {
                     return Task::none();
                 };
-                let (rows, cols) = terminal_size(size);
+
+                let font_size = config.font_size;
+                let char_width = font_size * 0.6;
+                let char_height = font_size * LINE_HEIGHT;
+                let is_dark = config.is_dark();
+                let terminal_theme = if is_dark {
+                    theme::solarized_dark()
+                } else {
+                    theme::solarized_light()
+                };
+
+                let cols = ((size.width - PADDING * 2.0) / char_width).floor() as usize;
+                let rows = ((size.height - PADDING * 2.0) / char_height).floor() as usize;
+                let cols = cols.max(1);
+                let rows = rows.max(1);
 
                 let (master, _child) =
                     pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
@@ -71,6 +90,11 @@ impl Terminal {
                     master,
                     writer,
                     pty_cols: cols,
+                    terminal_theme,
+                    font_size,
+                    char_width,
+                    char_height,
+                    is_dark,
                 };
 
                 Task::run(pty_stream(reader), |message| message)
@@ -85,10 +109,16 @@ impl Terminal {
             master,
             writer,
             pty_cols,
+            char_width,
+            char_height,
+            ..
         } = self
         else {
             unreachable!()
         };
+
+        let char_width = *char_width;
+        let char_height = *char_height;
 
         match message {
             Message::TerminalOutput(bytes) => {
@@ -108,6 +138,7 @@ impl Terminal {
                         (Key::Named(Named::Backspace), _) => vec![keys::DEL],
                         (Key::Named(Named::Space), _) => vec![keys::SPACE],
                         (Key::Named(Named::Tab), _) => vec![keys::TAB],
+                        (Key::Named(Named::Escape), _) => vec![keys::ESCAPE],
                         (Key::Named(Named::ArrowUp), _) => keys::ARROW_UP.to_vec(),
                         (Key::Named(Named::ArrowDown), _) => keys::ARROW_DOWN.to_vec(),
                         (Key::Named(Named::ArrowRight), _) => keys::ARROW_RIGHT.to_vec(),
@@ -138,7 +169,7 @@ impl Terminal {
             Message::MouseEvent(iced::mouse::Event::WheelScrolled { delta }) => {
                 let lines = match delta {
                     iced::mouse::ScrollDelta::Lines { y, .. } => y as i32,
-                    iced::mouse::ScrollDelta::Pixels { y, .. } => (y / CHAR_HEIGHT) as i32,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => (y / char_height) as i32,
                 };
                 if lines != 0 {
                     terminal_buffer.scroll(lines);
@@ -147,7 +178,10 @@ impl Terminal {
             }
             Message::MouseEvent(_) => Task::none(),
             Message::WindowResized(size) => {
-                let (rows, cols) = terminal_size(size);
+                let cols = ((size.width - PADDING * 2.0) / char_width).floor() as usize;
+                let rows = ((size.height - PADDING * 2.0) / char_height).floor() as usize;
+                let cols = cols.max(1);
+                let rows = rows.max(1);
 
                 if rows == terminal_buffer.rows() && cols == *pty_cols {
                     return Task::none();
@@ -169,21 +203,37 @@ impl Terminal {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let spans = match self {
-            Self::WaitingForSize => vec![],
-            Self::Running { terminal_buffer, .. } => terminal_buffer.screen_spans(),
+        let (spans, font_size, bg) = match self {
+            Self::WaitingForSize { config } => {
+                let theme = if config.is_dark() {
+                    theme::solarized_dark()
+                } else {
+                    theme::solarized_light()
+                };
+                (vec![], config.font_size, theme.bg)
+            }
+            Self::Running {
+                terminal_buffer,
+                terminal_theme,
+                font_size,
+                ..
+            } => (
+                terminal_buffer.screen_spans(terminal_theme),
+                *font_size,
+                terminal_theme.bg,
+            ),
         };
 
         container(
             rich_text(spans)
                 .font(Font::MONOSPACE)
-                .size(FONT_SIZE),
+                .size(font_size),
         )
         .padding(PADDING)
         .width(Fill)
         .height(Fill)
-        .style(|_theme| container::Style {
-            background: Some(Color::from_rgb(0.12, 0.12, 0.12).into()),
+        .style(move |_theme| container::Style {
+            background: Some(bg.into()),
             ..Default::default()
         })
         .into()
@@ -204,7 +254,11 @@ impl Terminal {
     }
 
     pub fn theme(&self) -> Theme {
-        Theme::Dark
+        match self {
+            Self::WaitingForSize { config } if !config.is_dark() => Theme::Light,
+            Self::Running { is_dark: false, .. } => Theme::Light,
+            _ => Theme::Dark,
+        }
     }
 }
 

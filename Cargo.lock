@@ -1607,6 +1607,8 @@ dependencies = [
  "alacritty_terminal",
  "iced",
  "portable-pty",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
