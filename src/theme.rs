@@ -1,6 +1,7 @@
 use iced::Color;
 
 pub struct TerminalTheme {
+    pub is_dark: bool,
     pub fg: Color,
     pub bg: Color,
     pub black: Color,
@@ -23,6 +24,7 @@ pub struct TerminalTheme {
 
 pub fn solarized_dark() -> TerminalTheme {
     TerminalTheme {
+        is_dark: true,
         bg: Color::from_rgb8(0x00, 0x2b, 0x36),
         fg: Color::from_rgb8(0x83, 0x94, 0x96),
         black: Color::from_rgb8(0x07, 0x36, 0x42),
@@ -46,6 +48,7 @@ pub fn solarized_dark() -> TerminalTheme {
 
 pub fn solarized_light() -> TerminalTheme {
     TerminalTheme {
+        is_dark: false,
         bg: Color::from_rgb8(0xfd, 0xf6, 0xe3),
         fg: Color::from_rgb8(0x65, 0x7b, 0x83),
         black: Color::from_rgb8(0x07, 0x36, 0x42),

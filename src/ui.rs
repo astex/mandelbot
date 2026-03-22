@@ -33,6 +33,12 @@ pub enum Message {
     WindowResized(Size),
 }
 
+fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
+    let cols = ((window.width - PADDING * 2.0) / char_width).floor() as usize;
+    let rows = ((window.height - PADDING * 2.0) / char_height).floor() as usize;
+    (rows.max(1), cols.max(1))
+}
+
 pub enum Terminal {
     WaitingForSize {
         config: Config,
@@ -66,17 +72,13 @@ impl Terminal {
                 let font_size = config.font_size;
                 let char_width = font_size * 0.6;
                 let char_height = font_size * LINE_HEIGHT;
-                let is_dark = config.is_dark();
-                let terminal_theme = if is_dark {
-                    theme::solarized_dark()
-                } else {
-                    theme::solarized_light()
+                let terminal_theme = match config.theme.as_str() {
+                    "light" => theme::solarized_light(),
+                    _ => theme::solarized_dark(),
                 };
+                let is_dark = terminal_theme.is_dark;
 
-                let cols = ((size.width - PADDING * 2.0) / char_width).floor() as usize;
-                let rows = ((size.height - PADDING * 2.0) / char_height).floor() as usize;
-                let cols = cols.max(1);
-                let rows = rows.max(1);
+                let (rows, cols) = terminal_size(size, char_width, char_height);
 
                 let (master, _child) =
                     pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
@@ -178,10 +180,7 @@ impl Terminal {
             }
             Message::MouseEvent(_) => Task::none(),
             Message::WindowResized(size) => {
-                let cols = ((size.width - PADDING * 2.0) / char_width).floor() as usize;
-                let rows = ((size.height - PADDING * 2.0) / char_height).floor() as usize;
-                let cols = cols.max(1);
-                let rows = rows.max(1);
+                let (rows, cols) = terminal_size(size, char_width, char_height);
 
                 if rows == terminal_buffer.rows() && cols == *pty_cols {
                     return Task::none();
@@ -205,12 +204,11 @@ impl Terminal {
     pub fn view(&self) -> Element<'_, Message> {
         let (spans, font_size, bg) = match self {
             Self::WaitingForSize { config } => {
-                let theme = if config.is_dark() {
-                    theme::solarized_dark()
-                } else {
-                    theme::solarized_light()
+                let t = match config.theme.as_str() {
+                    "light" => theme::solarized_light(),
+                    _ => theme::solarized_dark(),
                 };
-                (vec![], config.font_size, theme.bg)
+                (vec![], config.font_size, t.bg)
             }
             Self::Running {
                 terminal_buffer,
@@ -254,11 +252,11 @@ impl Terminal {
     }
 
     pub fn theme(&self) -> Theme {
-        match self {
-            Self::WaitingForSize { config } if !config.is_dark() => Theme::Light,
-            Self::Running { is_dark: false, .. } => Theme::Light,
-            _ => Theme::Dark,
-        }
+        let is_dark = match self {
+            Self::WaitingForSize { config } => config.theme != "light",
+            Self::Running { is_dark, .. } => *is_dark,
+        };
+        if is_dark { Theme::Dark } else { Theme::Light }
     }
 }
 

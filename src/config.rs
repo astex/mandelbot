@@ -52,9 +52,6 @@ impl Config {
         }
     }
 
-    pub fn is_dark(&self) -> bool {
-        self.theme != "light"
-    }
 }
 
 fn config_path() -> PathBuf {
