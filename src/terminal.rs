@@ -1,5 +1,5 @@
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Config;
 use alacritty_terminal::term::test::TermSize;
@@ -33,6 +33,14 @@ impl TerminalBuffer {
         self.term.screen_lines()
     }
 
+    pub fn scroll(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
     pub fn resize(&mut self, rows: usize, cols: usize) {
         let size = TermSize::new(cols, rows);
         self.term.resize(size);
@@ -40,6 +48,7 @@ impl TerminalBuffer {
 
     pub fn screen_spans(&self) -> Vec<text::Span<'static, (), Font>> {
         let grid = self.term.grid();
+        let display_offset = grid.display_offset();
         let mut spans = Vec::new();
 
         for row in 0..grid.screen_lines() {
@@ -47,7 +56,8 @@ impl TerminalBuffer {
                 spans.push(text::Span::new("\n"));
             }
 
-            let row_idx = alacritty_terminal::index::Line(row as i32);
+            let row_idx = alacritty_terminal::index::Line(row as i32)
+                - display_offset;
             let mut current_text = String::new();
             let mut current_fg = AnsiColor::Named(NamedColor::Foreground);
             let mut current_flags = Flags::empty();
