@@ -40,12 +40,14 @@ impl Default for Config {
 impl Config {
     pub fn load() -> Self {
         if let Ok(json) = std::env::var("MANDELBOT_CONFIG") {
-            return serde_json::from_str(&json).unwrap_or_default();
+            return serde_json::from_str(&json)
+                .expect("MANDELBOT_CONFIG contains invalid JSON");
         }
 
         let path = config_path();
         match fs::read_to_string(&path) {
-            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+            Ok(contents) => serde_json::from_str(&contents)
+                .unwrap_or_else(|e| panic!("{}: invalid JSON: {e}", path.display())),
             Err(_) => Self::default(),
         }
     }
