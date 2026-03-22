@@ -1,5 +1,4 @@
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
 
 use iced::widget::{container, text};
 use iced::{Color, Element, Fill, Font, Size, Subscription, Task, Theme};
@@ -41,8 +40,8 @@ pub enum Terminal {
         parser: Parser,
         terminal_buffer: TerminalBuffer,
         screen: String,
-        master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-        writer: Arc<Mutex<Box<dyn Write + Send>>>,
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
         pty_cols: usize,
     },
 }
@@ -71,8 +70,8 @@ impl Terminal {
                     parser: Parser::new(),
                     terminal_buffer: TerminalBuffer::new(rows),
                     screen: String::new(),
-                    master: Arc::new(Mutex::new(master)),
-                    writer: Arc::new(Mutex::new(writer)),
+                    master,
+                    writer,
                     pty_cols: cols,
                 };
 
@@ -121,7 +120,6 @@ impl Terminal {
                         _ => return Task::none(),
                     };
 
-                    let mut writer = writer.lock().unwrap();
                     let _ = writer.write_all(&bytes);
                     let _ = writer.flush();
                 }
@@ -137,7 +135,6 @@ impl Terminal {
                 terminal_buffer.rows = rows;
                 *pty_cols = cols;
 
-                let master = master.lock().unwrap();
                 let _ = master.resize(PtySize {
                     rows: rows as u16,
                     cols: cols as u16,
