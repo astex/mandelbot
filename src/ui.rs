@@ -103,6 +103,7 @@ impl Terminal {
                     use iced::keyboard::Key;
 
                     let bytes: Vec<u8> = match (key, text) {
+                        (Key::Named(Named::Enter), _) if modifiers.shift() => vec![b'\n'],
                         (Key::Named(Named::Enter), _) => vec![b'\r'],
                         (Key::Named(Named::Backspace), _) => vec![keys::DEL],
                         (Key::Named(Named::Space), _) => vec![keys::SPACE],
