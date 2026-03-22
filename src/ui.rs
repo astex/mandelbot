@@ -104,15 +104,22 @@ impl Terminal {
             }
             Message::ShellExited => iced::exit(),
             Message::KeyEvent(event) => {
-                if let iced::keyboard::Event::KeyPressed { key, text, .. } = event {
+                if let iced::keyboard::Event::KeyPressed { key, text, modifiers, .. } = event {
                     use iced::keyboard::key::Named;
                     use iced::keyboard::Key;
 
-                    let bytes = match (key, text) {
+                    let bytes: Vec<u8> = match (key, text) {
                         (Key::Named(Named::Enter), _) => vec![b'\r'],
                         (Key::Named(Named::Backspace), _) => vec![keys::DEL],
                         (Key::Named(Named::Space), _) => vec![keys::SPACE],
-                        // TODO: arrow keys, tab, function keys, etc.
+                        (Key::Named(Named::Tab), _) => vec![keys::TAB],
+                        (Key::Named(Named::ArrowUp), _) => keys::ARROW_UP.to_vec(),
+                        (Key::Named(Named::ArrowDown), _) => keys::ARROW_DOWN.to_vec(),
+                        (Key::Named(Named::ArrowRight), _) => keys::ARROW_RIGHT.to_vec(),
+                        (Key::Named(Named::ArrowLeft), _) => keys::ARROW_LEFT.to_vec(),
+                        (Key::Character(c), _) if modifiers.control() && c.as_ref() == "c" => {
+                            vec![keys::CTRL_C]
+                        }
                         (Key::Named(_), _) => return Task::none(),
                         (_, Some(chars)) if !chars.is_empty() => {
                             chars.to_string().into_bytes()
