@@ -62,29 +62,21 @@ impl App {
                 task
             }
             Message::TerminalOutput(bytes) => {
-                if let Some(tab) = &mut self.tab {
-                    tab.feed(&bytes);
-                }
+                self.tab.as_mut().unwrap().feed(&bytes);
                 Task::none()
             }
             Message::ShellExited => iced::exit(),
             Message::PtyInput(bytes) => {
-                if let Some(tab) = &mut self.tab {
-                    tab.write_input(&bytes);
-                }
+                self.tab.as_mut().unwrap().write_input(&bytes);
                 Task::none()
             }
             Message::Scroll(delta) => {
-                if let Some(tab) = &mut self.tab {
-                    tab.scroll(delta);
-                }
+                self.tab.as_mut().unwrap().scroll(delta);
                 Task::none()
             }
             Message::WindowResized(size) => {
                 let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-                if let Some(tab) = &mut self.tab {
-                    tab.resize(rows, cols, size.width as u16, size.height as u16);
-                }
+                self.tab.as_mut().unwrap().resize(rows, cols, size.width as u16, size.height as u16);
                 Task::none()
             }
         }
