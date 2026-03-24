@@ -12,53 +12,9 @@ use portable_pty::{MasterPty, PtySize};
 use crate::pty;
 use crate::ui::Message;
 
-struct TerminalBuffer {
+pub struct TerminalTab {
     term: Term<VoidListener>,
     parser: ansi::Processor,
-}
-
-impl TerminalBuffer {
-    fn new(rows: usize, cols: usize) -> Self {
-        let size = TermSize::new(cols, rows);
-        let term = Term::new(Config::default(), &size, VoidListener);
-        Self {
-            term,
-            parser: ansi::Processor::new(),
-        }
-    }
-
-    fn feed(&mut self, data: &[u8]) {
-        self.parser.advance(&mut self.term, data);
-    }
-
-    fn rows(&self) -> usize {
-        self.term.screen_lines()
-    }
-
-    fn grid(&self) -> &Grid<Cell> {
-        self.term.grid()
-    }
-
-    fn mode(&self) -> TermMode {
-        *self.term.mode()
-    }
-
-    fn scroll(&mut self, delta: i32) {
-        self.term.scroll_display(Scroll::Delta(delta));
-    }
-
-    fn scroll_to_bottom(&mut self) {
-        self.term.scroll_display(Scroll::Bottom);
-    }
-
-    fn resize(&mut self, rows: usize, cols: usize) {
-        let size = TermSize::new(cols, rows);
-        self.term.resize(size);
-    }
-}
-
-pub struct TerminalTab {
-    buffer: TerminalBuffer,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     pty_cols: usize,
@@ -66,6 +22,9 @@ pub struct TerminalTab {
 
 impl TerminalTab {
     pub fn new(rows: usize, cols: usize) -> (Self, iced::Task<Message>) {
+        let size = TermSize::new(cols, rows);
+        let term = Term::new(Config::default(), &size, VoidListener);
+
         let (master, _child) =
             pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
                 .expect("failed to spawn PTY");
@@ -74,7 +33,8 @@ impl TerminalTab {
         let writer = master.take_writer().expect("failed to take writer");
 
         let tab = Self {
-            buffer: TerminalBuffer::new(rows, cols),
+            term,
+            parser: ansi::Processor::new(),
             master,
             writer,
             pty_cols: cols,
@@ -85,10 +45,10 @@ impl TerminalTab {
     }
 
     pub fn feed(&mut self, data: &[u8]) {
-        let was_at_bottom = self.buffer.grid().display_offset() == 0;
-        self.buffer.feed(data);
+        let was_at_bottom = self.term.grid().display_offset() == 0;
+        self.parser.advance(&mut self.term, data);
         if was_at_bottom {
-            self.buffer.scroll_to_bottom();
+            self.term.scroll_display(Scroll::Bottom);
         }
     }
 
@@ -98,15 +58,16 @@ impl TerminalTab {
     }
 
     pub fn scroll(&mut self, delta: i32) {
-        self.buffer.scroll(delta);
+        self.term.scroll_display(Scroll::Delta(delta));
     }
 
     pub fn resize(&mut self, rows: usize, cols: usize, pixel_width: u16, pixel_height: u16) {
-        if rows == self.buffer.rows() && cols == self.pty_cols {
+        if rows == self.term.screen_lines() && cols == self.pty_cols {
             return;
         }
 
-        self.buffer.resize(rows, cols);
+        let size = TermSize::new(cols, rows);
+        self.term.resize(size);
         self.pty_cols = cols;
 
         let _ = self.master.resize(PtySize {
@@ -118,15 +79,15 @@ impl TerminalTab {
     }
 
     pub fn rows(&self) -> usize {
-        self.buffer.rows()
+        self.term.screen_lines()
     }
 
     pub fn grid(&self) -> &Grid<Cell> {
-        self.buffer.grid()
+        self.term.grid()
     }
 
     pub fn mode(&self) -> TermMode {
-        self.buffer.mode()
+        *self.term.mode()
     }
 }
 
