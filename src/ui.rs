@@ -66,7 +66,7 @@ impl App {
                 let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
                 let (tab, task) = TerminalTab::new(rows, cols, &self.channel_socket_path);
                 self.tab = Some(tab);
-                self.send_theme_event();
+                self.send_channel_ping();
                 task
             }
             Message::TerminalOutput(bytes) => {
@@ -121,8 +121,7 @@ impl App {
         }
     }
 
-    fn send_theme_event(&self) {
-        let theme_value = self.config.theme.clone();
+    fn send_channel_ping(&self) {
         let socket_path = self.channel_socket_path.clone();
 
         std::thread::spawn(move || {
@@ -135,8 +134,7 @@ impl App {
             }
 
             if let Ok(mut stream) = UnixStream::connect(&socket_path) {
-                let msg = format!("{{\"type\":\"theme\",\"value\":\"{theme_value}\"}}\n");
-                let _ = stream.write_all(msg.as_bytes());
+                let _ = stream.write_all(b"{\"content\":\"ping\"}\n");
                 let _ = stream.flush();
             }
         });

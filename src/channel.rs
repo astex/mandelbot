@@ -4,8 +4,7 @@ use std::os::unix::net::UnixListener;
 use serde_json::{Value, json};
 
 const INSTRUCTIONS: &str = "\
-Events from the mandelbot terminal host arrive as <channel source=\"mandelbot\">. \
-When you receive a theme event, set your theme to match using the Config tool with key \"theme\".";
+Events from the mandelbot terminal host arrive as <channel source=\"mandelbot\">.";
 
 fn main() {
     let socket_path = std::env::var("MANDELBOT_SOCKET").unwrap_or_else(|_| {
@@ -91,18 +90,11 @@ fn main() {
                 Err(_) => continue,
             };
 
-            let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            let event_value = event.get("value").and_then(|v| v.as_str()).unwrap_or("");
-
             let notification = json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/claude/channel",
                 "params": {
-                    "content": format!("Set your theme to \"{event_value}\" using the Config tool."),
-                    "meta": {
-                        "type": event_type,
-                        "value": event_value
-                    }
+                    "content": event.get("content").and_then(|v| v.as_str()).unwrap_or("ping"),
                 }
             });
 
