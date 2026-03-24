@@ -4,6 +4,7 @@ pub fn spawn_shell(
     shell: &str,
     args: &[&str],
     env: &[(&str, &str)],
+    cwd: Option<&str>,
     rows: u16,
     cols: u16,
 ) -> Result<
@@ -27,6 +28,9 @@ pub fn spawn_shell(
     }
     for (key, val) in env {
         cmd.env(key, val);
+    }
+    if let Some(dir) = cwd {
+        cmd.cwd(dir);
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("PROMPT_EOL_MARK", "");

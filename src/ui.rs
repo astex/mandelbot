@@ -126,8 +126,13 @@ impl App {
         let socket_path = self.channel_socket_path.clone();
 
         std::thread::spawn(move || {
-            // Give the channel server a moment to start listening.
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            use std::path::Path;
+
+            // Wait for the channel server to bind the socket.
+            let path = Path::new(&socket_path);
+            while !path.exists() {
+                std::thread::yield_now();
+            }
 
             if let Ok(mut stream) = UnixStream::connect(&socket_path) {
                 let msg = format!("{{\"type\":\"theme\",\"value\":\"{theme_value}\"}}\n");

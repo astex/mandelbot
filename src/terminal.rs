@@ -30,6 +30,7 @@ impl TerminalTab {
                 "claude",
                 &["--dangerously-load-development-channels", "server:mandelbot"],
                 &[("MANDELBOT_SOCKET", channel_socket_path)],
+                Some(env!("CARGO_MANIFEST_DIR")),
                 rows as u16,
                 cols as u16,
             )

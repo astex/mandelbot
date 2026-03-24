@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 const INSTRUCTIONS: &str = "\
 Events from the mandelbot terminal host arrive as <channel source=\"mandelbot\">. \
-When you receive a theme event, change your theme to match by running /theme.";
+When you receive a theme event, set your theme to match using the Config tool with key \"theme\".";
 
 fn main() {
     let socket_path = std::env::var("MANDELBOT_SOCKET").unwrap_or_else(|_| {
@@ -68,7 +68,6 @@ fn main() {
         eprintln!("mandelbot-channel: failed to bind {socket_path}: {e}");
         std::process::exit(1);
     });
-    eprintln!("mandelbot-channel: listening on {socket_path}");
 
     // Read events from the Unix socket and forward as MCP notifications.
     for stream in listener.incoming() {
@@ -99,7 +98,7 @@ fn main() {
                 "jsonrpc": "2.0",
                 "method": "notifications/claude/channel",
                 "params": {
-                    "content": format!("Set your theme to \"{event_value}\". Run: /theme"),
+                    "content": format!("Set your theme to \"{event_value}\" using the Config tool."),
                     "meta": {
                         "type": event_type,
                         "value": event_value

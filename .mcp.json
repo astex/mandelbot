@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "mandelbot": {
-      "command": "mandelbot-channel"
+      "command": "./target/debug/mandelbot-channel"
     }
   }
 }
