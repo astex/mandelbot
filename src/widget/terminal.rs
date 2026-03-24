@@ -20,20 +20,19 @@ use crate::ui::Message;
 
 pub struct TerminalWidget<'a> {
     tab: &'a TerminalTab,
-    theme: &'a TerminalTheme,
     config: &'a Config,
+    theme: TerminalTheme,
 }
 
 impl<'a> TerminalWidget<'a> {
     pub fn new(
         tab: &'a TerminalTab,
-        theme: &'a TerminalTheme,
         config: &'a Config,
     ) -> Self {
         Self {
             tab,
-            theme,
             config,
+            theme: config.terminal_theme(),
         }
     }
 
@@ -97,8 +96,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     && cursor_point.line == row_idx
                     && cursor_point.column.0 == col;
 
-                let mut fg = ansi_to_color(cell.fg, self.theme);
-                let mut bg = ansi_to_color_bg(cell.bg, self.theme);
+                let mut fg = ansi_to_color(cell.fg, &self.theme);
+                let mut bg = ansi_to_color_bg(cell.bg, &self.theme);
 
                 if is_cursor || cell.flags.contains(Flags::INVERSE) {
                     std::mem::swap(&mut fg, &mut bg);

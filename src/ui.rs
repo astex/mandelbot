@@ -92,7 +92,7 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let content: Element<'_, Message> = if let Some(tab) = &self.tab {
-            TerminalWidget::new(tab, &self.terminal_theme, &self.config)
+            TerminalWidget::new(tab, &self.config)
                 .into()
         } else {
             iced::widget::Space::new().width(Fill).height(Fill).into()
