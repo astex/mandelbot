@@ -119,7 +119,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     );
                 }
 
-                if cell.c != ' ' && cell.c != '\0' {
+                {
                     let font = if cell.flags.contains(Flags::BOLD) {
                         Font {
                             weight: iced::font::Weight::Bold,
