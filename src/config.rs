@@ -39,7 +39,17 @@ impl Default for Config {
     }
 }
 
+const LINE_HEIGHT: f32 = 1.3;
+
 impl Config {
+    pub fn char_width(&self) -> f32 {
+        self.font_size * 0.6
+    }
+
+    pub fn char_height(&self) -> f32 {
+        self.font_size * LINE_HEIGHT
+    }
+
     pub fn terminal_theme(&self) -> TerminalTheme {
         match self.theme.as_str() {
             "light" => theme::solarized_light(),
