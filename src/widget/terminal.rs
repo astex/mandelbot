@@ -171,6 +171,18 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 let key = key.clone();
                 let text = text.clone();
 
+                if modifiers.control() && key == keyboard::Key::Character("t".into()) {
+                    shell.publish(Message::NewTab);
+                    shell.capture_event();
+                    return;
+                }
+
+                if modifiers.control() && key == keyboard::Key::Character("w".into()) {
+                    shell.publish(Message::CloseTab(self.tab.id));
+                    shell.capture_event();
+                    return;
+                }
+
                 if modifiers.control() && key == keyboard::Key::Character("v".into()) {
                     if let Some(content) = _clipboard.read(iced::advanced::clipboard::Kind::Standard) {
                         shell.publish(Message::PtyInput(content.into_bytes()));
