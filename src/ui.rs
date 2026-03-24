@@ -1,6 +1,5 @@
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::process::{Child, Command};
 
 use iced::widget::container;
 use iced::{Element, Fill, Size, Subscription, Task, Theme};
@@ -40,7 +39,6 @@ pub struct App {
     config: Config,
     tab: Option<TerminalTab>,
     terminal_theme: TerminalTheme,
-    _channel_server: Option<Child>,
     channel_socket_path: String,
 }
 
@@ -51,22 +49,10 @@ impl App {
 
         let socket_path = format!("/tmp/mandelbot-{}.sock", std::process::id());
 
-        // Clean up any stale socket from a previous run.
-        let _ = std::fs::remove_file(&socket_path);
-
-        let channel_server = Command::new("mandelbot-channel")
-            .arg(&socket_path)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .ok();
-
         let app = Self {
             config,
             tab: None,
             terminal_theme,
-            _channel_server: channel_server,
             channel_socket_path: socket_path,
         };
 
@@ -78,7 +64,7 @@ impl App {
             // First resize: spawn terminal at actual window dimensions.
             Message::WindowResized(size) if self.tab.is_none() => {
                 let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-                let (tab, task) = TerminalTab::new(rows, cols);
+                let (tab, task) = TerminalTab::new(rows, cols, &self.channel_socket_path);
                 self.tab = Some(tab);
                 self.send_theme_event();
                 task

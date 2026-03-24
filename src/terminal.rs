@@ -21,7 +21,7 @@ pub struct TerminalTab {
 }
 
 impl TerminalTab {
-    pub fn new(rows: usize, cols: usize) -> (Self, iced::Task<Message>) {
+    pub fn new(rows: usize, cols: usize, channel_socket_path: &str) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
@@ -29,6 +29,7 @@ impl TerminalTab {
             pty::spawn_shell(
                 "claude",
                 &["--dangerously-load-development-channels", "server:mandelbot"],
+                &[("MANDELBOT_SOCKET", channel_socket_path)],
                 rows as u16,
                 cols as u16,
             )

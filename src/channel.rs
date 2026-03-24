@@ -8,8 +8,8 @@ Events from the mandelbot terminal host arrive as <channel source=\"mandelbot\">
 When you receive a theme event, change your theme to match by running /theme.";
 
 fn main() {
-    let socket_path = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: mandelbot-channel <socket-path>");
+    let socket_path = std::env::var("MANDELBOT_SOCKET").unwrap_or_else(|_| {
+        eprintln!("mandelbot-channel: MANDELBOT_SOCKET not set");
         std::process::exit(1);
     });
 
