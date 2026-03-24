@@ -209,18 +209,18 @@ fn key_to_bytes(
     use keyboard::Key;
 
     match (key, text) {
-        (Key::Named(Named::Enter), _) if modifiers.shift() => Some(vec![b'\n']),
-        (Key::Named(Named::Enter), _) => Some(vec![b'\r']),
-        (Key::Named(Named::Backspace), _) => Some(vec![keys::DEL]),
-        (Key::Named(Named::Space), _) => Some(vec![keys::SPACE]),
-        (Key::Named(Named::Tab), _) => Some(vec![keys::TAB]),
-        (Key::Named(Named::Escape), _) => Some(vec![keys::ESCAPE]),
+        (Key::Named(Named::Enter), _) if modifiers.shift() => Some(keys::SHIFT_ENTER.to_vec()),
+        (Key::Named(Named::Enter), _) => Some(keys::ENTER.to_vec()),
+        (Key::Named(Named::Backspace), _) => Some(keys::DEL.to_vec()),
+        (Key::Named(Named::Space), _) => Some(keys::SPACE.to_vec()),
+        (Key::Named(Named::Tab), _) => Some(keys::TAB.to_vec()),
+        (Key::Named(Named::Escape), _) => Some(keys::ESCAPE.to_vec()),
         (Key::Named(Named::ArrowUp), _) => Some(keys::ARROW_UP.to_vec()),
         (Key::Named(Named::ArrowDown), _) => Some(keys::ARROW_DOWN.to_vec()),
         (Key::Named(Named::ArrowRight), _) => Some(keys::ARROW_RIGHT.to_vec()),
         (Key::Named(Named::ArrowLeft), _) => Some(keys::ARROW_LEFT.to_vec()),
         (Key::Character(c), _) if modifiers.control() && c.as_ref() == "c" => {
-            Some(vec![keys::CTRL_C])
+            Some(keys::CTRL_C.to_vec())
         }
         (Key::Named(_), _) => None,
         (_, Some(chars)) if !chars.is_empty() => Some(chars.as_bytes().to_vec()),
