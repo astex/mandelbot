@@ -38,15 +38,13 @@ impl<'a> TerminalWidget<'a> {
     }
 
     fn char_width(&self) -> f32 {
-        self.config.font_size * 0.6
+        self.config.char_width()
     }
 
     fn char_height(&self) -> f32 {
-        self.config.font_size * LINE_HEIGHT
+        self.config.char_height()
     }
 }
-
-const LINE_HEIGHT: f32 = 1.3;
 
 impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
     fn size(&self) -> Size<Length> {

@@ -10,17 +10,14 @@ use crate::terminal::TerminalBuffer;
 use crate::theme::TerminalTheme;
 use crate::widget::terminal::TerminalWidget;
 
-const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 4.0;
 const INITIAL_ROWS: u16 = 24;
 const INITIAL_COLS: u16 = 80;
 
 pub fn initial_window_size(config: &Config) -> Size {
-    let char_width = config.font_size * 0.6;
-    let char_height = config.font_size * LINE_HEIGHT;
     Size {
-        width: INITIAL_COLS as f32 * char_width + PADDING * 2.0,
-        height: INITIAL_ROWS as f32 * char_height + PADDING * 2.0,
+        width: INITIAL_COLS as f32 * config.char_width() + PADDING * 2.0,
+        height: INITIAL_ROWS as f32 * config.char_height() + PADDING * 2.0,
     }
 }
 
@@ -45,16 +42,12 @@ pub struct App {
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     terminal_theme: TerminalTheme,
-    char_width: f32,
-    char_height: f32,
     pty_cols: usize,
 }
 
 impl App {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
-        let char_width = config.font_size * 0.6;
-        let char_height = config.font_size * LINE_HEIGHT;
         let terminal_theme = config.terminal_theme();
 
         let terminal = Self {
@@ -63,8 +56,6 @@ impl App {
             master: None,
             writer: None,
             terminal_theme,
-            char_width,
-            char_height,
             pty_cols: INITIAL_COLS as usize,
         };
 
@@ -74,7 +65,7 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::WindowResized(size) if self.terminal_buffer.is_none() => {
-                let (rows, cols) = terminal_size(size, self.char_width, self.char_height);
+                let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
 
                 let (master, _child) =
                     pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
@@ -112,7 +103,7 @@ impl App {
                 Task::none()
             }
             Message::WindowResized(size) => {
-                let (rows, cols) = terminal_size(size, self.char_width, self.char_height);
+                let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
 
                 if let Some(buf) = &mut self.terminal_buffer {
                     if rows == buf.rows() && cols == self.pty_cols {
