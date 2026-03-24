@@ -13,6 +13,7 @@ use crate::pty;
 use crate::ui::Message;
 
 pub struct TerminalTab {
+    pub id: usize,
     term: Term<VoidListener>,
     parser: ansi::Processor,
     master: Box<dyn MasterPty + Send>,
@@ -21,7 +22,7 @@ pub struct TerminalTab {
 }
 
 impl TerminalTab {
-    pub fn new(rows: usize, cols: usize) -> (Self, iced::Task<Message>) {
+    pub fn new(id: usize, rows: usize, cols: usize) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
@@ -33,6 +34,7 @@ impl TerminalTab {
         let writer = master.take_writer().expect("failed to take writer");
 
         let tab = Self {
+            id,
             term,
             parser: ansi::Processor::new(),
             master,
@@ -40,7 +42,7 @@ impl TerminalTab {
             pty_cols: cols,
         };
 
-        let task = iced::Task::run(pty_stream(reader), |msg| msg);
+        let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
         (tab, task)
     }
 
@@ -91,10 +93,10 @@ impl TerminalTab {
     }
 }
 
-fn pty_stream(mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
+fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
-        |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+        move |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
             let (exit_sender, exit_receiver) = iced::futures::channel::oneshot::channel::<()>();
 
             std::thread::spawn(move || {
@@ -104,13 +106,13 @@ fn pty_stream(mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<It
                         Ok(0) | Err(_) => break,
                         Ok(bytes_read) => {
                             let bytes = read_buffer[..bytes_read].to_vec();
-                            if sender.try_send(Message::TerminalOutput(bytes)).is_err() {
+                            if sender.try_send(Message::TerminalOutput(tab_id, bytes)).is_err() {
                                 break;
                             }
                         }
                     }
                 }
-                let _ = sender.try_send(Message::ShellExited);
+                let _ = sender.try_send(Message::ShellExited(tab_id));
                 let _ = exit_sender.send(());
             });
 
