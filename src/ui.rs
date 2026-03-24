@@ -54,8 +54,8 @@ impl App {
         // Clean up any stale socket from a previous run.
         let _ = std::fs::remove_file(&socket_path);
 
-        let channel_server = Command::new("npx")
-            .args(["tsx", "channel/mandelbot-channel.ts", &socket_path])
+        let channel_server = Command::new("mandelbot-channel")
+            .arg(&socket_path)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

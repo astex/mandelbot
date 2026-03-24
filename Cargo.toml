@@ -3,6 +3,14 @@ name = "mandelbot"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "mandelbot"
+path = "src/main.rs"
+
+[[bin]]
+name = "mandelbot-channel"
+path = "src/channel.rs"
+
 [dependencies]
 alacritty_terminal = { version = "0.26.0-rc1", default-features = false }
 iced = { version = "0.14", features = ["advanced"] }
