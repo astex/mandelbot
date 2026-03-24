@@ -39,7 +39,7 @@ fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usi
     (rows.max(1), cols.max(1))
 }
 
-pub struct Terminal {
+pub struct App {
     config: Config,
     terminal_buffer: Option<TerminalBuffer>,
     master: Option<Box<dyn MasterPty + Send>>,
@@ -50,7 +50,7 @@ pub struct Terminal {
     pty_cols: usize,
 }
 
-impl Terminal {
+impl App {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
         let char_width = config.font_size * 0.6;
