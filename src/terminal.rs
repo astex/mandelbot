@@ -85,8 +85,11 @@ impl TerminalTab {
     }
 
     pub fn feed(&mut self, data: &[u8]) {
+        let was_at_bottom = self.buffer.grid().display_offset() == 0;
         self.buffer.feed(data);
-        self.buffer.scroll_to_bottom();
+        if was_at_bottom {
+            self.buffer.scroll_to_bottom();
+        }
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
