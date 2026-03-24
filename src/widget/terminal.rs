@@ -12,6 +12,7 @@ use iced::keyboard;
 use iced::mouse;
 use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
 
+use crate::config::Config;
 use crate::keys;
 use crate::terminal::TerminalBuffer;
 use crate::theme::TerminalTheme;
@@ -20,28 +21,32 @@ use crate::ui::Message;
 pub struct TerminalWidget<'a> {
     buffer: &'a TerminalBuffer,
     theme: &'a TerminalTheme,
-    font_size: f32,
-    char_width: f32,
-    char_height: f32,
+    config: &'a Config,
 }
 
 impl<'a> TerminalWidget<'a> {
     pub fn new(
         buffer: &'a TerminalBuffer,
         theme: &'a TerminalTheme,
-        font_size: f32,
-        char_width: f32,
-        char_height: f32,
+        config: &'a Config,
     ) -> Self {
         Self {
             buffer,
             theme,
-            font_size,
-            char_width,
-            char_height,
+            config,
         }
     }
+
+    fn char_width(&self) -> f32 {
+        self.config.font_size * 0.6
+    }
+
+    fn char_height(&self) -> f32 {
+        self.config.font_size * LINE_HEIGHT
+    }
 }
+
+const LINE_HEIGHT: f32 = 1.3;
 
 impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
     fn size(&self) -> Size<Length> {
@@ -75,18 +80,18 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 
         for row in 0..grid.screen_lines() {
             let row_idx = alacritty_terminal::index::Line(row as i32) - display_offset;
-            let y = bounds.y + row as f32 * self.char_height;
-            let next_y = bounds.y + (row + 1) as f32 * self.char_height;
+            let y = bounds.y + row as f32 * self.char_height();
+            let next_y = bounds.y + (row + 1) as f32 * self.char_height();
             let row_height = next_y - y;
 
             let mut col = 0;
             while col < grid.columns() {
                 let cell = &grid[row_idx][alacritty_terminal::index::Column(col)];
-                let x = bounds.x + col as f32 * self.char_width;
+                let x = bounds.x + col as f32 * self.char_width();
 
                 let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
                 let cell_cols = if is_wide { 2 } else { 1 };
-                let next_x = bounds.x + (col + cell_cols) as f32 * self.char_width;
+                let next_x = bounds.x + (col + cell_cols) as f32 * self.char_width();
                 let cell_width = next_x - x;
 
                 let is_cursor = show_cursor
@@ -131,7 +136,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         Text {
                             content: cell.c.to_string(),
                             bounds: Size::new(cell_width, row_height),
-                            size: self.font_size.into(),
+                            size: self.config.font_size.into(),
                             line_height: text::LineHeight::Absolute(row_height.into()),
                             font,
                             align_x: iced::alignment::Horizontal::Left.into(),
@@ -184,7 +189,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     let lines = match delta {
                         mouse::ScrollDelta::Lines { y, .. } => *y as i32,
                         mouse::ScrollDelta::Pixels { y, .. } => {
-                            (*y / self.char_height) as i32
+                            (*y / self.char_height()) as i32
                         }
                     };
                     if lines != 0 {

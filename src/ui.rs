@@ -45,7 +45,6 @@ pub struct Terminal {
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     terminal_theme: TerminalTheme,
-    font_size: f32,
     char_width: f32,
     char_height: f32,
     pty_cols: usize,
@@ -54,9 +53,8 @@ pub struct Terminal {
 impl Terminal {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
-        let font_size = config.font_size;
-        let char_width = font_size * 0.6;
-        let char_height = font_size * LINE_HEIGHT;
+        let char_width = config.font_size * 0.6;
+        let char_height = config.font_size * LINE_HEIGHT;
         let terminal_theme = config.terminal_theme();
 
         let terminal = Self {
@@ -65,7 +63,6 @@ impl Terminal {
             master: None,
             writer: None,
             terminal_theme,
-            font_size,
             char_width,
             char_height,
             pty_cols: INITIAL_COLS as usize,
@@ -142,7 +139,7 @@ impl Terminal {
 
     pub fn view(&self) -> Element<'_, Message> {
         let content: Element<'_, Message> = if let Some(buf) = &self.terminal_buffer {
-            TerminalWidget::new(buf, &self.terminal_theme, self.font_size, self.char_width, self.char_height)
+            TerminalWidget::new(buf, &self.terminal_theme, &self.config)
                 .into()
         } else {
             iced::widget::Space::new().width(Fill).height(Fill).into()
