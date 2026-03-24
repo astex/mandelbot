@@ -119,33 +119,31 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     );
                 }
 
-                {
-                    let font = if cell.flags.contains(Flags::BOLD) {
-                        Font {
-                            weight: iced::font::Weight::Bold,
-                            ..Font::MONOSPACE
-                        }
-                    } else {
-                        Font::MONOSPACE
-                    };
+                let font = if cell.flags.contains(Flags::BOLD) {
+                    Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Font::MONOSPACE
+                    }
+                } else {
+                    Font::MONOSPACE
+                };
 
-                    renderer.fill_text(
-                        Text {
-                            content: cell.c.to_string(),
-                            bounds: Size::new(cell_width, row_height),
-                            size: self.config.font_size.into(),
-                            line_height: text::LineHeight::Absolute(row_height.into()),
-                            font,
-                            align_x: iced::alignment::Horizontal::Left.into(),
-                            align_y: iced::alignment::Vertical::Top.into(),
-                            shaping: text::Shaping::Advanced,
-                            wrapping: text::Wrapping::None,
-                        },
-                        Point::new(x, y),
-                        fg,
-                        cell_bounds,
-                    );
-                }
+                renderer.fill_text(
+                    Text {
+                        content: cell.c.to_string(),
+                        bounds: Size::new(cell_width, row_height),
+                        size: self.config.font_size.into(),
+                        line_height: text::LineHeight::Absolute(row_height.into()),
+                        font,
+                        align_x: iced::alignment::Horizontal::Left.into(),
+                        align_y: iced::alignment::Vertical::Top.into(),
+                        shaping: text::Shaping::Advanced,
+                        wrapping: text::Wrapping::None,
+                    },
+                    Point::new(x, y),
+                    fg,
+                    cell_bounds,
+                );
 
                 col += cell_cols;
             }
