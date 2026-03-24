@@ -24,7 +24,7 @@ pub struct Terminal {
 impl Terminal {
     pub fn boot() -> (Self, Task<Message>) {
         let mut pty_handle =
-            pty::PtyHandle::spawn("/bin/bash", 24, 80).expect("failed to spawn PTY");
+            pty::PtyHandle::spawn("claude", 24, 80).expect("failed to spawn PTY");
 
         let reader = pty_handle.take_reader();
         let writer = pty_handle.take_writer();
