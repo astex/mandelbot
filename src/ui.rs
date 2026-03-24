@@ -1,12 +1,8 @@
-use std::io::{Read, Write};
-
 use iced::widget::container;
 use iced::{Element, Fill, Size, Subscription, Task, Theme};
-use portable_pty::{MasterPty, PtySize};
 
 use crate::config::Config;
-use crate::pty;
-use crate::terminal::TerminalBuffer;
+use crate::terminal::TerminalTab;
 use crate::theme::TerminalTheme;
 use crate::widget::terminal::TerminalWidget;
 
@@ -38,11 +34,8 @@ fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usi
 
 pub struct App {
     config: Config,
-    terminal_buffer: Option<TerminalBuffer>,
-    master: Option<Box<dyn MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
+    tab: Option<TerminalTab>,
     terminal_theme: TerminalTheme,
-    pty_cols: usize,
 }
 
 impl App {
@@ -50,87 +43,56 @@ impl App {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
 
-        let terminal = Self {
+        let app = Self {
             config,
-            terminal_buffer: None,
-            master: None,
-            writer: None,
+            tab: None,
             terminal_theme,
-            pty_cols: INITIAL_COLS as usize,
         };
 
-        (terminal, Task::none())
+        (app, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::WindowResized(size) if self.terminal_buffer.is_none() => {
+            // First resize: spawn terminal at actual window dimensions.
+            Message::WindowResized(size) if self.tab.is_none() => {
                 let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-
-                let (master, _child) =
-                    pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
-                        .expect("failed to spawn PTY");
-
-                let reader = master.try_clone_reader().expect("failed to clone reader");
-                let writer = master.take_writer().expect("failed to take writer");
-
-                self.terminal_buffer = Some(TerminalBuffer::new(rows, cols));
-                self.master = Some(master);
-                self.writer = Some(writer);
-                self.pty_cols = cols;
-
-                Task::run(pty_stream(reader), |message| message)
+                let (tab, task) = TerminalTab::new(rows, cols);
+                self.tab = Some(tab);
+                task
             }
             Message::TerminalOutput(bytes) => {
-                if let Some(buf) = &mut self.terminal_buffer {
-                    buf.feed(&bytes);
-                    buf.scroll_to_bottom();
+                if let Some(tab) = &mut self.tab {
+                    tab.feed(&bytes);
                 }
                 Task::none()
             }
             Message::ShellExited => iced::exit(),
             Message::PtyInput(bytes) => {
-                if let Some(writer) = &mut self.writer {
-                    let _ = writer.write_all(&bytes);
-                    let _ = writer.flush();
+                if let Some(tab) = &mut self.tab {
+                    tab.write_input(&bytes);
                 }
                 Task::none()
             }
             Message::Scroll(delta) => {
-                if let Some(buf) = &mut self.terminal_buffer {
-                    buf.scroll(delta);
+                if let Some(tab) = &mut self.tab {
+                    tab.scroll(delta);
                 }
                 Task::none()
             }
             Message::WindowResized(size) => {
                 let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-
-                if let Some(buf) = &mut self.terminal_buffer {
-                    if rows == buf.rows() && cols == self.pty_cols {
-                        return Task::none();
-                    }
-
-                    buf.resize(rows, cols);
-                    self.pty_cols = cols;
-
-                    if let Some(master) = &self.master {
-                        let _ = master.resize(PtySize {
-                            rows: rows as u16,
-                            cols: cols as u16,
-                            pixel_width: size.width as u16,
-                            pixel_height: size.height as u16,
-                        });
-                    }
+                if let Some(tab) = &mut self.tab {
+                    tab.resize(rows, cols, size.width as u16, size.height as u16);
                 }
-
                 Task::none()
             }
         }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let content: Element<'_, Message> = if let Some(buf) = &self.terminal_buffer {
-            TerminalWidget::new(buf, &self.terminal_theme, &self.config)
+        let content: Element<'_, Message> = if let Some(tab) = &self.tab {
+            TerminalWidget::new(tab, &self.terminal_theme, &self.config)
                 .into()
         } else {
             iced::widget::Space::new().width(Fill).height(Fill).into()
@@ -158,32 +120,4 @@ impl App {
             Theme::Light
         }
     }
-}
-
-fn pty_stream(mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
-    iced::stream::channel(
-        32,
-        |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-            let (exit_sender, exit_receiver) = iced::futures::channel::oneshot::channel::<()>();
-
-            std::thread::spawn(move || {
-                let mut read_buffer = [0u8; 4096];
-                loop {
-                    match reader.read(&mut read_buffer) {
-                        Ok(0) | Err(_) => break,
-                        Ok(bytes_read) => {
-                            let bytes = read_buffer[..bytes_read].to_vec();
-                            if sender.try_send(Message::TerminalOutput(bytes)).is_err() {
-                                break;
-                            }
-                        }
-                    }
-                }
-                let _ = sender.try_send(Message::ShellExited);
-                let _ = exit_sender.send(());
-            });
-
-            let _ = exit_receiver.await;
-        },
-    )
 }

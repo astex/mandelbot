@@ -14,24 +14,24 @@ use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
 
 use crate::config::Config;
 use crate::keys;
-use crate::terminal::TerminalBuffer;
+use crate::terminal::TerminalTab;
 use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
 pub struct TerminalWidget<'a> {
-    buffer: &'a TerminalBuffer,
+    tab: &'a TerminalTab,
     theme: &'a TerminalTheme,
     config: &'a Config,
 }
 
 impl<'a> TerminalWidget<'a> {
     pub fn new(
-        buffer: &'a TerminalBuffer,
+        tab: &'a TerminalTab,
         theme: &'a TerminalTheme,
         config: &'a Config,
     ) -> Self {
         Self {
-            buffer,
+            tab,
             theme,
             config,
         }
@@ -71,10 +71,10 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let grid = self.buffer.grid();
+        let grid = self.tab.grid();
         let display_offset = grid.display_offset();
         let cursor_point = grid.cursor.point;
-        let show_cursor = self.buffer.mode().contains(TermMode::SHOW_CURSOR);
+        let show_cursor = self.tab.mode().contains(TermMode::SHOW_CURSOR);
 
         for row in 0..grid.screen_lines() {
             let row_idx = alacritty_terminal::index::Line(row as i32) - display_offset;
@@ -177,7 +177,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 if let Some(bytes) = key_to_bytes(&key, text.as_deref(), *modifiers) {
                     shell.publish(Message::PtyInput(bytes));
                     shell.capture_event();
-                } else if let Some(scroll) = key_to_scroll(&key, *modifiers, self.buffer.rows()) {
+                } else if let Some(scroll) = key_to_scroll(&key, *modifiers, self.tab.rows()) {
                     shell.publish(Message::Scroll(scroll));
                     shell.capture_event();
                 }
