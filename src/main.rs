@@ -4,6 +4,7 @@ mod pty;
 mod terminal;
 mod theme;
 mod ui;
+mod widget;
 
 fn main() -> iced::Result {
     let cfg = config::Config::load();

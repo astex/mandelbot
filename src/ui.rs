@@ -1,14 +1,14 @@
 use std::io::{Read, Write};
 
-use iced::widget::{container, rich_text};
-use iced::{Element, Fill, Font, Size, Subscription, Task, Theme};
+use iced::widget::container;
+use iced::{Element, Fill, Size, Subscription, Task, Theme};
 use portable_pty::{MasterPty, PtySize};
 
 use crate::config::Config;
-use crate::keys;
 use crate::pty;
 use crate::terminal::TerminalBuffer;
 use crate::theme::TerminalTheme;
+use crate::widget::terminal::TerminalWidget;
 
 const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 4.0;
@@ -28,8 +28,8 @@ pub fn initial_window_size(config: &Config) -> Size {
 pub enum Message {
     TerminalOutput(Vec<u8>),
     ShellExited,
-    KeyEvent(iced::keyboard::Event),
-    MouseEvent(iced::mouse::Event),
+    PtyInput(Vec<u8>),
+    Scroll(i32),
     WindowResized(Size),
 }
 
@@ -39,43 +39,45 @@ fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usi
     (rows.max(1), cols.max(1))
 }
 
-pub enum Terminal {
-    WaitingForSize {
-        config: Config,
-    },
-    Running {
-        terminal_buffer: TerminalBuffer,
-        master: Box<dyn MasterPty + Send>,
-        writer: Box<dyn Write + Send>,
-        pty_cols: usize,
-        terminal_theme: TerminalTheme,
-        font_size: f32,
-        char_width: f32,
-        char_height: f32,
-        is_dark: bool,
-    },
+pub struct Terminal {
+    config: Config,
+    terminal_buffer: Option<TerminalBuffer>,
+    master: Option<Box<dyn MasterPty + Send>>,
+    writer: Option<Box<dyn Write + Send>>,
+    terminal_theme: TerminalTheme,
+    font_size: f32,
+    char_width: f32,
+    char_height: f32,
+    pty_cols: usize,
 }
 
 impl Terminal {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
-        (Self::WaitingForSize { config }, Task::none())
+        let font_size = config.font_size;
+        let char_width = font_size * 0.6;
+        let char_height = font_size * LINE_HEIGHT;
+        let terminal_theme = config.terminal_theme();
+
+        let terminal = Self {
+            config,
+            terminal_buffer: None,
+            master: None,
+            writer: None,
+            terminal_theme,
+            font_size,
+            char_width,
+            char_height,
+            pty_cols: INITIAL_COLS as usize,
+        };
+
+        (terminal, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        match self {
-            Self::WaitingForSize { config } => {
-                let Message::WindowResized(size) = message else {
-                    return Task::none();
-                };
-
-                let font_size = config.font_size;
-                let char_width = font_size * 0.6;
-                let char_height = font_size * LINE_HEIGHT;
-                let terminal_theme = config.terminal_theme();
-                let is_dark = terminal_theme.is_dark;
-
-                let (rows, cols) = terminal_size(size, char_width, char_height);
+        match message {
+            Message::WindowResized(size) if self.terminal_buffer.is_none() => {
+                let (rows, cols) = terminal_size(size, self.char_width, self.char_height);
 
                 let (master, _child) =
                     pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
@@ -84,114 +86,54 @@ impl Terminal {
                 let reader = master.try_clone_reader().expect("failed to clone reader");
                 let writer = master.take_writer().expect("failed to take writer");
 
-                *self = Self::Running {
-                    terminal_buffer: TerminalBuffer::new(rows, cols),
-                    master,
-                    writer,
-                    pty_cols: cols,
-                    terminal_theme,
-                    font_size,
-                    char_width,
-                    char_height,
-                    is_dark,
-                };
+                self.terminal_buffer = Some(TerminalBuffer::new(rows, cols));
+                self.master = Some(master);
+                self.writer = Some(writer);
+                self.pty_cols = cols;
 
                 Task::run(pty_stream(reader), |message| message)
             }
-            _ => self.update_running(message),
-        }
-    }
-
-    fn update_running(&mut self, message: Message) -> Task<Message> {
-        let Self::Running {
-            terminal_buffer,
-            master,
-            writer,
-            pty_cols,
-            char_width,
-            char_height,
-            ..
-        } = self
-        else {
-            unreachable!()
-        };
-
-        let char_width = *char_width;
-        let char_height = *char_height;
-
-        match message {
             Message::TerminalOutput(bytes) => {
-                terminal_buffer.feed(&bytes);
-                terminal_buffer.scroll_to_bottom();
+                if let Some(buf) = &mut self.terminal_buffer {
+                    buf.feed(&bytes);
+                    buf.scroll_to_bottom();
+                }
                 Task::none()
             }
             Message::ShellExited => iced::exit(),
-            Message::KeyEvent(event) => {
-                if let iced::keyboard::Event::KeyPressed { key, text, modifiers, .. } = event {
-                    use iced::keyboard::key::Named;
-                    use iced::keyboard::Key;
-
-                    let bytes: Vec<u8> = match (key, text) {
-                        (Key::Named(Named::Enter), _) if modifiers.shift() => vec![b'\n'],
-                        (Key::Named(Named::Enter), _) => vec![b'\r'],
-                        (Key::Named(Named::Backspace), _) => vec![keys::DEL],
-                        (Key::Named(Named::Space), _) => vec![keys::SPACE],
-                        (Key::Named(Named::Tab), _) => vec![keys::TAB],
-                        (Key::Named(Named::Escape), _) => vec![keys::ESCAPE],
-                        (Key::Named(Named::ArrowUp), _) => keys::ARROW_UP.to_vec(),
-                        (Key::Named(Named::ArrowDown), _) => keys::ARROW_DOWN.to_vec(),
-                        (Key::Named(Named::ArrowRight), _) => keys::ARROW_RIGHT.to_vec(),
-                        (Key::Named(Named::ArrowLeft), _) => keys::ARROW_LEFT.to_vec(),
-                        (Key::Character(c), _) if modifiers.control() && c.as_ref() == "c" => {
-                            vec![keys::CTRL_C]
-                        }
-                        (Key::Named(Named::PageUp), _) if modifiers.shift() => {
-                            terminal_buffer.scroll(-(terminal_buffer.rows() as i32));
-                            return Task::none();
-                        }
-                        (Key::Named(Named::PageDown), _) if modifiers.shift() => {
-                            terminal_buffer.scroll(terminal_buffer.rows() as i32);
-                            return Task::none();
-                        }
-                        (Key::Named(_), _) => return Task::none(),
-                        (_, Some(chars)) if !chars.is_empty() => {
-                            chars.to_string().into_bytes()
-                        }
-                        _ => return Task::none(),
-                    };
-
+            Message::PtyInput(bytes) => {
+                if let Some(writer) = &mut self.writer {
                     let _ = writer.write_all(&bytes);
                     let _ = writer.flush();
                 }
                 Task::none()
             }
-            Message::MouseEvent(iced::mouse::Event::WheelScrolled { delta }) => {
-                let lines = match delta {
-                    iced::mouse::ScrollDelta::Lines { y, .. } => y as i32,
-                    iced::mouse::ScrollDelta::Pixels { y, .. } => (y / char_height) as i32,
-                };
-                if lines != 0 {
-                    terminal_buffer.scroll(lines);
+            Message::Scroll(delta) => {
+                if let Some(buf) = &mut self.terminal_buffer {
+                    buf.scroll(delta);
                 }
                 Task::none()
             }
-            Message::MouseEvent(_) => Task::none(),
             Message::WindowResized(size) => {
-                let (rows, cols) = terminal_size(size, char_width, char_height);
+                let (rows, cols) = terminal_size(size, self.char_width, self.char_height);
 
-                if rows == terminal_buffer.rows() && cols == *pty_cols {
-                    return Task::none();
+                if let Some(buf) = &mut self.terminal_buffer {
+                    if rows == buf.rows() && cols == self.pty_cols {
+                        return Task::none();
+                    }
+
+                    buf.resize(rows, cols);
+                    self.pty_cols = cols;
+
+                    if let Some(master) = &self.master {
+                        let _ = master.resize(PtySize {
+                            rows: rows as u16,
+                            cols: cols as u16,
+                            pixel_width: size.width as u16,
+                            pixel_height: size.height as u16,
+                        });
+                    }
                 }
-
-                terminal_buffer.resize(rows, cols);
-                *pty_cols = cols;
-
-                let _ = master.resize(PtySize {
-                    rows: rows as u16,
-                    cols: cols as u16,
-                    pixel_width: size.width as u16,
-                    pixel_height: size.height as u16,
-                });
 
                 Task::none()
             }
@@ -199,57 +141,34 @@ impl Terminal {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let (spans, font_size, bg) = match self {
-            Self::WaitingForSize { config } => {
-                (vec![], config.font_size, config.terminal_theme().bg)
-            }
-            Self::Running {
-                terminal_buffer,
-                terminal_theme,
-                font_size,
-                ..
-            } => (
-                terminal_buffer.screen_spans(terminal_theme),
-                *font_size,
-                terminal_theme.bg,
-            ),
+        let content: Element<'_, Message> = if let Some(buf) = &self.terminal_buffer {
+            TerminalWidget::new(buf, &self.terminal_theme, self.font_size, self.char_width, self.char_height)
+                .into()
+        } else {
+            iced::widget::Space::new().width(Fill).height(Fill).into()
         };
 
-        container(
-            rich_text(spans)
-                .font(Font::MONOSPACE)
-                .size(font_size),
-        )
-        .padding(PADDING)
-        .width(Fill)
-        .height(Fill)
-        .style(move |_theme| container::Style {
-            background: Some(bg.into()),
-            ..Default::default()
-        })
-        .into()
+        container(content)
+            .padding(PADDING)
+            .width(Fill)
+            .height(Fill)
+            .style(move |_theme| container::Style {
+                background: Some(self.terminal_theme.bg.into()),
+                ..Default::default()
+            })
+            .into()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            iced::keyboard::listen().map(Message::KeyEvent),
-            iced::event::listen_with(|event, _, _| {
-                if let iced::Event::Mouse(mouse_event) = event {
-                    Some(Message::MouseEvent(mouse_event))
-                } else {
-                    None
-                }
-            }),
-            iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
-        ])
+        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
     }
 
     pub fn theme(&self) -> Theme {
-        let is_dark = match self {
-            Self::WaitingForSize { config } => config.theme != "light",
-            Self::Running { is_dark, .. } => *is_dark,
-        };
-        if is_dark { Theme::Dark } else { Theme::Light }
+        if self.terminal_theme.is_dark {
+            Theme::Dark
+        } else {
+            Theme::Light
+        }
     }
 }
 
