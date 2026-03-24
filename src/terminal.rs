@@ -26,8 +26,13 @@ impl TerminalTab {
         let term = Term::new(Config::default(), &size, VoidListener);
 
         let (master, _child) =
-            pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
-                .expect("failed to spawn PTY");
+            pty::spawn_shell(
+                "claude",
+                &["--dangerously-load-development-channels", "server:mandelbot"],
+                rows as u16,
+                cols as u16,
+            )
+            .expect("failed to spawn PTY");
 
         let reader = master.try_clone_reader().expect("failed to clone reader");
         let writer = master.take_writer().expect("failed to take writer");

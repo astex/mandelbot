@@ -2,6 +2,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 
 pub fn spawn_shell(
     shell: &str,
+    args: &[&str],
     rows: u16,
     cols: u16,
 ) -> Result<
@@ -20,6 +21,9 @@ pub fn spawn_shell(
     })?;
 
     let mut cmd = CommandBuilder::new(shell);
+    for arg in args {
+        cmd.arg(arg);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("PROMPT_EOL_MARK", "");
 

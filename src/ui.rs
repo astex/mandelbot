@@ -1,3 +1,7 @@
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+use std::process::{Child, Command};
+
 use iced::widget::container;
 use iced::{Element, Fill, Size, Subscription, Task, Theme};
 
@@ -36,6 +40,8 @@ pub struct App {
     config: Config,
     tab: Option<TerminalTab>,
     terminal_theme: TerminalTheme,
+    _channel_server: Option<Child>,
+    channel_socket_path: String,
 }
 
 impl App {
@@ -43,10 +49,25 @@ impl App {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
 
+        let socket_path = format!("/tmp/mandelbot-{}.sock", std::process::id());
+
+        // Clean up any stale socket from a previous run.
+        let _ = std::fs::remove_file(&socket_path);
+
+        let channel_server = Command::new("npx")
+            .args(["tsx", "channel/mandelbot-channel.ts", &socket_path])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .ok();
+
         let app = Self {
             config,
             tab: None,
             terminal_theme,
+            _channel_server: channel_server,
+            channel_socket_path: socket_path,
         };
 
         (app, Task::none())
@@ -59,6 +80,7 @@ impl App {
                 let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
                 let (tab, task) = TerminalTab::new(rows, cols);
                 self.tab = Some(tab);
+                self.send_theme_event();
                 task
             }
             Message::TerminalOutput(bytes) => {
@@ -111,5 +133,21 @@ impl App {
         } else {
             Theme::Light
         }
+    }
+
+    fn send_theme_event(&self) {
+        let theme_value = self.config.theme.clone();
+        let socket_path = self.channel_socket_path.clone();
+
+        std::thread::spawn(move || {
+            // Give the channel server a moment to start listening.
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+                let msg = format!("{{\"type\":\"theme\",\"value\":\"{theme_value}\"}}\n");
+                let _ = stream.write_all(msg.as_bytes());
+                let _ = stream.flush();
+            }
+        });
     }
 }

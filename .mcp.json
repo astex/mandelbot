@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mandelbot": {
+      "command": "npx",
+      "args": ["tsx", "channel/mandelbot-channel.ts"]
+    }
+  }
+}
