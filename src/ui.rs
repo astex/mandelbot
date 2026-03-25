@@ -12,7 +12,7 @@ use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
 const TAB_BAR_WIDTH: f32 = 320.0;
-const TAB_GROUP_GAP: f32 = 200.0;
+const TAB_GROUP_GAP: f32 = 100.0;
 const INITIAL_ROWS: u16 = 50;
 const INITIAL_COLS: u16 = 120;
 
