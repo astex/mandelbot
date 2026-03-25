@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -19,16 +21,31 @@ pub struct TerminalTab {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     pty_cols: usize,
+    mcp_config_dir: Option<PathBuf>,
 }
 
 impl TerminalTab {
-    pub fn new(id: usize, rows: usize, cols: usize) -> (Self, iced::Task<Message>) {
+    pub fn new(
+        id: usize,
+        rows: usize,
+        cols: usize,
+        parent_socket: &Path,
+    ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
-        let (master, _child) =
-            pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
-                .expect("failed to spawn PTY");
+        let mcp_config_dir = write_mcp_config(id, parent_socket);
+
+        let shell_config = pty::ShellConfig {
+            command: "claude",
+            args: &[],
+            env: HashMap::new(),
+            cwd: Some(&mcp_config_dir),
+            rows: rows as u16,
+            cols: cols as u16,
+        };
+
+        let (master, _child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
 
         let reader = master.try_clone_reader().expect("failed to clone reader");
         let writer = master.take_writer().expect("failed to take writer");
@@ -40,6 +57,7 @@ impl TerminalTab {
             master,
             writer,
             pty_cols: cols,
+            mcp_config_dir: Some(mcp_config_dir),
         };
 
         let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
@@ -101,6 +119,49 @@ impl TerminalTab {
     pub fn mode(&self) -> TermMode {
         *self.term.mode()
     }
+}
+
+impl Drop for TerminalTab {
+    fn drop(&mut self) {
+        if let Some(dir) = self.mcp_config_dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// Write a .mcp.json to a temp directory that tells Claude how to spawn the
+/// MCP server for this session.
+fn write_mcp_config(session_id: usize, parent_socket: &Path) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "mandelbot-mcp-{}-{}",
+        std::process::id(),
+        session_id,
+    ));
+    std::fs::create_dir_all(&dir).expect("failed to create mcp config dir");
+
+    let exe = std::env::current_exe()
+        .expect("failed to get current exe")
+        .to_string_lossy()
+        .into_owned();
+
+    let config = serde_json::json!({
+        "mcpServers": {
+            "mandelbot": {
+                "command": exe,
+                "args": [
+                    "--mcp-server",
+                    "--session-id", session_id.to_string(),
+                    "--parent-socket", parent_socket.to_string_lossy(),
+                ],
+            },
+        },
+    });
+
+    let config_path = dir.join(".mcp.json");
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+        .expect("failed to write .mcp.json");
+
+    dir
 }
 
 fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
