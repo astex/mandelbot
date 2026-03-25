@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Border, Element, Fill, Size, Subscription, Task, Theme};
 
+use alacritty_terminal::index::{Point as GridPoint, Side};
+use alacritty_terminal::selection::Selection;
+
 use crate::config::Config;
 use crate::terminal::TerminalTab;
 use crate::theme::TerminalTheme;
@@ -37,6 +40,8 @@ pub enum Message {
     SelectTab(usize),
     SelectTabByIndex(usize),
     SetTitle(usize, String),
+    SetSelection(Option<Selection>),
+    UpdateSelection(GridPoint, Side),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -182,6 +187,18 @@ impl App {
             Message::SelectTabByIndex(index) => {
                 if let Some(tab) = self.tabs.get(index) {
                     self.active_tab_id = tab.id;
+                }
+                Task::none()
+            }
+            Message::SetSelection(sel) => {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.set_selection(sel);
+                }
+                Task::none()
+            }
+            Message::UpdateSelection(point, side) => {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.update_selection(point, side);
                 }
                 Task::none()
             }
