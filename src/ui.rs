@@ -34,7 +34,6 @@ pub enum Message {
     CloseTab(usize),
     SelectTab(usize),
     SelectTabByIndex(usize),
-    McpMessage(usize, String),
     SetTitle(usize, String),
 }
 
@@ -145,7 +144,6 @@ impl App {
                 Task::none()
             }
             Message::ShellExited(tab_id) => self.close_tab(tab_id),
-            Message::McpMessage(_tab_id, _text) => Task::none(),
             Message::SetTitle(tab_id, title) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.title = Some(title);
@@ -308,19 +306,14 @@ fn parent_socket_stream(
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("")
                                         .to_string();
-                                    Message::SetTitle(tab_id, title)
+                                    Some(Message::SetTitle(tab_id, title))
                                 }
-                                _ => {
-                                    let text = msg
-                                        .get("text")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    Message::McpMessage(tab_id, text)
-                                }
+                                _ => None,
                             };
-                            if sender.try_send(message).is_err() {
-                                break;
+                            if let Some(message) = message {
+                                if sender.try_send(message).is_err() {
+                                    break;
+                                }
                             }
                         }
                     });
