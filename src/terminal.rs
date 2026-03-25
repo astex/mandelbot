@@ -16,6 +16,7 @@ use crate::ui::Message;
 
 pub struct TerminalTab {
     pub id: usize,
+    pub is_claude: bool,
     pub title: Option<String>,
     term: Term<VoidListener>,
     parser: ansi::Processor,
@@ -29,24 +30,40 @@ impl TerminalTab {
         id: usize,
         rows: usize,
         cols: usize,
+        is_claude: bool,
+        shell: &str,
         parent_socket: &Path,
     ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
         let mcp_config_dir = write_mcp_config();
-
         let system_prompt_path = write_system_prompt(&mcp_config_dir);
         let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
 
-        let shell_config = pty::ShellConfig {
-            command: "claude",
-            args: &["--append-system-prompt-file", &system_prompt_flag],
-            env: HashMap::from([
+        let (command, args_vec, env, cwd);
+        if is_claude {
+            command = "claude";
+            args_vec = vec!["--append-system-prompt-file", &system_prompt_flag];
+            env = HashMap::from([
                 ("MANDELBOT_TAB_ID", id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
-            ]),
-            cwd: Some(&mcp_config_dir),
+            ]);
+            cwd = Some(mcp_config_dir.as_path());
+        } else {
+            let parts: Vec<&str> = shell.split_whitespace().collect();
+            let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
+            command = cmd;
+            args_vec = rest.to_vec();
+            env = HashMap::new();
+            cwd = None;
+        }
+
+        let shell_config = pty::ShellConfig {
+            command,
+            args: &args_vec,
+            env,
+            cwd,
             rows: rows as u16,
             cols: cols as u16,
         };
@@ -58,6 +75,7 @@ impl TerminalTab {
 
         let tab = Self {
             id,
+            is_claude,
             title: None,
             term,
             parser: ansi::Processor::new(),

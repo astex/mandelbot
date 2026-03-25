@@ -368,6 +368,14 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 }
 
                 if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Named(keyboard::key::Named::Space)
+                {
+                    shell.publish(Message::NewClaudeTab);
+                    shell.capture_event();
+                    return;
+                }
+
+                if self.config.matches_control(*modifiers)
                     && key == keyboard::Key::Character("w".into())
                 {
                     shell.publish(Message::CloseTab(self.tab.id));
