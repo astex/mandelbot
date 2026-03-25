@@ -30,64 +30,40 @@ impl TerminalTab {
         id: usize,
         rows: usize,
         cols: usize,
+        is_claude: bool,
+        shell: &str,
         parent_socket: &Path,
     ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
         let mcp_config_dir = write_mcp_config();
-
         let system_prompt_path = write_system_prompt(&mcp_config_dir);
         let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
 
-        let shell_config = pty::ShellConfig {
-            command: "claude",
-            args: &["--append-system-prompt-file", &system_prompt_flag],
-            env: HashMap::from([
+        let (command, args_vec, env, cwd);
+        if is_claude {
+            command = "claude";
+            args_vec = vec!["--append-system-prompt-file", &system_prompt_flag];
+            env = HashMap::from([
                 ("MANDELBOT_TAB_ID", id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
-            ]),
-            cwd: Some(&mcp_config_dir),
-            rows: rows as u16,
-            cols: cols as u16,
-        };
+            ]);
+            cwd = Some(mcp_config_dir.as_path());
+        } else {
+            let parts: Vec<&str> = shell.split_whitespace().collect();
+            let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
+            command = cmd;
+            args_vec = rest.to_vec();
+            env = HashMap::new();
+            cwd = None;
+        }
 
-        let (master, _child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
-
-        let reader = master.try_clone_reader().expect("failed to clone reader");
-        let writer = master.take_writer().expect("failed to take writer");
-
-        let tab = Self {
-            id,
-            is_claude: true,
-            title: None,
-            term,
-            parser: ansi::Processor::new(),
-            master,
-            writer,
-            pty_cols: cols,
-        };
-
-        let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
-        (tab, task)
-    }
-
-    pub fn new_shell(
-        id: usize,
-        rows: usize,
-        cols: usize,
-        shell: &str,
-    ) -> (Self, iced::Task<Message>) {
-        let size = TermSize::new(cols, rows);
-        let term = Term::new(Config::default(), &size, VoidListener);
-
-        let parts: Vec<&str> = shell.split_whitespace().collect();
-        let (command, args) = parts.split_first().expect("shell config must not be empty");
         let shell_config = pty::ShellConfig {
             command,
-            args,
-            env: HashMap::new(),
-            cwd: None,
+            args: &args_vec,
+            env,
+            cwd,
             rows: rows as u16,
             cols: cols as u16,
         };
@@ -99,7 +75,7 @@ impl TerminalTab {
 
         let tab = Self {
             id,
-            is_claude: false,
+            is_claude,
             title: None,
             term,
             parser: ansi::Processor::new(),

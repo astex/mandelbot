@@ -101,11 +101,7 @@ impl App {
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let (tab, task) = if is_claude {
-            TerminalTab::new(id, rows, cols, &self.parent_socket_path)
-        } else {
-            TerminalTab::new_shell(id, rows, cols, &self.config.shell)
-        };
+        let (tab, task) = TerminalTab::new(id, rows, cols, is_claude, &self.config.shell, &self.parent_socket_path);
         self.tabs.push(tab);
         self.active_tab_id = id;
         task
