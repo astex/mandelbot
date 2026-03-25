@@ -144,10 +144,7 @@ impl App {
                 Task::none()
             }
             Message::ShellExited(tab_id) => self.close_tab(tab_id),
-            Message::McpMessage(session_id, text) => {
-                eprintln!("[mcp] session {session_id} says: {text}");
-                Task::none()
-            }
+            Message::McpMessage(_session_id, _text) => Task::none(),
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
