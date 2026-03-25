@@ -256,6 +256,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.parent_socket_dir);
+        let mcp_config_dir =
+            std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(mcp_config_dir);
     }
 }
 

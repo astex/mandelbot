@@ -21,7 +21,6 @@ pub struct TerminalTab {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     pty_cols: usize,
-    mcp_config_dir: Option<PathBuf>,
 }
 
 impl TerminalTab {
@@ -34,12 +33,15 @@ impl TerminalTab {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
-        let mcp_config_dir = write_mcp_config(id, parent_socket);
+        let mcp_config_dir = write_mcp_config();
 
         let shell_config = pty::ShellConfig {
             command: "claude",
             args: &[],
-            env: HashMap::new(),
+            env: HashMap::from([
+                ("MANDELBOT_SESSION_ID", id.to_string()),
+                ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
+            ]),
             cwd: Some(&mcp_config_dir),
             rows: rows as u16,
             cols: cols as u16,
@@ -57,7 +59,6 @@ impl TerminalTab {
             master,
             writer,
             pty_cols: cols,
-            mcp_config_dir: Some(mcp_config_dir),
         };
 
         let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
@@ -121,22 +122,18 @@ impl TerminalTab {
     }
 }
 
-impl Drop for TerminalTab {
-    fn drop(&mut self) {
-        if let Some(dir) = self.mcp_config_dir.take() {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-}
-
 /// Write a .mcp.json to a temp directory that tells Claude how to spawn the
-/// MCP server for this session.
-fn write_mcp_config(session_id: usize, parent_socket: &Path) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mandelbot-mcp-{}-{}",
-        std::process::id(),
-        session_id,
-    ));
+/// MCP server. The config is static — session ID and parent socket path are
+/// passed via environment variables so that every tab sees the same command
+/// and Claude only prompts for approval once.
+fn write_mcp_config() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
+    let config_path = dir.join(".mcp.json");
+
+    if config_path.exists() {
+        return dir;
+    }
+
     std::fs::create_dir_all(&dir).expect("failed to create mcp config dir");
 
     let exe = std::env::current_exe()
@@ -148,16 +145,11 @@ fn write_mcp_config(session_id: usize, parent_socket: &Path) -> PathBuf {
         "mcpServers": {
             "mandelbot": {
                 "command": exe,
-                "args": [
-                    "--mcp-server",
-                    "--session-id", session_id.to_string(),
-                    "--parent-socket", parent_socket.to_string_lossy(),
-                ],
+                "args": ["--mcp-server"],
             },
         },
     });
 
-    let config_path = dir.join(".mcp.json");
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
         .expect("failed to write .mcp.json");
 

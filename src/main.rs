@@ -11,9 +11,10 @@ fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().collect();
 
     if args.contains(&"--mcp-server".to_string()) {
-        let session_id = arg_value(&args, "--session-id").expect("--session-id required");
+        let session_id =
+            std::env::var("MANDELBOT_SESSION_ID").expect("MANDELBOT_SESSION_ID required");
         let parent_socket =
-            arg_value(&args, "--parent-socket").expect("--parent-socket required");
+            std::env::var("MANDELBOT_PARENT_SOCKET").expect("MANDELBOT_PARENT_SOCKET required");
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -39,11 +40,4 @@ fn main() -> iced::Result {
         .theme(ui::App::theme)
         .window_size(window_size)
         .run()
-}
-
-fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == flag)
-        .and_then(|i| args.get(i + 1))
-        .cloned()
 }

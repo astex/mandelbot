@@ -202,10 +202,8 @@ mod tests {
             .join("mandelbot");
         let mut child = std::process::Command::new(&exe)
             .arg("--mcp-server")
-            .arg("--session-id")
-            .arg("tab-42")
-            .arg("--parent-socket")
-            .arg(&parent_sock)
+            .env("MANDELBOT_SESSION_ID", "tab-42")
+            .env("MANDELBOT_PARENT_SOCKET", &parent_sock)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
