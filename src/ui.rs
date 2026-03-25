@@ -4,7 +4,7 @@ use iced::{Border, Element, Fill, Size, Subscription, Task, Theme};
 use crate::config::Config;
 use crate::terminal::TerminalTab;
 use crate::theme::TerminalTheme;
-use crate::widget::terminal::TerminalWidget;
+use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
 const TAB_BAR_WIDTH: f32 = 36.0;
@@ -24,6 +24,7 @@ pub enum Message {
     ShellExited(usize),
     PtyInput(Vec<u8>),
     Scroll(i32),
+    ScrollTo(usize),
     WindowResized(Size),
     NewTab,
     CloseTab(usize),
@@ -32,7 +33,7 @@ pub enum Message {
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
-    let cols = ((window.width - PADDING * 2.0 - TAB_BAR_WIDTH) / char_width).floor() as usize;
+    let cols = ((window.width - PADDING * 2.0 - TAB_BAR_WIDTH - terminal::SCROLLBAR_WIDTH) / char_width).floor() as usize;
     let rows = ((window.height - PADDING * 2.0) / char_height).floor() as usize;
     (rows.max(1), cols.max(1))
 }
@@ -132,6 +133,12 @@ impl App {
             Message::Scroll(delta) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.scroll(delta);
+                }
+                Task::none()
+            }
+            Message::ScrollTo(offset) => {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.scroll_to(offset);
                 }
                 Task::none()
             }

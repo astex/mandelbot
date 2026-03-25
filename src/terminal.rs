@@ -63,6 +63,12 @@ impl TerminalTab {
         self.term.scroll_display(Scroll::Delta(delta));
     }
 
+    pub fn scroll_to(&mut self, offset: usize) {
+        let current = self.term.grid().display_offset() as i32;
+        let delta = offset as i32 - current;
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
     pub fn resize(&mut self, rows: usize, cols: usize, pixel_width: u16, pixel_height: u16) {
         if rows == self.term.screen_lines() && cols == self.pty_cols {
             return;
@@ -86,6 +92,10 @@ impl TerminalTab {
 
     pub fn grid(&self) -> &Grid<Cell> {
         self.term.grid()
+    }
+
+    pub fn history_size(&self) -> usize {
+        self.term.grid().history_size()
     }
 
     pub fn mode(&self) -> TermMode {

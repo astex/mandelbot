@@ -18,6 +18,60 @@ use crate::terminal::TerminalTab;
 use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
+pub const SCROLLBAR_WIDTH: f32 = 8.0;
+const SCROLLBAR_MIN_THUMB: f32 = 12.0;
+
+struct TrackGeometry {
+    thumb_height: f32,
+    usable: f32,
+    history_size: usize,
+}
+
+impl TrackGeometry {
+    fn new(track_height: f32, screen_lines: usize, history_size: usize) -> Option<Self> {
+        if history_size == 0 {
+            return None;
+        }
+        let total_lines = history_size + screen_lines;
+        let thumb_ratio = screen_lines as f32 / total_lines as f32;
+        let thumb_height = (thumb_ratio * track_height).max(SCROLLBAR_MIN_THUMB);
+        let usable = track_height - thumb_height;
+        Some(Self { thumb_height, usable, history_size })
+    }
+
+    fn thumb_y(&self, bounds_y: f32, display_offset: usize) -> f32 {
+        let scroll_fraction = display_offset as f32 / self.history_size as f32;
+        bounds_y + (1.0 - scroll_fraction) * self.usable
+    }
+
+    fn offset_from_y(&self, y: f32, bounds_y: f32) -> usize {
+        if self.usable <= 0.0 {
+            return 0;
+        }
+        let fraction = 1.0 - ((y - bounds_y - self.thumb_height / 2.0) / self.usable).clamp(0.0, 1.0);
+        (fraction * self.history_size as f32).round() as usize
+    }
+
+    fn offset_from_drag(&self, drag_start_y: f32, drag_start_offset: usize, current_y: f32) -> usize {
+        if self.usable <= 0.0 {
+            return 0;
+        }
+        let dy = current_y - drag_start_y;
+        let offset_delta = (dy / self.usable * self.history_size as f32).round() as i32;
+        (drag_start_offset as i32 - offset_delta)
+            .max(0)
+            .min(self.history_size as i32) as usize
+    }
+}
+
+#[derive(Default)]
+struct ScrollbarState {
+    dragging: bool,
+    hovered: bool,
+    drag_start_y: f32,
+    drag_start_offset: usize,
+}
+
 pub struct TerminalWidget<'a> {
     tab: &'a TerminalTab,
     config: &'a Config,
@@ -43,6 +97,29 @@ impl<'a> TerminalWidget<'a> {
     fn char_height(&self) -> f32 {
         self.config.char_height()
     }
+
+    fn scrollbar_rect(&self, bounds: &Rectangle) -> Rectangle {
+        Rectangle::new(
+            Point::new(bounds.x + bounds.width - SCROLLBAR_WIDTH, bounds.y),
+            Size::new(SCROLLBAR_WIDTH, bounds.height),
+        )
+    }
+
+    fn track_geometry(&self, bounds: &Rectangle) -> Option<TrackGeometry> {
+        let grid = self.tab.grid();
+        TrackGeometry::new(bounds.height, grid.screen_lines(), self.tab.history_size())
+    }
+
+    fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
+        let track = self.track_geometry(bounds)?;
+        let thumb_y = track.thumb_y(bounds.y, self.tab.grid().display_offset());
+        let track_x = bounds.x + bounds.width - SCROLLBAR_WIDTH;
+
+        Some(Rectangle::new(
+            Point::new(track_x, thumb_y),
+            Size::new(SCROLLBAR_WIDTH, track.thumb_height),
+        ))
+    }
 }
 
 impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
@@ -59,9 +136,17 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         layout::atomic(limits, Length::Fill, Length::Fill)
     }
 
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<ScrollbarState>()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(ScrollbarState::default())
+    }
+
     fn draw(
         &self,
-        _tree: &widget::Tree,
+        tree: &widget::Tree,
         renderer: &mut iced::Renderer,
         _theme: &iced::Theme,
         _style: &renderer::Style,
@@ -148,11 +233,43 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 col += cell_cols;
             }
         }
+
+        if let Some(thumb) = self.thumb_rect(&bounds) {
+            let state = tree.state.downcast_ref::<ScrollbarState>();
+            let alpha = if state.dragging || state.hovered { 0.7 } else { 0.4 };
+
+            let track_color = Color { a: alpha * 0.3, ..self.theme.fg };
+            let scrollbar = self.scrollbar_rect(&bounds);
+            renderer.fill_quad(
+                Quad {
+                    bounds: scrollbar,
+                    border: Border {
+                        radius: (SCROLLBAR_WIDTH / 2.0).into(),
+                        ..Border::default()
+                    },
+                    ..Quad::default()
+                },
+                track_color,
+            );
+
+            let thumb_color = Color { a: alpha, ..self.theme.fg };
+            renderer.fill_quad(
+                Quad {
+                    bounds: thumb,
+                    border: Border {
+                        radius: (SCROLLBAR_WIDTH / 2.0).into(),
+                        ..Border::default()
+                    },
+                    ..Quad::default()
+                },
+                thumb_color,
+            );
+        }
     }
 
     fn update(
         &mut self,
-        _tree: &mut Tree,
+        tree: &mut Tree,
         event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
@@ -161,7 +278,78 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
+        let state = tree.state.downcast_mut::<ScrollbarState>();
+        let bounds = layout.bounds();
+
+        // Extract cursor position from any variant (Available or Levitating).
+        let cursor_pos = match cursor {
+            mouse::Cursor::Available(pos) | mouse::Cursor::Levitating(pos) => Some(pos),
+            mouse::Cursor::Unavailable => None,
+        };
+
         match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                if let Some(pos) = cursor_pos {
+                    let scrollbar = self.scrollbar_rect(&bounds);
+                    if scrollbar.contains(pos) && self.tab.history_size() > 0 {
+                        state.dragging = true;
+                        state.drag_start_y = pos.y;
+                        state.drag_start_offset = self.tab.grid().display_offset();
+
+                        if let (Some(thumb), Some(track)) = (self.thumb_rect(&bounds), self.track_geometry(&bounds)) {
+                            if !thumb.contains(pos) {
+                                let new_offset = track.offset_from_y(pos.y, bounds.y);
+                                shell.publish(Message::ScrollTo(new_offset));
+                                state.drag_start_y = pos.y;
+                                state.drag_start_offset = new_offset;
+                            }
+                        }
+
+                        shell.capture_event();
+                        return;
+                    }
+                }
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                let was_hovered = state.hovered;
+                state.hovered = self.tab.history_size() > 0
+                    && self.scrollbar_rect(&bounds).contains(*position);
+                if state.hovered != was_hovered {
+                    shell.request_redraw();
+                }
+
+                if state.dragging {
+                    if let Some(track) = self.track_geometry(&bounds) {
+                        let target = track.offset_from_drag(
+                            state.drag_start_y,
+                            state.drag_start_offset,
+                            position.y,
+                        );
+                        shell.publish(Message::ScrollTo(target));
+                    }
+                    shell.capture_event();
+                    return;
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                if state.dragging {
+                    state.dragging = false;
+                    if let Some(pos) = cursor_pos {
+                        state.hovered = self.scrollbar_rect(&bounds).contains(pos);
+                    } else {
+                        state.hovered = false;
+                    }
+                    shell.request_redraw();
+                    shell.capture_event();
+                    return;
+                }
+            }
+            Event::Mouse(mouse::Event::CursorLeft) => {
+                if state.hovered {
+                    state.hovered = false;
+                    shell.request_redraw();
+                }
+            }
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
                 text,
