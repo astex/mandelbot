@@ -21,6 +21,49 @@ use crate::ui::Message;
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
 const SCROLLBAR_MIN_THUMB: f32 = 12.0;
 
+struct TrackGeometry {
+    thumb_height: f32,
+    usable: f32,
+    history_size: usize,
+}
+
+impl TrackGeometry {
+    fn new(track_height: f32, screen_lines: usize, history_size: usize) -> Option<Self> {
+        if history_size == 0 {
+            return None;
+        }
+        let total_lines = history_size + screen_lines;
+        let thumb_ratio = screen_lines as f32 / total_lines as f32;
+        let thumb_height = (thumb_ratio * track_height).max(SCROLLBAR_MIN_THUMB);
+        let usable = track_height - thumb_height;
+        Some(Self { thumb_height, usable, history_size })
+    }
+
+    fn thumb_y(&self, bounds_y: f32, display_offset: usize) -> f32 {
+        let scroll_fraction = display_offset as f32 / self.history_size as f32;
+        bounds_y + (1.0 - scroll_fraction) * self.usable
+    }
+
+    fn offset_from_y(&self, y: f32, bounds_y: f32) -> usize {
+        if self.usable <= 0.0 {
+            return 0;
+        }
+        let fraction = 1.0 - ((y - bounds_y - self.thumb_height / 2.0) / self.usable).clamp(0.0, 1.0);
+        (fraction * self.history_size as f32).round() as usize
+    }
+
+    fn offset_from_drag(&self, drag_start_y: f32, drag_start_offset: usize, current_y: f32) -> usize {
+        if self.usable <= 0.0 {
+            return 0;
+        }
+        let dy = current_y - drag_start_y;
+        let offset_delta = (dy / self.usable * self.history_size as f32).round() as i32;
+        (drag_start_offset as i32 - offset_delta)
+            .max(0)
+            .min(self.history_size as i32) as usize
+    }
+}
+
 #[derive(Default)]
 struct ScrollbarState {
     dragging: bool,
@@ -62,48 +105,20 @@ impl<'a> TerminalWidget<'a> {
         )
     }
 
-    fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
-        let history_size = self.tab.history_size();
-        if history_size == 0 {
-            return None;
-        }
-
+    fn track_geometry(&self, bounds: &Rectangle) -> Option<TrackGeometry> {
         let grid = self.tab.grid();
-        let display_offset = grid.display_offset();
-        let track_height = bounds.height;
-        let total_lines = history_size + grid.screen_lines();
-        let thumb_ratio = grid.screen_lines() as f32 / total_lines as f32;
-        let thumb_height = (thumb_ratio * track_height).max(SCROLLBAR_MIN_THUMB);
-        let scroll_fraction = display_offset as f32 / history_size as f32;
-        let thumb_y = bounds.y + (1.0 - scroll_fraction) * (track_height - thumb_height);
+        TrackGeometry::new(bounds.height, grid.screen_lines(), self.tab.history_size())
+    }
+
+    fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
+        let track = self.track_geometry(bounds)?;
+        let thumb_y = track.thumb_y(bounds.y, self.tab.grid().display_offset());
         let track_x = bounds.x + bounds.width - SCROLLBAR_WIDTH;
 
         Some(Rectangle::new(
             Point::new(track_x, thumb_y),
-            Size::new(SCROLLBAR_WIDTH, thumb_height),
+            Size::new(SCROLLBAR_WIDTH, track.thumb_height),
         ))
-    }
-
-    fn offset_from_y(&self, y: f32, bounds: &Rectangle) -> usize {
-        let history_size = self.tab.history_size();
-        if history_size == 0 {
-            return 0;
-        }
-
-        let grid = self.tab.grid();
-        let track_height = bounds.height;
-        let total_lines = history_size + grid.screen_lines();
-        let thumb_ratio = grid.screen_lines() as f32 / total_lines as f32;
-        let thumb_height = (thumb_ratio * track_height).max(SCROLLBAR_MIN_THUMB);
-        let usable = track_height - thumb_height;
-
-        if usable <= 0.0 {
-            return 0;
-        }
-
-        let thumb_center_y = y;
-        let fraction = 1.0 - ((thumb_center_y - bounds.y - thumb_height / 2.0) / usable).clamp(0.0, 1.0);
-        (fraction * history_size as f32).round() as usize
     }
 }
 
@@ -281,9 +296,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         state.drag_start_y = pos.y;
                         state.drag_start_offset = self.tab.grid().display_offset();
 
-                        if let Some(thumb) = self.thumb_rect(&bounds) {
+                        if let (Some(thumb), Some(track)) = (self.thumb_rect(&bounds), self.track_geometry(&bounds)) {
                             if !thumb.contains(pos) {
-                                let new_offset = self.offset_from_y(pos.y, &bounds);
+                                let new_offset = track.offset_from_y(pos.y, bounds.y);
                                 shell.publish(Message::ScrollTo(new_offset));
                                 state.drag_start_y = pos.y;
                                 state.drag_start_offset = new_offset;
@@ -304,24 +319,13 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 }
 
                 if state.dragging {
-                    let pos = *position;
-                    let history_size = self.tab.history_size();
-                    if history_size > 0 {
-                        let grid = self.tab.grid();
-                        let track_height = bounds.height;
-                        let total_lines = history_size + grid.screen_lines();
-                        let thumb_ratio = grid.screen_lines() as f32 / total_lines as f32;
-                        let thumb_height = (thumb_ratio * track_height).max(SCROLLBAR_MIN_THUMB);
-                        let usable = track_height - thumb_height;
-
-                        if usable > 0.0 {
-                            let dy = pos.y - state.drag_start_y;
-                            let offset_delta = (dy / usable * history_size as f32).round() as i32;
-                            let target = (state.drag_start_offset as i32 - offset_delta)
-                                .max(0)
-                                .min(history_size as i32) as usize;
-                            shell.publish(Message::ScrollTo(target));
-                        }
+                    if let Some(track) = self.track_geometry(&bounds) {
+                        let target = track.offset_from_drag(
+                            state.drag_start_y,
+                            state.drag_start_offset,
+                            position.y,
+                        );
+                        shell.publish(Message::ScrollTo(target));
                     }
                     shell.capture_event();
                     return;
