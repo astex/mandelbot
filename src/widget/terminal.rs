@@ -1,4 +1,8 @@
+use std::time::Instant;
+
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
@@ -65,11 +69,23 @@ impl TrackGeometry {
 }
 
 #[derive(Default)]
-struct ScrollbarState {
-    dragging: bool,
-    hovered: bool,
-    drag_start_y: f32,
-    drag_start_offset: usize,
+enum Interaction {
+    #[default]
+    Idle,
+    Scrollbar {
+        drag_start_y: f32,
+        drag_start_offset: usize,
+    },
+    Selecting,
+}
+
+#[derive(Default)]
+struct TerminalState {
+    interaction: Interaction,
+    scrollbar_hovered: bool,
+    click_count: u8,
+    last_click_time: Option<Instant>,
+    last_click_point: Option<Point>,
 }
 
 pub struct TerminalWidget<'a> {
@@ -110,6 +126,22 @@ impl<'a> TerminalWidget<'a> {
         TrackGeometry::new(bounds.height, grid.screen_lines(), self.tab.history_size())
     }
 
+    fn pixel_to_grid(&self, bounds: &Rectangle, pos: Point) -> (GridPoint, Side) {
+        let grid = self.tab.grid();
+        let col_f = (pos.x - bounds.x) / self.char_width();
+        let row_f = (pos.y - bounds.y) / self.char_height();
+
+        let col = (col_f as usize).min(grid.columns().saturating_sub(1));
+        let row = (row_f as i32).clamp(0, grid.screen_lines() as i32 - 1);
+
+        let side = if col_f.fract() < 0.5 { Side::Left } else { Side::Right };
+
+        let display_offset = grid.display_offset();
+        let line = Line(row) - display_offset;
+
+        (GridPoint::new(line, Column(col)), side)
+    }
+
     fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
         let track = self.track_geometry(bounds)?;
         let thumb_y = track.thumb_y(bounds.y, self.tab.grid().display_offset());
@@ -137,11 +169,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<ScrollbarState>()
+        widget::tree::Tag::of::<TerminalState>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(ScrollbarState::default())
+        widget::tree::State::new(TerminalState::default())
     }
 
     fn draw(
@@ -159,16 +191,17 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         let display_offset = grid.display_offset();
         let cursor_point = grid.cursor.point;
         let show_cursor = self.tab.mode().contains(TermMode::SHOW_CURSOR);
+        let selection_range = self.tab.selection_range();
 
         for row in 0..grid.screen_lines() {
-            let row_idx = alacritty_terminal::index::Line(row as i32) - display_offset;
+            let row_idx = Line(row as i32) - display_offset;
             let y = bounds.y + row as f32 * self.char_height();
             let next_y = bounds.y + (row + 1) as f32 * self.char_height();
             let row_height = next_y - y;
 
             let mut col = 0;
             while col < grid.columns() {
-                let cell = &grid[row_idx][alacritty_terminal::index::Column(col)];
+                let cell = &grid[row_idx][Column(col)];
                 let x = bounds.x + col as f32 * self.char_width();
 
                 let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
@@ -184,7 +217,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 let mut fg = ansi_to_color(cell.fg, &self.theme);
                 let mut bg = ansi_to_color_bg(cell.bg, &self.theme);
 
-                if is_cursor || cell.flags.contains(Flags::INVERSE) {
+                let is_selected = selection_range.as_ref().is_some_and(|range| {
+                    range.contains(GridPoint::new(row_idx, Column(col)))
+                });
+
+                if is_cursor || cell.flags.contains(Flags::INVERSE) || is_selected {
                     std::mem::swap(&mut fg, &mut bg);
                 }
 
@@ -235,8 +272,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         }
 
         if let Some(thumb) = self.thumb_rect(&bounds) {
-            let state = tree.state.downcast_ref::<ScrollbarState>();
-            let alpha = if state.dragging || state.hovered { 0.7 } else { 0.4 };
+            let state = tree.state.downcast_ref::<TerminalState>();
+            let scrollbar_active = matches!(state.interaction, Interaction::Scrollbar { .. });
+            let alpha = if scrollbar_active || state.scrollbar_hovered { 0.7 } else { 0.4 };
 
             let track_color = Color { a: alpha * 0.3, ..self.theme.fg };
             let scrollbar = self.scrollbar_rect(&bounds);
@@ -278,7 +316,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_mut::<ScrollbarState>();
+        let state = tree.state.downcast_mut::<TerminalState>();
         let bounds = layout.bounds();
 
         // Extract cursor position from any variant (Available or Levitating).
@@ -290,63 +328,119 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor_pos {
+                    // Scrollbar takes priority.
                     let scrollbar = self.scrollbar_rect(&bounds);
                     if scrollbar.contains(pos) && self.tab.history_size() > 0 {
-                        state.dragging = true;
-                        state.drag_start_y = pos.y;
-                        state.drag_start_offset = self.tab.grid().display_offset();
+                        let mut drag_start_offset = self.tab.grid().display_offset();
 
                         if let (Some(thumb), Some(track)) = (self.thumb_rect(&bounds), self.track_geometry(&bounds)) {
                             if !thumb.contains(pos) {
-                                let new_offset = track.offset_from_y(pos.y, bounds.y);
-                                shell.publish(Message::ScrollTo(new_offset));
-                                state.drag_start_y = pos.y;
-                                state.drag_start_offset = new_offset;
+                                drag_start_offset = track.offset_from_y(pos.y, bounds.y);
+                                shell.publish(Message::ScrollTo(drag_start_offset));
                             }
                         }
 
+                        state.interaction = Interaction::Scrollbar {
+                            drag_start_y: pos.y,
+                            drag_start_offset,
+                        };
                         shell.capture_event();
                         return;
+                    }
+
+                    // Text selection in terminal content area.
+                    if bounds.contains(pos) {
+                        let (grid_point, side) = self.pixel_to_grid(&bounds, pos);
+
+                        // Detect multi-click.
+                        let now = Instant::now();
+                        let is_multi = state.last_click_time
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 500)
+                            && state.last_click_point
+                                .is_some_and(|p| (p.x - pos.x).abs() < 5.0 && (p.y - pos.y).abs() < 5.0);
+
+                        state.click_count = if is_multi { (state.click_count % 3) + 1 } else { 1 };
+                        state.last_click_time = Some(now);
+                        state.last_click_point = Some(pos);
+
+                        let sel_type = match state.click_count {
+                            2 => SelectionType::Semantic,
+                            3 => SelectionType::Lines,
+                            _ => SelectionType::Simple,
+                        };
+
+                        let mut selection = Selection::new(sel_type, grid_point, side);
+                        if state.click_count >= 2 {
+                            selection.include_all();
+                        }
+
+                        shell.publish(Message::SetSelection(Some(selection)));
+                        state.interaction = Interaction::Selecting;
+                        shell.request_redraw();
+                        shell.capture_event();
                     }
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                let was_hovered = state.hovered;
-                state.hovered = self.tab.history_size() > 0
+                // Scrollbar hover tracking (orthogonal to interaction state).
+                let was_hovered = state.scrollbar_hovered;
+                state.scrollbar_hovered = self.tab.history_size() > 0
                     && self.scrollbar_rect(&bounds).contains(*position);
-                if state.hovered != was_hovered {
+                if state.scrollbar_hovered != was_hovered {
                     shell.request_redraw();
                 }
 
-                if state.dragging {
-                    if let Some(track) = self.track_geometry(&bounds) {
-                        let target = track.offset_from_drag(
-                            state.drag_start_y,
-                            state.drag_start_offset,
-                            position.y,
-                        );
-                        shell.publish(Message::ScrollTo(target));
+                match &state.interaction {
+                    Interaction::Scrollbar { drag_start_y, drag_start_offset } => {
+                        if let Some(track) = self.track_geometry(&bounds) {
+                            let target = track.offset_from_drag(
+                                *drag_start_y,
+                                *drag_start_offset,
+                                position.y,
+                            );
+                            shell.publish(Message::ScrollTo(target));
+                        }
+                        shell.capture_event();
                     }
-                    shell.capture_event();
-                    return;
+                    Interaction::Selecting => {
+                        let (grid_point, side) = self.pixel_to_grid(&bounds, *position);
+                        shell.publish(Message::UpdateSelection(grid_point, side));
+
+                        // Auto-scroll when dragging above or below bounds.
+                        if position.y < bounds.y {
+                            shell.publish(Message::Scroll(1));
+                        } else if position.y > bounds.y + bounds.height {
+                            shell.publish(Message::Scroll(-1));
+                        }
+
+                        shell.request_redraw();
+                        shell.capture_event();
+                    }
+                    Interaction::Idle => {}
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if state.dragging {
-                    state.dragging = false;
-                    if let Some(pos) = cursor_pos {
-                        state.hovered = self.scrollbar_rect(&bounds).contains(pos);
-                    } else {
-                        state.hovered = false;
+                match &state.interaction {
+                    Interaction::Scrollbar { .. } => {
+                        state.interaction = Interaction::Idle;
+                        if let Some(pos) = cursor_pos {
+                            state.scrollbar_hovered = self.scrollbar_rect(&bounds).contains(pos);
+                        } else {
+                            state.scrollbar_hovered = false;
+                        }
+                        shell.request_redraw();
+                        shell.capture_event();
                     }
-                    shell.request_redraw();
-                    shell.capture_event();
-                    return;
+                    Interaction::Selecting => {
+                        state.interaction = Interaction::Idle;
+                        shell.request_redraw();
+                    }
+                    Interaction::Idle => {}
                 }
             }
             Event::Mouse(mouse::Event::CursorLeft) => {
-                if state.hovered {
-                    state.hovered = false;
+                if state.scrollbar_hovered {
+                    state.scrollbar_hovered = false;
                     shell.request_redraw();
                 }
             }
@@ -358,6 +452,17 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }) => {
                 let key = key.clone();
                 let text = text.clone();
+
+                // Copy selection.
+                if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Character("c".into())
+                {
+                    if let Some(content) = self.tab.selection_to_string() {
+                        _clipboard.write(iced::advanced::clipboard::Kind::Standard, content);
+                    }
+                    shell.capture_event();
+                    return;
+                }
 
                 if self.config.matches_control(*modifiers)
                     && key == keyboard::Key::Character("t".into())
@@ -404,6 +509,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 }
 
                 if let Some(bytes) = key_to_bytes(&key, text.as_deref(), *modifiers) {
+                    shell.publish(Message::SetSelection(None));
                     shell.publish(Message::PtyInput(bytes));
                     shell.capture_event();
                 } else if let Some(scroll) = key_to_scroll(&key, *modifiers, self.tab.rows()) {

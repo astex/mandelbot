@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionRange};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::term::test::TermSize;
@@ -142,6 +144,24 @@ impl TerminalTab {
 
     pub fn mode(&self) -> TermMode {
         *self.term.mode()
+    }
+
+    pub fn set_selection(&mut self, selection: Option<Selection>) {
+        self.term.selection = selection;
+    }
+
+    pub fn update_selection(&mut self, point: Point, side: Side) {
+        if let Some(sel) = self.term.selection.as_mut() {
+            sel.update(point, side);
+        }
+    }
+
+    pub fn selection_to_string(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        self.term.selection.as_ref()?.to_range(&self.term)
     }
 }
 
