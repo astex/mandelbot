@@ -11,9 +11,9 @@ use crate::theme::TerminalTheme;
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
-const TAB_BAR_WIDTH: f32 = 36.0;
-const INITIAL_ROWS: u16 = 24;
-const INITIAL_COLS: u16 = 80;
+const TAB_BAR_WIDTH: f32 = 320.0;
+const INITIAL_ROWS: u16 = 50;
+const INITIAL_COLS: u16 = 120;
 
 pub fn initial_window_size(config: &Config) -> Size {
     Size {
@@ -34,7 +34,7 @@ pub enum Message {
     CloseTab(usize),
     SelectTab(usize),
     SelectTabByIndex(usize),
-    McpMessage(usize, String),
+    SetTitle(usize, String),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -144,7 +144,12 @@ impl App {
                 Task::none()
             }
             Message::ShellExited(tab_id) => self.close_tab(tab_id),
-            Message::McpMessage(_tab_id, _text) => Task::none(),
+            Message::SetTitle(tab_id, title) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.title = Some(title);
+                }
+                Task::none()
+            }
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -191,10 +196,13 @@ impl App {
             let bg = if is_active { active_bg } else { inactive_bg };
             let tab_id = tab.id;
 
-            let label = text(format!("{}", i + 1))
+            let label_text = match &tab.title {
+                Some(title) => format!("{} {}", i + 1, title),
+                None => format!("{}", i + 1),
+            };
+            let label = text(label_text)
                 .size(self.config.font_size)
-                .color(fg)
-                .center();
+                .color(fg);
 
             let btn = button(label)
                 .on_press(Message::SelectTab(tab_id))
@@ -287,16 +295,25 @@ fn parent_socket_stream(
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<usize>().ok())
                                 .unwrap_or(0);
-                            let text = msg
-                                .get("text")
+                            let msg_type = msg
+                                .get("type")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            if sender
-                                .try_send(Message::McpMessage(tab_id, text))
-                                .is_err()
-                            {
-                                break;
+                                .unwrap_or("");
+                            let message = match msg_type {
+                                "set_title" => {
+                                    let title = msg
+                                        .get("title")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    Some(Message::SetTitle(tab_id, title))
+                                }
+                                _ => None,
+                            };
+                            if let Some(message) = message {
+                                if sender.try_send(message).is_err() {
+                                    break;
+                                }
                             }
                         }
                     });

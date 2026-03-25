@@ -55,17 +55,17 @@ fn handle_tools_list(id: Value) -> Response {
         id,
         serde_json::json!({
             "tools": [{
-                "name": "send_message",
-                "description": "Send a message to the parent session",
+                "name": "set_title",
+                "description": "Set the title of this tab in the parent application",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "text": {
+                        "title": {
                             "type": "string",
-                            "description": "The message text to send",
+                            "description": "The title to display on this tab",
                         },
                     },
-                    "required": ["text"],
+                    "required": ["title"],
                 },
             }],
         }),
@@ -88,17 +88,17 @@ async fn handle_tools_call(
         .unwrap_or("");
 
     match tool_name {
-        "send_message" => {
-            let text = params
+        "set_title" => {
+            let title = params
                 .get("arguments")
-                .and_then(|a| a.get("text"))
+                .and_then(|a| a.get("title"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let msg = serde_json::json!({
-                "type": "message",
+                "type": "set_title",
                 "tab_id": tab_id,
-                "text": text,
+                "title": title,
             });
             let mut msg_str = serde_json::to_string(&msg).unwrap();
             msg_str.push('\n');
@@ -111,7 +111,7 @@ async fn handle_tools_call(
             Response::ok(
                 id,
                 serde_json::json!({
-                    "content": [{ "type": "text", "text": "Message sent" }],
+                    "content": [{ "type": "text", "text": "Title set" }],
                 }),
             )
         }
@@ -184,7 +184,7 @@ mod tests {
     use std::os::unix::net as unix;
 
     #[test]
-    fn test_send_message_flow() {
+    fn test_mcp_flow() {
         let dir = std::env::temp_dir().join(format!("mandelbot-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let parent_sock = dir.join("parent.sock");
@@ -245,21 +245,21 @@ mod tests {
         let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = send(list, &mut child_stdin, &mut child_reader);
         let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(resp["result"]["tools"][0]["name"], "send_message");
+        assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
 
-        // -- tools/call send_message --
-        let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"send_message","arguments":{"text":"hello from agent"}}}"#;
+        // -- tools/call set_title --
+        let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
         let resp = send(call, &mut child_stdin, &mut child_reader);
         let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(resp["result"]["content"][0]["text"], "Message sent");
+        assert_eq!(resp["result"]["content"][0]["text"], "Title set");
 
-        // Verify parent received the message.
+        // Verify parent received the set_title message.
         let mut parent_line = String::new();
         parent_reader.read_line(&mut parent_line).unwrap();
         let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
-        assert_eq!(parent_msg["type"], "message");
+        assert_eq!(parent_msg["type"], "set_title");
         assert_eq!(parent_msg["tab_id"], "tab-42");
-        assert_eq!(parent_msg["text"], "hello from agent");
+        assert_eq!(parent_msg["title"], "my cool tab");
 
         // Close stdin to shut down the server.
         drop(child_stdin);

@@ -16,6 +16,7 @@ use crate::ui::Message;
 
 pub struct TerminalTab {
     pub id: usize,
+    pub title: Option<String>,
     term: Term<VoidListener>,
     parser: ansi::Processor,
     master: Box<dyn MasterPty + Send>,
@@ -35,9 +36,12 @@ impl TerminalTab {
 
         let mcp_config_dir = write_mcp_config();
 
+        let system_prompt_path = write_system_prompt(&mcp_config_dir);
+        let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
+
         let shell_config = pty::ShellConfig {
             command: "claude",
-            args: &[],
+            args: &["--append-system-prompt-file", &system_prompt_flag],
             env: HashMap::from([
                 ("MANDELBOT_TAB_ID", id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
@@ -54,6 +58,7 @@ impl TerminalTab {
 
         let tab = Self {
             id,
+            title: None,
             term,
             parser: ansi::Processor::new(),
             master,
@@ -154,6 +159,16 @@ fn write_mcp_config() -> PathBuf {
         .expect("failed to write .mcp.json");
 
     dir
+}
+
+const SYSTEM_PROMPT: &str = include_str!("agents/PROMPT.md");
+
+fn write_system_prompt(dir: &Path) -> PathBuf {
+    let path = dir.join("system-prompt.md");
+    if !path.exists() {
+        std::fs::write(&path, SYSTEM_PROMPT).expect("failed to write system prompt");
+    }
+    path
 }
 
 fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
