@@ -1,3 +1,7 @@
+use std::io::BufRead;
+use std::os::unix::net as unix;
+use std::path::PathBuf;
+
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Border, Element, Fill, Size, Subscription, Task, Theme};
 
@@ -30,6 +34,7 @@ pub enum Message {
     CloseTab(usize),
     SelectTab(usize),
     SelectTabByIndex(usize),
+    McpMessage(usize, String),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -45,12 +50,25 @@ pub struct App {
     next_tab_id: usize,
     terminal_theme: TerminalTheme,
     window_size: Option<Size>,
+    parent_socket_dir: PathBuf,
+    parent_socket_path: PathBuf,
 }
 
 impl App {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
+
+        let parent_socket_dir =
+            std::env::temp_dir().join(format!("mandelbot-{}", std::process::id()));
+        std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
+        let parent_socket_path = parent_socket_dir.join("parent.sock");
+
+        // Bind the listener before any tabs can spawn MCP servers.
+        let listener = unix::UnixListener::bind(&parent_socket_path)
+            .expect("failed to bind parent socket");
+
+        let listen_task = Task::run(parent_socket_stream(listener), |msg| msg);
 
         let app = Self {
             config,
@@ -59,9 +77,11 @@ impl App {
             next_tab_id: 0,
             terminal_theme,
             window_size: None,
+            parent_socket_dir,
+            parent_socket_path,
         };
 
-        (app, Task::none())
+        (app, listen_task)
     }
 
     fn active_tab(&self) -> Option<&TerminalTab> {
@@ -79,7 +99,7 @@ impl App {
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let (tab, task) = TerminalTab::new(id, rows, cols);
+        let (tab, task) = TerminalTab::new(id, rows, cols, &self.parent_socket_path);
         self.tabs.push(tab);
         self.active_tab_id = id;
         task
@@ -124,6 +144,7 @@ impl App {
                 Task::none()
             }
             Message::ShellExited(tab_id) => self.close_tab(tab_id),
+            Message::McpMessage(_tab_id, _text) => Task::none(),
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -227,4 +248,63 @@ impl App {
             Theme::Light
         }
     }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.parent_socket_dir);
+        let mcp_config_dir =
+            std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(mcp_config_dir);
+    }
+}
+
+/// Stream that accepts connections on the parent socket and reads messages
+/// from all connected MCP server instances.
+fn parent_socket_stream(
+    listener: unix::UnixListener,
+) -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(
+        64,
+        |sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let (exit_sender, exit_receiver) = iced::futures::channel::oneshot::channel::<()>();
+
+            std::thread::spawn(move || {
+                // Accept connections in a loop — one per MCP server instance.
+                for stream in listener.incoming() {
+                    let Ok(stream) = stream else { break };
+                    let mut sender = sender.clone();
+
+                    std::thread::spawn(move || {
+                        let reader = std::io::BufReader::new(stream);
+                        for line in reader.lines() {
+                            let Ok(line) = line else { break };
+                            let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
+                                continue;
+                            };
+                            let tab_id = msg
+                                .get("tab_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| s.parse::<usize>().ok())
+                                .unwrap_or(0);
+                            let text = msg
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if sender
+                                .try_send(Message::McpMessage(tab_id, text))
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    });
+                }
+                let _ = exit_sender.send(());
+            });
+
+            let _ = exit_receiver.await;
+        },
+    )
 }

@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -22,13 +24,30 @@ pub struct TerminalTab {
 }
 
 impl TerminalTab {
-    pub fn new(id: usize, rows: usize, cols: usize) -> (Self, iced::Task<Message>) {
+    pub fn new(
+        id: usize,
+        rows: usize,
+        cols: usize,
+        parent_socket: &Path,
+    ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
-        let (master, _child) =
-            pty::spawn_shell("/bin/bash", rows as u16, cols as u16)
-                .expect("failed to spawn PTY");
+        let mcp_config_dir = write_mcp_config();
+
+        let shell_config = pty::ShellConfig {
+            command: "claude",
+            args: &[],
+            env: HashMap::from([
+                ("MANDELBOT_TAB_ID", id.to_string()),
+                ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
+            ]),
+            cwd: Some(&mcp_config_dir),
+            rows: rows as u16,
+            cols: cols as u16,
+        };
+
+        let (master, _child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
 
         let reader = master.try_clone_reader().expect("failed to clone reader");
         let writer = master.take_writer().expect("failed to take writer");
@@ -101,6 +120,40 @@ impl TerminalTab {
     pub fn mode(&self) -> TermMode {
         *self.term.mode()
     }
+}
+
+/// Write a .mcp.json to a temp directory that tells Claude how to spawn the
+/// MCP server. The config is static — tab ID and parent socket path are
+/// passed via environment variables so that every tab sees the same command
+/// and Claude only prompts for approval once.
+fn write_mcp_config() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
+    let config_path = dir.join(".mcp.json");
+
+    if config_path.exists() {
+        return dir;
+    }
+
+    std::fs::create_dir_all(&dir).expect("failed to create mcp config dir");
+
+    let exe = std::env::current_exe()
+        .expect("failed to get current exe")
+        .to_string_lossy()
+        .into_owned();
+
+    let config = serde_json::json!({
+        "mcpServers": {
+            "mandelbot": {
+                "command": exe,
+                "args": ["--mcp-server"],
+            },
+        },
+    });
+
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+        .expect("failed to write .mcp.json");
+
+    dir
 }
 
 fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
