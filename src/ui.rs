@@ -11,9 +11,9 @@ use crate::theme::TerminalTheme;
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
-const TAB_BAR_WIDTH: f32 = 160.0;
-const INITIAL_ROWS: u16 = 24;
-const INITIAL_COLS: u16 = 80;
+const TAB_BAR_WIDTH: f32 = 320.0;
+const INITIAL_ROWS: u16 = 50;
+const INITIAL_COLS: u16 = 120;
 
 pub fn initial_window_size(config: &Config) -> Size {
     Size {
