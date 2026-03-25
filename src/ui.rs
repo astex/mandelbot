@@ -279,7 +279,6 @@ fn parent_socket_stream(
                         let reader = std::io::BufReader::new(stream);
                         for line in reader.lines() {
                             let Ok(line) = line else { break };
-                            eprintln!("[mcp] parent received: {line}");
                             let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
                                 continue;
                             };
