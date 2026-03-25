@@ -144,7 +144,7 @@ impl App {
                 Task::none()
             }
             Message::ShellExited(tab_id) => self.close_tab(tab_id),
-            Message::McpMessage(_session_id, _text) => Task::none(),
+            Message::McpMessage(_tab_id, _text) => Task::none(),
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -282,8 +282,8 @@ fn parent_socket_stream(
                             let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else {
                                 continue;
                             };
-                            let session_id = msg
-                                .get("session_id")
+                            let tab_id = msg
+                                .get("tab_id")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<usize>().ok())
                                 .unwrap_or(0);
@@ -293,7 +293,7 @@ fn parent_socket_stream(
                                 .unwrap_or("")
                                 .to_string();
                             if sender
-                                .try_send(Message::McpMessage(session_id, text))
+                                .try_send(Message::McpMessage(tab_id, text))
                                 .is_err()
                             {
                                 break;

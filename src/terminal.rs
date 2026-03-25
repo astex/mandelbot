@@ -39,7 +39,7 @@ impl TerminalTab {
             command: "claude",
             args: &[],
             env: HashMap::from([
-                ("MANDELBOT_SESSION_ID", id.to_string()),
+                ("MANDELBOT_TAB_ID", id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
             ]),
             cwd: Some(&mcp_config_dir),
@@ -123,7 +123,7 @@ impl TerminalTab {
 }
 
 /// Write a .mcp.json to a temp directory that tells Claude how to spawn the
-/// MCP server. The config is static — session ID and parent socket path are
+/// MCP server. The config is static — tab ID and parent socket path are
 /// passed via environment variables so that every tab sees the same command
 /// and Claude only prompts for approval once.
 fn write_mcp_config() -> PathBuf {

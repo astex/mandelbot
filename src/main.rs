@@ -11,8 +11,8 @@ fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().collect();
 
     if args.contains(&"--mcp-server".to_string()) {
-        let session_id =
-            std::env::var("MANDELBOT_SESSION_ID").expect("MANDELBOT_SESSION_ID required");
+        let tab_id =
+            std::env::var("MANDELBOT_TAB_ID").expect("MANDELBOT_TAB_ID required");
         let parent_socket =
             std::env::var("MANDELBOT_PARENT_SOCKET").expect("MANDELBOT_PARENT_SOCKET required");
 
@@ -22,7 +22,7 @@ fn main() -> iced::Result {
             .expect("failed to build tokio runtime");
 
         if let Err(e) = rt.block_on(mcp::run(
-            &session_id,
+            &tab_id,
             std::path::Path::new(&parent_socket),
         )) {
             eprintln!("mcp server error: {e}");

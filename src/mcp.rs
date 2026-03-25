@@ -75,7 +75,7 @@ fn handle_tools_list(id: Value) -> Response {
 async fn handle_tools_call(
     id: Value,
     params: Option<Value>,
-    session_id: &str,
+    tab_id: &str,
     parent: &mut tokio::io::WriteHalf<UnixStream>,
 ) -> Response {
     let Some(params) = params else {
@@ -97,7 +97,7 @@ async fn handle_tools_call(
 
             let msg = serde_json::json!({
                 "type": "message",
-                "session_id": session_id,
+                "tab_id": tab_id,
                 "text": text,
             });
             let mut msg_str = serde_json::to_string(&msg).unwrap();
@@ -122,7 +122,7 @@ async fn handle_tools_call(
 /// Run the MCP server over stdin/stdout (for Claude Code) with a parent socket
 /// for relaying messages back to the mandelbot application.
 pub async fn run(
-    session_id: &str,
+    tab_id: &str,
     parent_socket: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parent = UnixStream::connect(parent_socket).await?;
@@ -164,7 +164,7 @@ pub async fn run(
             "initialize" => handle_initialize(id),
             "tools/list" => handle_tools_list(id),
             "tools/call" => {
-                handle_tools_call(id, request.params, session_id, &mut parent_writer).await
+                handle_tools_call(id, request.params, tab_id, &mut parent_writer).await
             }
             _ => Response::err(id, -32601, format!("Method not found: {}", request.method)),
         };
@@ -202,7 +202,7 @@ mod tests {
             .join("mandelbot");
         let mut child = std::process::Command::new(&exe)
             .arg("--mcp-server")
-            .env("MANDELBOT_SESSION_ID", "tab-42")
+            .env("MANDELBOT_TAB_ID", "tab-42")
             .env("MANDELBOT_PARENT_SOCKET", &parent_sock)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -258,7 +258,7 @@ mod tests {
         parent_reader.read_line(&mut parent_line).unwrap();
         let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
         assert_eq!(parent_msg["type"], "message");
-        assert_eq!(parent_msg["session_id"], "tab-42");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["text"], "hello from agent");
 
         // Close stdin to shut down the server.
