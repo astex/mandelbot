@@ -28,6 +28,7 @@ pub enum Message {
     NewTab,
     CloseTab(usize),
     SelectTab(usize),
+    SelectTabByIndex(usize),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -139,6 +140,12 @@ impl App {
             Message::SelectTab(tab_id) => {
                 if self.tabs.iter().any(|t| t.id == tab_id) {
                     self.active_tab_id = tab_id;
+                }
+                Task::none()
+            }
+            Message::SelectTabByIndex(index) => {
+                if let Some(tab) = self.tabs.get(index) {
+                    self.active_tab_id = tab.id;
                 }
                 Task::none()
             }

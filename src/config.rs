@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use iced::keyboard;
 use serde::Deserialize;
 
 use crate::theme::{self, TerminalTheme};
@@ -17,6 +18,14 @@ fn default_font_size() -> f32 {
     14.0
 }
 
+fn default_control_prefix() -> String {
+    "ctrl+shift".to_string()
+}
+
+fn default_movement_prefix() -> String {
+    "alt".to_string()
+}
+
 #[derive(Deserialize)]
 pub struct Config {
     #[serde(default = "default_theme")]
@@ -27,6 +36,12 @@ pub struct Config {
 
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+
+    #[serde(default = "default_control_prefix")]
+    pub control_prefix: String,
+
+    #[serde(default = "default_movement_prefix")]
+    pub movement_prefix: String,
 }
 
 impl Default for Config {
@@ -35,8 +50,24 @@ impl Default for Config {
             theme: default_theme(),
             font: default_font(),
             font_size: default_font_size(),
+            control_prefix: default_control_prefix(),
+            movement_prefix: default_movement_prefix(),
         }
     }
+}
+
+fn parse_modifiers(prefix: &str) -> keyboard::Modifiers {
+    let mut mods = keyboard::Modifiers::empty();
+    for part in prefix.split('+') {
+        match part.trim().to_lowercase().as_str() {
+            "ctrl" | "control" => mods |= keyboard::Modifiers::CTRL,
+            "shift" => mods |= keyboard::Modifiers::SHIFT,
+            "alt" => mods |= keyboard::Modifiers::ALT,
+            "super" | "logo" | "cmd" | "meta" => mods |= keyboard::Modifiers::LOGO,
+            _ => {}
+        }
+    }
+    mods
 }
 
 const LINE_HEIGHT: f32 = 1.3;
@@ -55,6 +86,24 @@ impl Config {
             "light" => theme::solarized_light(),
             _ => theme::solarized_dark(),
         }
+    }
+
+    pub fn control_modifiers(&self) -> keyboard::Modifiers {
+        parse_modifiers(&self.control_prefix)
+    }
+
+    pub fn movement_modifiers(&self) -> keyboard::Modifiers {
+        parse_modifiers(&self.movement_prefix)
+    }
+
+    pub fn matches_control(&self, modifiers: keyboard::Modifiers) -> bool {
+        let expected = self.control_modifiers();
+        modifiers & expected == expected
+    }
+
+    pub fn matches_movement(&self, modifiers: keyboard::Modifiers) -> bool {
+        let expected = self.movement_modifiers();
+        modifiers & expected == expected
     }
 
     pub fn load() -> Self {
