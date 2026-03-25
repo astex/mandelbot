@@ -2,6 +2,7 @@
 name = "mandelbot"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-2.0-only"
 
 [dependencies]
 alacritty_terminal = { version = "0.26.0-rc1", default-features = false }
