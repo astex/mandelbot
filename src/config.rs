@@ -26,6 +26,10 @@ fn default_movement_prefix() -> String {
     "alt".to_string()
 }
 
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
+
 #[derive(Deserialize)]
 pub struct Config {
     #[serde(default = "default_theme")]
@@ -42,6 +46,9 @@ pub struct Config {
 
     #[serde(default = "default_movement_prefix")]
     pub movement_prefix: String,
+
+    #[serde(default = "default_shell")]
+    pub shell: String,
 }
 
 impl Default for Config {
@@ -52,6 +59,7 @@ impl Default for Config {
             font_size: default_font_size(),
             control_prefix: default_control_prefix(),
             movement_prefix: default_movement_prefix(),
+            shell: default_shell(),
         }
     }
 }

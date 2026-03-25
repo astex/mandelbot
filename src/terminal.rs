@@ -16,6 +16,7 @@ use crate::ui::Message;
 
 pub struct TerminalTab {
     pub id: usize,
+    pub is_claude: bool,
     pub title: Option<String>,
     term: Term<VoidListener>,
     parser: ansi::Processor,
@@ -58,6 +59,47 @@ impl TerminalTab {
 
         let tab = Self {
             id,
+            is_claude: true,
+            title: None,
+            term,
+            parser: ansi::Processor::new(),
+            master,
+            writer,
+            pty_cols: cols,
+        };
+
+        let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
+        (tab, task)
+    }
+
+    pub fn new_shell(
+        id: usize,
+        rows: usize,
+        cols: usize,
+        shell: &str,
+    ) -> (Self, iced::Task<Message>) {
+        let size = TermSize::new(cols, rows);
+        let term = Term::new(Config::default(), &size, VoidListener);
+
+        let parts: Vec<&str> = shell.split_whitespace().collect();
+        let (command, args) = parts.split_first().expect("shell config must not be empty");
+        let shell_config = pty::ShellConfig {
+            command,
+            args,
+            env: HashMap::new(),
+            cwd: None,
+            rows: rows as u16,
+            cols: cols as u16,
+        };
+
+        let (master, _child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
+
+        let reader = master.try_clone_reader().expect("failed to clone reader");
+        let writer = master.take_writer().expect("failed to take writer");
+
+        let tab = Self {
+            id,
+            is_claude: false,
             title: None,
             term,
             parser: ansi::Processor::new(),

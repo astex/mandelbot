@@ -12,6 +12,7 @@ use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
 const TAB_BAR_WIDTH: f32 = 320.0;
+const TAB_GROUP_GAP: f32 = 200.0;
 const INITIAL_ROWS: u16 = 50;
 const INITIAL_COLS: u16 = 120;
 
@@ -31,6 +32,7 @@ pub enum Message {
     ScrollTo(usize),
     WindowResized(Size),
     NewTab,
+    NewClaudeTab,
     CloseTab(usize),
     SelectTab(usize),
     SelectTabByIndex(usize),
@@ -92,14 +94,18 @@ impl App {
         self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
     }
 
-    fn spawn_tab(&mut self) -> Task<Message> {
+    fn spawn_tab(&mut self, is_claude: bool) -> Task<Message> {
         let Some(size) = self.window_size else {
             return Task::none();
         };
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let (tab, task) = TerminalTab::new(id, rows, cols, &self.parent_socket_path);
+        let (tab, task) = if is_claude {
+            TerminalTab::new(id, rows, cols, &self.parent_socket_path)
+        } else {
+            TerminalTab::new_shell(id, rows, cols, &self.config.shell)
+        };
         self.tabs.push(tab);
         self.active_tab_id = id;
         task
@@ -127,7 +133,7 @@ impl App {
         match message {
             Message::WindowResized(size) if self.window_size.is_none() => {
                 self.window_size = Some(size);
-                self.spawn_tab()
+                self.spawn_tab(true)
             }
             Message::WindowResized(size) => {
                 self.window_size = Some(size);
@@ -168,7 +174,8 @@ impl App {
                 }
                 Task::none()
             }
-            Message::NewTab => self.spawn_tab(),
+            Message::NewTab => self.spawn_tab(false),
+            Message::NewClaudeTab => self.spawn_tab(true),
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::SelectTab(tab_id) => {
                 if self.tabs.iter().any(|t| t.id == tab_id) {
@@ -191,20 +198,21 @@ impl App {
         let fg = self.terminal_theme.fg;
 
         let mut tab_col = column![];
-        for (i, tab) in self.tabs.iter().enumerate() {
-            let is_active = tab.id == self.active_tab_id;
+
+        let tab_button = |tab: &TerminalTab, index: usize, active_tab_id: usize| {
+            let is_active = tab.id == active_tab_id;
             let bg = if is_active { active_bg } else { inactive_bg };
             let tab_id = tab.id;
 
             let label_text = match &tab.title {
-                Some(title) => format!("{} {}", i + 1, title),
-                None => format!("{}", i + 1),
+                Some(title) => format!("{} {}", index + 1, title),
+                None => format!("{}", index + 1),
             };
             let label = text(label_text)
                 .size(self.config.font_size)
                 .color(fg);
 
-            let btn = button(label)
+            button(label)
                 .on_press(Message::SelectTab(tab_id))
                 .width(TAB_BAR_WIDTH)
                 .style(move |_theme, _status| button::Style {
@@ -212,8 +220,22 @@ impl App {
                     text_color: fg,
                     border: Border::default(),
                     ..Default::default()
-                });
-            tab_col = tab_col.push(btn);
+                })
+        };
+
+        // Claude tabs group
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if !tab.is_claude { continue; }
+            tab_col = tab_col.push(tab_button(tab, i, self.active_tab_id));
+        }
+
+        // Gap between groups
+        tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
+
+        // Shell tabs group
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if tab.is_claude { continue; }
+            tab_col = tab_col.push(tab_button(tab, i, self.active_tab_id));
         }
 
         let tab_bar = container(tab_col)
