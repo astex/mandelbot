@@ -410,8 +410,8 @@ impl App {
             let bg = if is_active { active_bg } else { inactive_bg };
             let tab_id = tab.id;
 
-            let label_text = if tab.is_pending() {
-                "new project...".to_string()
+            let label_text: String = if tab.is_pending() {
+                "new project...".into()
             } else if let Some(title) = &tab.title {
                 title.clone()
             } else if tab.rank == AgentRank::Project {
@@ -426,7 +426,7 @@ impl App {
                 String::new()
             };
 
-            let number_text = format!("{}", display_index + 1);
+            let number_text = format!("{}", display_index);
 
             let label = text(label_text)
                 .size(self.config.font_size)

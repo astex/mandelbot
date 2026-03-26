@@ -528,8 +528,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                             return;
                         }
                         keyboard::Key::Character(c) => {
-                            if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (1..=9).contains(&d)) {
-                                shell.publish(Message::SelectTabByIndex(digit - 1));
+                            if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (0..=9).contains(&d)) {
+                                shell.publish(Message::SelectTabByIndex(digit));
                                 shell.capture_event();
                                 return;
                             }
