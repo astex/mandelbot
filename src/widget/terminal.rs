@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Instant;
 
 use alacritty_terminal::grid::Dimensions;
@@ -14,6 +15,7 @@ use iced::advanced::widget::{self, Tree};
 use iced::advanced::{Clipboard, Layout, Renderer as _, Shell, Text, Widget};
 use iced::keyboard;
 use iced::mouse;
+use iced::window;
 use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
 
 use crate::config::Config;
@@ -89,6 +91,7 @@ enum Interaction {
 struct TerminalState {
     interaction: Interaction,
     scrollbar_hovered: bool,
+    drop_hovering: bool,
     click_count: u8,
     last_click_time: Option<Instant>,
     last_click_point: Option<Point>,
@@ -416,7 +419,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<TerminalState>();
-        if matches!(state.interaction, Interaction::HoveringLink { .. }) {
+        if state.drop_hovering {
+            mouse::Interaction::Copy
+        } else if matches!(state.interaction, Interaction::HoveringLink { .. }) {
             mouse::Interaction::Pointer
         } else {
             mouse::Interaction::default()
@@ -741,8 +746,32 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     }
                 }
             }
+            Event::Window(window::Event::FileDropped(path)) => {
+                let escaped = shell_escape_path(path);
+                shell.publish(Message::PtyInput(escaped.into_bytes()));
+                state.drop_hovering = false;
+                shell.request_redraw();
+                shell.capture_event();
+            }
+            Event::Window(window::Event::FileHovered(_)) => {
+                state.drop_hovering = true;
+                shell.request_redraw();
+            }
+            Event::Window(window::Event::FilesHoveredLeft) => {
+                state.drop_hovering = false;
+                shell.request_redraw();
+            }
             _ => {}
         }
+    }
+}
+
+fn shell_escape_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if s.chars().any(|c| " \t'\"\\()&;|<>$`!#*?[]{}~".contains(c)) {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    } else {
+        s.into_owned()
     }
 }
 
