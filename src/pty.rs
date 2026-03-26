@@ -3,6 +3,26 @@ use std::path::Path;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+/// Augment PATH with common directories that may not be present when launched
+/// from Finder (which doesn't source shell profiles).
+fn augmented_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".to_string());
+    let extra_dirs = [
+        format!("{home}/.local/bin"),
+        format!("{home}/.cargo/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ];
+    let current = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<&str> = current.split(':').collect();
+    for dir in &extra_dirs {
+        if !parts.contains(&dir.as_str()) {
+            parts.insert(0, dir);
+        }
+    }
+    parts.join(":")
+}
+
 pub struct ShellConfig<'a> {
     pub command: &'a str,
     pub args: &'a [&'a str],
@@ -33,6 +53,7 @@ pub fn spawn_shell(
     cmd.args(config.args);
     cmd.env("TERM", "xterm-256color");
     cmd.env("PROMPT_EOL_MARK", "");
+    cmd.env("PATH", augmented_path());
     for (k, v) in &config.env {
         cmd.env(k, v);
     }
