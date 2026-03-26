@@ -83,6 +83,10 @@ fn handle_tools_list(id: Value) -> Response {
                                 "type": "integer",
                                 "description": "Tab ID of an existing project agent. Used from the home agent to spawn a task agent under that project.",
                             },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Initial prompt to send to the spawned agent.",
+                            },
                         },
                     },
                 },
@@ -183,6 +187,9 @@ async fn handle_tools_call(
             let project_tab_id = args
                 .and_then(|a| a.get("project_tab_id"))
                 .and_then(|v| v.as_u64());
+            let prompt = args
+                .and_then(|a| a.get("prompt"))
+                .and_then(|v| v.as_str());
 
             let mut msg = serde_json::json!({
                 "type": "spawn_agent",
@@ -193,6 +200,9 @@ async fn handle_tools_call(
             }
             if let Some(ptid) = project_tab_id {
                 msg["project_tab_id"] = Value::Number(ptid.into());
+            }
+            if let Some(p) = prompt {
+                msg["prompt"] = Value::String(p.to_string());
             }
 
             if let Err(e) = send_to_parent(parent_writer, msg).await {

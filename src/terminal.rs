@@ -73,6 +73,7 @@ impl TerminalTab {
         parent_id: Option<usize>,
         shell: &str,
         parent_socket: &Path,
+        prompt: Option<String>,
     ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
@@ -84,6 +85,7 @@ impl TerminalTab {
         let hooks_settings_path = write_hooks_settings(&config_dir);
         let hooks_settings_flag = hooks_settings_path.to_string_lossy().into_owned();
 
+        let prompt_flag = prompt.unwrap_or_default();
         let (command, args_vec, env, cwd);
         if is_claude {
             command = "claude";
@@ -94,6 +96,9 @@ impl TerminalTab {
             ];
             if rank == AgentRank::Task {
                 args.push("-w");
+            }
+            if !prompt_flag.is_empty() {
+                args.push(&prompt_flag);
             }
             args_vec = args;
             env = HashMap::from([
