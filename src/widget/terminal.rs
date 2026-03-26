@@ -769,7 +769,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 fn shell_escape_path(path: &Path) -> String {
     let s = path.to_string_lossy();
     if s.chars().any(|c| " \t'\"\\()&;|<>$`!#*?[]{}~".contains(c)) {
-        format!("'{}'", s.replace('\'', "'\\''"))
+        crate::pty::shell_quote(&s)
     } else {
         s.into_owned()
     }
