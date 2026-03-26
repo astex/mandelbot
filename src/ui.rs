@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use iced::widget::{button, column, container, row, text, Space};
-use iced::{Border, Element, Fill, Size, Subscription, Task, Theme};
+use iced::{Alignment, Border, Color, Element, Fill, Size, Subscription, Task, Theme};
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
 use crate::config::Config;
-use crate::terminal::{AgentRank, TerminalTab};
+use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::widget::terminal::{self, TerminalWidget};
 
@@ -54,6 +54,7 @@ pub enum Message {
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>),
     SetTitle(usize, String),
+    SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
 }
@@ -315,6 +316,12 @@ impl App {
                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
                 task
             }
+            Message::SetStatus(tab_id, status) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.status = status;
+                }
+                Task::none()
+            }
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -511,14 +518,23 @@ impl App {
                 .size(self.config.font_size)
                 .color(fg);
 
-            let content = row![label, Space::new().width(Fill), number];
+            let mut content = row![].align_y(Alignment::Center);
+            content = content.push(label).push(Space::new().width(Fill));
+            if tab.is_claude {
+                let dot_size = self.config.font_size * 0.6;
+                let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
+                let dot_color = status_dot_color(tab.status, fg);
+                content = content
+                    .push(text(dot_char).size(dot_size).color(dot_color))
+                    .push(Space::new().width(4));
+            }
+            let content = content.push(number);
 
             let btn = button(content)
                 .on_press(Message::SelectTab(tab_id))
                 .width(TAB_BAR_WIDTH - indent)
                 .style(move |_theme, _status| button::Style {
                     background: Some(bg.into()),
-                    text_color: fg,
                     border: Border::default(),
                     ..Default::default()
                 });
@@ -609,6 +625,16 @@ impl Drop for App {
     }
 }
 
+fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
+    match status {
+        AgentStatus::Idle => fg,
+        AgentStatus::Working => Color::from_rgb8(0x50, 0xc8, 0x50),
+        AgentStatus::Blocked => Color::from_rgb8(0xe8, 0xb8, 0x30),
+        AgentStatus::NeedsReview => Color::from_rgb8(0x40, 0xa0, 0xe0),
+        AgentStatus::Error => Color::from_rgb8(0xe0, 0x40, 0x40),
+    }
+}
+
 /// Stream that accepts connections on the parent socket and reads messages
 /// from all connected MCP server instances.
 fn parent_socket_stream(
@@ -667,6 +693,12 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id))
+                                }
+                                "set_status" => {
+                                    msg.get("status")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(AgentStatus::from_str)
+                                        .map(|s| Message::SetStatus(tab_id, s))
                                 }
                                 _ => None,
                             };

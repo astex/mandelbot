@@ -23,6 +23,29 @@ pub enum AgentRank {
     Task,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AgentStatus {
+    #[default]
+    Idle,
+    Working,
+    Blocked,
+    NeedsReview,
+    Error,
+}
+
+impl AgentStatus {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "idle" => Some(Self::Idle),
+            "working" => Some(Self::Working),
+            "blocked" => Some(Self::Blocked),
+            "needs_review" => Some(Self::NeedsReview),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
 pub struct TerminalTab {
     pub id: usize,
     pub is_claude: bool,
@@ -30,6 +53,7 @@ pub struct TerminalTab {
     pub project_dir: Option<PathBuf>,
     pub parent_id: Option<usize>,
     pub title: Option<String>,
+    pub status: AgentStatus,
     pub pending_input: Option<String>,
     term: Term<VoidListener>,
     parser: ansi::Processor,
@@ -53,10 +77,12 @@ impl TerminalTab {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
-        let mcp_config_path = write_mcp_config();
-        let mcp_config_flag = mcp_config_path.to_string_lossy().into_owned();
-        let system_prompt_path = write_system_prompt(mcp_config_path.parent().unwrap(), rank);
+        let config_dir = write_mcp_config();
+        let mcp_config_flag = config_dir.join("mcp-config.json").to_string_lossy().into_owned();
+        let system_prompt_path = write_system_prompt(&config_dir, rank);
         let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
+        let hooks_settings_path = write_hooks_settings(&config_dir);
+        let hooks_settings_flag = hooks_settings_path.to_string_lossy().into_owned();
 
         let (command, args_vec, env, cwd);
         if is_claude {
@@ -64,6 +90,7 @@ impl TerminalTab {
             let mut args = vec![
                 "--mcp-config", &mcp_config_flag,
                 "--append-system-prompt-file", &system_prompt_flag,
+                "--settings", &hooks_settings_flag,
             ];
             if rank == AgentRank::Task {
                 args.push("-w");
@@ -104,6 +131,7 @@ impl TerminalTab {
             project_dir,
             parent_id,
             title: None,
+            status: AgentStatus::default(),
             pending_input: None,
             term,
             parser: ansi::Processor::new(),
@@ -127,6 +155,7 @@ impl TerminalTab {
             project_dir: None,
             parent_id: Some(parent_id),
             title: None,
+            status: AgentStatus::default(),
             pending_input: Some(String::new()),
             term,
             parser: ansi::Processor::new(),
@@ -284,17 +313,16 @@ impl LogicalLine {
     }
 }
 
-/// Write an MCP config file to a temp directory that tells Claude how to
-/// spawn the MCP server. The config is static — tab ID and parent socket
-/// path are passed via environment variables so that every tab sees the same
-/// command and Claude only prompts for approval once. Returns the path to
-/// the config file itself.
+/// Write config files to a temp directory for Claude. Returns the directory
+/// path. The MCP config and hooks settings are static — tab ID and parent
+/// socket path are passed via environment variables so that every tab sees
+/// the same commands and Claude only prompts for approval once.
 fn write_mcp_config() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
     let config_path = dir.join("mcp-config.json");
 
     if config_path.exists() {
-        return config_path;
+        return dir;
     }
 
     std::fs::create_dir_all(&dir).expect("failed to create mcp config dir");
@@ -316,7 +344,62 @@ fn write_mcp_config() -> PathBuf {
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
         .expect("failed to write mcp config");
 
-    config_path
+    dir
+}
+
+fn write_hooks_settings(dir: &Path) -> PathBuf {
+    let path = dir.join("hooks-settings.json");
+
+    let exe = std::env::current_exe()
+        .expect("failed to get current exe")
+        .to_string_lossy()
+        .into_owned();
+
+    let set_status = |status: &str| -> serde_json::Value {
+        serde_json::json!({
+            "type": "command",
+            "command": format!("{exe} --set-status {status}"),
+        })
+    };
+
+    let settings = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [set_status("working")],
+            }],
+            "PreToolUse": [{
+                "matcher": "",
+                "hooks": [set_status("working")],
+            }],
+            "PermissionRequest": [
+                {
+                    "hooks": [set_status("blocked")],
+                },
+                {
+                    "matcher": "ExitPlanMode",
+                    "hooks": [set_status("needs_review")],
+                },
+            ],
+            "PostToolUse": [{
+                "matcher": "",
+                "hooks": [set_status("working")],
+            }],
+            "PostToolUseFailure": [{
+                "hooks": [set_status("working")],
+            }],
+            "Stop": [{
+                "hooks": [set_status("idle")],
+            }],
+            "StopFailure": [{
+                "hooks": [set_status("error")],
+            }],
+        },
+    });
+
+    std::fs::write(&path, serde_json::to_string_pretty(&settings).unwrap())
+        .expect("failed to write hooks settings");
+
+    path
 }
 
 const SYSTEM_PROMPT: &str = include_str!("agents/PROMPT.md");
