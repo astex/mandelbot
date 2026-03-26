@@ -52,7 +52,7 @@ pub enum Message {
     NavigateSibling(i32),
     NavigateRank(i32),
     PendingInput(PendingKey),
-    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>),
+    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>),
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
@@ -129,6 +129,7 @@ impl App {
         rank: AgentRank,
         project_dir: Option<PathBuf>,
         parent_id: Option<usize>,
+        prompt: Option<String>,
     ) -> Task<Message> {
         let Some(size) = self.window_size else {
             return Task::none();
@@ -138,7 +139,7 @@ impl App {
         self.next_tab_id += 1;
         let (tab, task) = TerminalTab::spawn(
             id, rows, cols, is_claude, rank, project_dir, parent_id,
-            &self.config.shell, &self.parent_socket_path,
+            &self.config.shell, &self.parent_socket_path, prompt,
         );
         self.tabs.push(tab);
         self.active_tab_id = id;
@@ -234,7 +235,7 @@ impl App {
                 let home = std::env::var("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("."));
-                let task = self.spawn_tab(true, AgentRank::Home, Some(home), None);
+                let task = self.spawn_tab(true, AgentRank::Home, Some(home), None, None);
                 if let Some(tab) = self.active_tab_mut() {
                     tab.title = Some("home".into());
                 }
@@ -266,7 +267,7 @@ impl App {
                 }
                 Task::none()
             }
-            Message::McpSpawnAgent(requesting_tab_id, working_directory, project_tab_id) => {
+            Message::McpSpawnAgent(requesting_tab_id, working_directory, project_tab_id, prompt) => {
                 let requester = self.tabs.iter().find(|t| t.id == requesting_tab_id);
                 let Some(requester) = requester else {
                     self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown tab"}));
@@ -316,7 +317,7 @@ impl App {
                     }
                 };
 
-                let task = self.spawn_tab(true, rank, project_dir, parent_id);
+                let task = self.spawn_tab(true, rank, project_dir, parent_id, prompt);
                 let new_tab_id = self.active_tab_id;
                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
                 task
@@ -345,7 +346,7 @@ impl App {
                 }
                 Task::none()
             }
-            Message::NewTab => self.spawn_tab(false, AgentRank::Home, None, None),
+            Message::NewTab => self.spawn_tab(false, AgentRank::Home, None, None, None),
             Message::SpawnAgent => {
                 match self.active_rank() {
                     Some(AgentRank::Home) => {
@@ -371,7 +372,7 @@ impl App {
                                 .and_then(|t| t.project_dir.clone())
                         });
                         if let (Some(pid), Some(dir)) = (project_id, project_dir) {
-                            self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid))
+                            self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None)
                         } else {
                             Task::none()
                         }
@@ -452,6 +453,7 @@ impl App {
                             AgentRank::Project,
                             Some(canonical),
                             parent_id,
+                            None,
                         )
                     }
                 }
@@ -701,11 +703,15 @@ fn parent_socket_stream(
                                         .get("project_tab_id")
                                         .and_then(|v| v.as_u64())
                                         .map(|v| v as usize);
+                                    let prompt = msg
+                                        .get("prompt")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
                                     let resp_writer = writer.try_clone()
                                         .expect("failed to clone writer for response");
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
-                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id))
+                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt))
                                 }
                                 "set_status" => {
                                     msg.get("status")
