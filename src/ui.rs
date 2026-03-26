@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use iced::widget::{button, column, container, row, text, Space};
-use iced::{Alignment, Border, Color, Element, Fill, Size, Subscription, Task, Theme};
+use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Task, Theme};
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
@@ -509,13 +509,19 @@ impl App {
                 String::new()
             };
 
-            let number_text = format!("{}", display_index);
+            let number_text = if display_index <= 9 {
+                format!("{}", display_index)
+            } else {
+                " ".into()
+            };
 
             let label = text(label_text)
                 .size(self.config.font_size)
+                .font(Font::MONOSPACE)
                 .color(fg);
             let number = text(number_text)
                 .size(self.config.font_size)
+                .font(Font::MONOSPACE)
                 .color(fg);
 
             let mut content = row![].align_y(Alignment::Center);
