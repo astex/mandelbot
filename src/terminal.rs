@@ -39,19 +39,23 @@ impl TerminalTab {
         let size = TermSize::new(cols, rows);
         let term = Term::new(Config::default(), &size, VoidListener);
 
-        let mcp_config_dir = write_mcp_config();
-        let system_prompt_path = write_system_prompt(&mcp_config_dir);
+        let mcp_config_path = write_mcp_config();
+        let mcp_config_flag = mcp_config_path.to_string_lossy().into_owned();
+        let system_prompt_path = write_system_prompt(mcp_config_path.parent().unwrap());
         let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
 
         let (command, args_vec, env, cwd);
         if is_claude {
             command = "claude";
-            args_vec = vec!["--append-system-prompt-file", &system_prompt_flag];
+            args_vec = vec![
+                "--mcp-config", &mcp_config_flag,
+                "--append-system-prompt-file", &system_prompt_flag,
+            ];
             env = HashMap::from([
                 ("MANDELBOT_TAB_ID", id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
             ]);
-            cwd = Some(mcp_config_dir.as_path());
+            cwd = None;
         } else {
             let parts: Vec<&str> = shell.split_whitespace().collect();
             let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
@@ -165,16 +169,17 @@ impl TerminalTab {
     }
 }
 
-/// Write a .mcp.json to a temp directory that tells Claude how to spawn the
-/// MCP server. The config is static — tab ID and parent socket path are
-/// passed via environment variables so that every tab sees the same command
-/// and Claude only prompts for approval once.
+/// Write an MCP config file to a temp directory that tells Claude how to
+/// spawn the MCP server. The config is static — tab ID and parent socket
+/// path are passed via environment variables so that every tab sees the same
+/// command and Claude only prompts for approval once. Returns the path to
+/// the config file itself.
 fn write_mcp_config() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
-    let config_path = dir.join(".mcp.json");
+    let config_path = dir.join("mcp-config.json");
 
     if config_path.exists() {
-        return dir;
+        return config_path;
     }
 
     std::fs::create_dir_all(&dir).expect("failed to create mcp config dir");
@@ -194,9 +199,9 @@ fn write_mcp_config() -> PathBuf {
     });
 
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
-        .expect("failed to write .mcp.json");
+        .expect("failed to write mcp config");
 
-    dir
+    config_path
 }
 
 const SYSTEM_PROMPT: &str = include_str!("agents/PROMPT.md");
