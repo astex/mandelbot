@@ -1,5 +1,6 @@
 mod config;
 mod keys;
+mod links;
 mod mcp;
 mod pty;
 mod terminal;

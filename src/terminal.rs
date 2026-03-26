@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange};
-use alacritty_terminal::term::cell::Cell;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi;
@@ -216,6 +216,71 @@ impl TerminalTab {
 
     pub fn selection_range(&self) -> Option<SelectionRange> {
         self.term.selection.as_ref()?.to_range(&self.term)
+    }
+
+    /// Extract the logical line (possibly spanning multiple wrapped rows)
+    /// that contains the given grid line. Returns the concatenated text and
+    /// metadata needed to map between character offsets and grid positions.
+    pub fn logical_line_at(&self, line: Line) -> LogicalLine {
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        let topmost = Line(-(grid.history_size() as i32));
+        let bottommost = Line(grid.screen_lines() as i32 - 1);
+
+        // Walk backwards to find the first row of this logical line.
+        // A row wraps into the next if its last cell has WRAPLINE set.
+        let mut start = line;
+        loop {
+            let prev = Line(start.0 + 1);
+            if prev > bottommost {
+                break;
+            }
+            if grid[prev][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+                start = prev;
+            } else {
+                break;
+            }
+        }
+
+        // Walk forward collecting text until we find a row without WRAPLINE.
+        let mut text = String::new();
+        let mut current = start;
+        loop {
+            for col in 0..cols {
+                text.push(grid[current][Column(col)].c);
+            }
+            if current <= topmost {
+                break;
+            }
+            if grid[current][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+                current = Line(current.0 - 1);
+            } else {
+                break;
+            }
+        }
+
+        LogicalLine { text, start_line: start, cols }
+    }
+}
+
+pub struct LogicalLine {
+    pub text: String,
+    pub start_line: Line,
+    pub cols: usize,
+}
+
+impl LogicalLine {
+    /// Convert a grid point to a character offset in the logical line text.
+    pub fn char_offset(&self, line: Line, col: usize) -> usize {
+        let row_offset = (self.start_line.0 - line.0) as usize;
+        row_offset * self.cols + col
+    }
+
+    /// Convert a character offset back to a grid (line, col) pair.
+    pub fn grid_position(&self, char_offset: usize) -> (Line, usize) {
+        let row_offset = char_offset / self.cols;
+        let col = char_offset % self.cols;
+        (Line(self.start_line.0 - row_offset as i32), col)
     }
 }
 
