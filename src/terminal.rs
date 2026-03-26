@@ -111,23 +111,32 @@ impl TerminalTab {
 
         let prompt_flag = prompt.unwrap_or_default();
         let (command, args_vec, env, cwd);
+        let wrapped_cmd; // holds the shell -c argument for Claude tabs
         if is_claude {
-            command = "claude";
-            let mut args = vec![
-                "--mcp-config", &mcp_config_flag,
-                "--append-system-prompt-file", &system_prompt_flag,
-                "--settings", &hooks_settings_flag,
-            ];
+            // Spawn Claude inside a login shell so that shell profiles and
+            // direnv are evaluated before the process starts.
+            let shell_parts: Vec<&str> = shell.split_whitespace().collect();
+            command = shell_parts[0];
+
+            let mut claude_args = format!(
+                "claude --mcp-config {} --append-system-prompt-file {} --settings {}",
+                pty::shell_quote(&mcp_config_flag),
+                pty::shell_quote(&system_prompt_flag),
+                pty::shell_quote(&hooks_settings_flag),
+            );
             if rank == AgentRank::Task {
-                args.push("-w");
+                claude_args.push_str(" -w");
             }
             if !prompt_flag.is_empty() {
-                args.push(&prompt_flag);
+                claude_args.push(' ');
+                claude_args.push_str(&pty::shell_quote(&prompt_flag));
             }
-            args_vec = args;
+
+            wrapped_cmd = format!("exec {claude_args}");
+            args_vec = vec!["-l", "-i", "-c", &wrapped_cmd];
             env = HashMap::from([
-                ("MANDELBOT_TAB_ID", id.to_string()),
-                ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
+                ("MANDELBOT_TAB_ID".to_string(), id.to_string()),
+                ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
             ]);
             cwd = project_dir.as_deref();
         } else {
@@ -469,12 +478,12 @@ PROMPT_COMMAND="_mandelbot_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 "#;
 
 /// Write shell integration scripts and return env vars to source them.
-fn shell_integration_env(shell_command: &str) -> HashMap<&'static str, String> {
+fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
     let dir = std::env::temp_dir().join(format!("mandelbot-shell-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("failed to create shell integration dir");
 
     let mut env = HashMap::new();
-    env.insert("TERM_PROGRAM", "mandelbot".to_string());
+    env.insert("TERM_PROGRAM".to_string(), "mandelbot".to_string());
 
     if shell_command.contains("zsh") {
         let path = dir.join("mandelbot.zsh");
@@ -498,7 +507,7 @@ fn shell_integration_env(shell_command: &str) -> HashMap<&'static str, String> {
         if !zshenv.exists() {
             std::fs::write(&zshenv, "").expect("failed to write zdotdir .zshenv");
         }
-        env.insert("ZDOTDIR", zdotdir.to_string_lossy().into_owned());
+        env.insert("ZDOTDIR".to_string(), zdotdir.to_string_lossy().into_owned());
     } else if shell_command.contains("bash") {
         let path = dir.join("mandelbot.bash");
         if !path.exists() {
@@ -515,7 +524,7 @@ fn shell_integration_env(shell_command: &str) -> HashMap<&'static str, String> {
             path.to_string_lossy()
         );
         std::fs::write(&wrapper, content).expect("failed to write bash wrapper");
-        env.insert("ENV", wrapper.to_string_lossy().into_owned());
+        env.insert("ENV".to_string(), wrapper.to_string_lossy().into_owned());
     }
 
     env
