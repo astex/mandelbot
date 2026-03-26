@@ -735,23 +735,53 @@ fn key_to_bytes(
     use keyboard::key::Named;
     use keyboard::Key;
 
-    match (key, text) {
+    // Arrow keys use CSI modifier encoding: \x1b[1;{m}X where
+    // m = 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0).
+    if let Key::Named(
+        named @ (Named::ArrowUp | Named::ArrowDown | Named::ArrowRight | Named::ArrowLeft),
+    ) = key
+    {
+        let dir = match named {
+            Named::ArrowUp => 'A',
+            Named::ArrowDown => 'B',
+            Named::ArrowRight => 'C',
+            Named::ArrowLeft => 'D',
+            _ => unreachable!(),
+        };
+        let m =
+            1 + modifiers.shift() as u8 + (modifiers.alt() as u8) * 2 + (modifiers.control() as u8) * 4;
+        return if m == 1 {
+            Some(format!("\x1b[{dir}").into_bytes())
+        } else {
+            Some(format!("\x1b[1;{m}{dir}").into_bytes())
+        };
+    }
+
+    let base = match (key, text) {
         (Key::Named(Named::Enter), _) if modifiers.shift() => Some(keys::SHIFT_ENTER.to_vec()),
         (Key::Named(Named::Enter), _) => Some(keys::ENTER.to_vec()),
         (Key::Named(Named::Backspace), _) => Some(keys::DEL.to_vec()),
         (Key::Named(Named::Space), _) => Some(keys::SPACE.to_vec()),
+        (Key::Named(Named::Tab), _) if modifiers.shift() => Some(b"\x1b[Z".to_vec()),
         (Key::Named(Named::Tab), _) => Some(keys::TAB.to_vec()),
         (Key::Named(Named::Escape), _) => Some(keys::ESCAPE.to_vec()),
-        (Key::Named(Named::ArrowUp), _) => Some(keys::ARROW_UP.to_vec()),
-        (Key::Named(Named::ArrowDown), _) => Some(keys::ARROW_DOWN.to_vec()),
-        (Key::Named(Named::ArrowRight), _) => Some(keys::ARROW_RIGHT.to_vec()),
-        (Key::Named(Named::ArrowLeft), _) => Some(keys::ARROW_LEFT.to_vec()),
         (Key::Character(c), _) if modifiers.control() && c.as_ref() == "c" => {
             Some(keys::CTRL_C.to_vec())
         }
         (Key::Named(_), _) => None,
         (_, Some(chars)) if !chars.is_empty() => Some(chars.as_bytes().to_vec()),
         _ => None,
+    };
+
+    // "Meta sends escape": prepend ESC when Alt is held.
+    match base {
+        Some(bytes) if modifiers.alt() => {
+            let mut out = Vec::with_capacity(1 + bytes.len());
+            out.push(0x1b);
+            out.extend(bytes);
+            Some(out)
+        }
+        other => other,
     }
 }
 
