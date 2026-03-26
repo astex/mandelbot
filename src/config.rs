@@ -134,3 +134,31 @@ fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".mandelbot").join("config.json")
 }
+
+/// Search macOS font directories for a font file matching the given name.
+pub fn find_font_bytes(name: &str) -> Option<Vec<u8>> {
+    if name == "monospace" {
+        return None;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dirs = [
+        format!("{home}/Library/Fonts"),
+        "/Library/Fonts".into(),
+        "/System/Library/Fonts".into(),
+        "/System/Library/Fonts/Supplemental".into(),
+    ];
+    let lower = name.to_lowercase();
+    for dir in &dirs {
+        let Ok(entries) = fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem.to_lowercase() == lower {
+                if let Ok(bytes) = fs::read(&path) {
+                    return Some(bytes);
+                }
+            }
+        }
+    }
+    None
+}

@@ -249,6 +249,14 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         let show_cursor = self.tab.mode().contains(TermMode::SHOW_CURSOR);
         let selection_range = self.tab.selection_range();
 
+        use std::sync::OnceLock;
+        static FONT_NAME: OnceLock<String> = OnceLock::new();
+        let font_name = FONT_NAME.get_or_init(|| self.config.font.clone());
+        let base_font = Font {
+            family: iced::font::Family::Name(font_name.as_str()),
+            ..Font::MONOSPACE
+        };
+
         for row in 0..grid.screen_lines() {
             let row_idx = Line(row as i32) - display_offset;
             let y = bounds.y + row as f32 * self.char_height();
@@ -300,16 +308,27 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 let font = if cell.flags.contains(Flags::BOLD) {
                     Font {
                         weight: iced::font::Weight::Bold,
-                        ..Font::MONOSPACE
+                        ..base_font
                     }
                 } else {
-                    Font::MONOSPACE
+                    base_font
+                };
+
+                // Widen clip bounds for non-ASCII so emoji-style fallback
+                // glyphs aren't clipped to half a cell.
+                let text_clip = if !cell.c.is_ascii() && !cell.c.is_whitespace() {
+                    Rectangle::new(
+                        Point::new(x, y),
+                        Size::new(cell_width * 2.0, row_height),
+                    )
+                } else {
+                    cell_bounds
                 };
 
                 renderer.fill_text(
                     Text {
                         content: cell.c.to_string(),
-                        bounds: Size::new(cell_width, row_height),
+                        bounds: Size::new(cell_width * 2.0, row_height),
                         size: self.config.font_size.into(),
                         line_height: text::LineHeight::Absolute(row_height.into()),
                         font,
@@ -320,7 +339,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     },
                     Point::new(x, y),
                     fg,
-                    cell_bounds,
+                    text_clip,
                 );
 
                 col += cell_cols;
