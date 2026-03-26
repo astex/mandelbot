@@ -251,6 +251,11 @@ impl App {
             Message::TerminalOutput(tab_id, bytes) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.feed(&bytes);
+                    if !tab.is_claude {
+                        if let Some(title) = tab.take_osc_title() {
+                            tab.title = Some(title);
+                        }
+                    }
                 }
                 Task::none()
             }
@@ -505,6 +510,8 @@ impl App {
                 } else {
                     String::new()
                 }
+            } else if !tab.is_claude {
+                "shell".into()
             } else {
                 String::new()
             };

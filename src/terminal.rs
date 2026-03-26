@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange};
@@ -15,6 +16,27 @@ use portable_pty::{MasterPty, PtySize};
 
 use crate::pty;
 use crate::ui::Message;
+
+#[derive(Clone)]
+struct TermEventListener {
+    title: Arc<Mutex<Option<String>>>,
+}
+
+impl TermEventListener {
+    fn new() -> Self {
+        Self { title: Arc::new(Mutex::new(None)) }
+    }
+}
+
+impl EventListener for TermEventListener {
+    fn send_event(&self, event: Event) {
+        if let Event::Title(t) = event {
+            *self.title.lock().unwrap() = Some(t);
+        } else if let Event::ResetTitle = event {
+            *self.title.lock().unwrap() = None;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRank {
@@ -55,7 +77,8 @@ pub struct TerminalTab {
     pub title: Option<String>,
     pub status: AgentStatus,
     pub pending_input: Option<String>,
-    term: Term<VoidListener>,
+    term: Term<TermEventListener>,
+    listener: TermEventListener,
     parser: ansi::Processor,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
@@ -75,7 +98,8 @@ impl TerminalTab {
         parent_socket: &Path,
     ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
-        let term = Term::new(Config::default(), &size, VoidListener);
+        let listener = TermEventListener::new();
+        let term = Term::new(Config::default(), &size, listener.clone());
 
         let config_dir = write_mcp_config();
         let mcp_config_flag = config_dir.join("mcp-config.json").to_string_lossy().into_owned();
@@ -106,7 +130,7 @@ impl TerminalTab {
             let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
             command = cmd;
             args_vec = rest.to_vec();
-            env = HashMap::new();
+            env = shell_integration_env(command);
             cwd = None;
         }
 
@@ -134,6 +158,7 @@ impl TerminalTab {
             status: AgentStatus::default(),
             pending_input: None,
             term,
+            listener,
             parser: ansi::Processor::new(),
             master: Some(master),
             writer: Some(writer),
@@ -146,7 +171,8 @@ impl TerminalTab {
 
     pub fn new_pending(id: usize, rows: usize, cols: usize, parent_id: usize) -> Self {
         let size = TermSize::new(cols, rows);
-        let term = Term::new(Config::default(), &size, VoidListener);
+        let listener = TermEventListener::new();
+        let term = Term::new(Config::default(), &size, listener.clone());
 
         Self {
             id,
@@ -158,6 +184,7 @@ impl TerminalTab {
             status: AgentStatus::default(),
             pending_input: Some(String::new()),
             term,
+            listener,
             parser: ansi::Processor::new(),
             master: None,
             writer: None,
@@ -175,6 +202,11 @@ impl TerminalTab {
         if was_at_bottom {
             self.term.scroll_display(Scroll::Bottom);
         }
+    }
+
+    /// Take the latest title set via OSC escape sequences, if any.
+    pub fn take_osc_title(&self) -> Option<String> {
+        self.listener.title.lock().unwrap().take()
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
@@ -405,6 +437,84 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
 const SYSTEM_PROMPT: &str = include_str!("agents/PROMPT.md");
 const HOME_PROMPT: &str = include_str!("agents/HOME_PROMPT.md");
 const PROJECT_PROMPT: &str = include_str!("agents/PROJECT_PROMPT.md");
+
+const SHELL_INTEGRATION_ZSH: &str = r#"
+# Mandelbot shell integration — sets tab title to the running command.
+_mandelbot_preexec() { printf '\e]0;%s\a' "$1" }
+_mandelbot_precmd()  { printf '\e]0;%s\a' "${ZSH_NAME:-zsh}" }
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _mandelbot_preexec
+add-zsh-hook precmd  _mandelbot_precmd
+"#;
+
+const SHELL_INTEGRATION_BASH: &str = r#"
+# Mandelbot shell integration — sets tab title to the running command.
+_mandelbot_preexec() {
+  if [ -z "$MANDELBOT_IN_PROMPT" ]; then
+    printf '\e]0;%s\a' "$BASH_COMMAND"
+  fi
+}
+_mandelbot_precmd() {
+  MANDELBOT_IN_PROMPT=1
+  printf '\e]0;%s\a' "bash"
+  unset MANDELBOT_IN_PROMPT
+}
+trap '_mandelbot_preexec' DEBUG
+PROMPT_COMMAND="_mandelbot_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+"#;
+
+/// Write shell integration scripts and return env vars to source them.
+fn shell_integration_env(shell_command: &str) -> HashMap<&'static str, String> {
+    let dir = std::env::temp_dir().join(format!("mandelbot-shell-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("failed to create shell integration dir");
+
+    let mut env = HashMap::new();
+    env.insert("TERM_PROGRAM", "mandelbot".to_string());
+
+    if shell_command.contains("zsh") {
+        let path = dir.join("mandelbot.zsh");
+        if !path.exists() {
+            std::fs::write(&path, SHELL_INTEGRATION_ZSH).expect("failed to write zsh integration");
+        }
+        // ZDOTDIR trick: create a .zshrc that sources the user's real config then ours.
+        let zdotdir = dir.join("zdotdir");
+        std::fs::create_dir_all(&zdotdir).expect("failed to create zdotdir");
+        let user_home = std::env::var("HOME").unwrap_or_default();
+        let zshrc = zdotdir.join(".zshrc");
+        let content = format!(
+            "[ -f \"{user_home}/.zshenv\" ] && source \"{user_home}/.zshenv\"\n\
+             [ -f \"{user_home}/.zshrc\" ] && source \"{user_home}/.zshrc\"\n\
+             source \"{}\"\n",
+            path.to_string_lossy()
+        );
+        std::fs::write(&zshrc, content).expect("failed to write zdotdir .zshrc");
+        // Also create .zshenv to prevent double-sourcing of /etc/zshenv via ZDOTDIR
+        let zshenv = zdotdir.join(".zshenv");
+        if !zshenv.exists() {
+            std::fs::write(&zshenv, "").expect("failed to write zdotdir .zshenv");
+        }
+        env.insert("ZDOTDIR", zdotdir.to_string_lossy().into_owned());
+    } else if shell_command.contains("bash") {
+        let path = dir.join("mandelbot.bash");
+        if !path.exists() {
+            std::fs::write(&path, SHELL_INTEGRATION_BASH)
+                .expect("failed to write bash integration");
+        }
+        // For bash, use --rcfile or ENV. We'll set ENV for non-login shells.
+        // Since we source user's bashrc too, write a wrapper.
+        let wrapper = dir.join("bashrc_wrapper");
+        let user_home = std::env::var("HOME").unwrap_or_default();
+        let content = format!(
+            "[ -f \"{user_home}/.bashrc\" ] && source \"{user_home}/.bashrc\"\n\
+             source \"{}\"\n",
+            path.to_string_lossy()
+        );
+        std::fs::write(&wrapper, content).expect("failed to write bash wrapper");
+        env.insert("ENV", wrapper.to_string_lossy().into_owned());
+    }
+
+    env
+}
 
 fn write_system_prompt(dir: &Path, rank: AgentRank) -> PathBuf {
     let (filename, content) = match rank {
