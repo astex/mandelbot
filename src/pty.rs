@@ -26,7 +26,7 @@ fn augmented_path() -> String {
 pub struct ShellConfig<'a> {
     pub command: &'a str,
     pub args: &'a [&'a str],
-    pub env: HashMap<&'a str, String>,
+    pub env: HashMap<String, String>,
     pub cwd: Option<&'a Path>,
     pub rows: u16,
     pub cols: u16,
@@ -65,4 +65,11 @@ pub fn spawn_shell(
     drop(pair.slave);
 
     Ok((pair.master, child))
+}
+
+/// Shell-escape a string by wrapping it in single quotes.
+pub fn shell_quote(s: &str) -> String {
+    // Replace any embedded single quotes with the sequence: '\''
+    // (end single-quote, escaped literal quote, restart single-quote)
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
