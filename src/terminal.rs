@@ -55,7 +55,7 @@ impl TerminalTab {
 
         let mcp_config_path = write_mcp_config();
         let mcp_config_flag = mcp_config_path.to_string_lossy().into_owned();
-        let system_prompt_path = write_system_prompt(mcp_config_path.parent().unwrap());
+        let system_prompt_path = write_system_prompt(mcp_config_path.parent().unwrap(), rank == AgentRank::Home);
         let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
 
         let (command, args_vec, env, cwd);
@@ -255,11 +255,17 @@ fn write_mcp_config() -> PathBuf {
 }
 
 const SYSTEM_PROMPT: &str = include_str!("agents/PROMPT.md");
+const HOME_PROMPT: &str = include_str!("agents/HOME_PROMPT.md");
 
-fn write_system_prompt(dir: &Path) -> PathBuf {
-    let path = dir.join("system-prompt.md");
+fn write_system_prompt(dir: &Path, is_home: bool) -> PathBuf {
+    let (filename, content) = if is_home {
+        ("home-prompt.md", HOME_PROMPT)
+    } else {
+        ("system-prompt.md", SYSTEM_PROMPT)
+    };
+    let path = dir.join(filename);
     if !path.exists() {
-        std::fs::write(&path, SYSTEM_PROMPT).expect("failed to write system prompt");
+        std::fs::write(&path, content).expect("failed to write system prompt");
     }
     path
 }
