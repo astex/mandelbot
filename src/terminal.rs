@@ -371,9 +371,15 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
                 "matcher": "",
                 "hooks": [set_status("working")],
             }],
-            "PermissionRequest": [{
-                "hooks": [set_status("blocked")],
-            }],
+            "PermissionRequest": [
+                {
+                    "hooks": [set_status("blocked")],
+                },
+                {
+                    "matcher": "ExitPlanMode",
+                    "hooks": [set_status("needs_review")],
+                },
+            ],
             "PostToolUse": [{
                 "matcher": "",
                 "hooks": [set_status("working")],
@@ -383,6 +389,9 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
             }],
             "Stop": [{
                 "hooks": [set_status("idle")],
+            }],
+            "StopFailure": [{
+                "hooks": [set_status("error")],
             }],
         },
     });
