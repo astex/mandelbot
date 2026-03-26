@@ -117,7 +117,6 @@ impl TerminalTab {
             // direnv are evaluated before the process starts.
             let shell_parts: Vec<&str> = shell.split_whitespace().collect();
             command = shell_parts[0];
-            let shell_name = command.rsplit('/').next().unwrap_or("bash");
 
             let mut claude_args = format!(
                 "claude --mcp-config {} --append-system-prompt-file {} --settings {}",
@@ -133,9 +132,7 @@ impl TerminalTab {
                 claude_args.push_str(&pty::shell_quote(&prompt_flag));
             }
 
-            wrapped_cmd = format!(
-                "eval \"$(direnv export {shell_name} 2>/dev/null)\" 2>/dev/null; exec {claude_args}"
-            );
+            wrapped_cmd = format!("exec {claude_args}");
             args_vec = vec!["-l", "-i", "-c", &wrapped_cmd];
             env = HashMap::from([
                 ("MANDELBOT_TAB_ID".to_string(), id.to_string()),
