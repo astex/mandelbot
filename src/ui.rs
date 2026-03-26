@@ -1,6 +1,8 @@
-use std::io::BufRead;
+use std::collections::HashMap;
+use std::io::{BufRead, Write};
 use std::os::unix::net as unix;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Border, Element, Fill, Size, Subscription, Task, Theme};
@@ -50,6 +52,7 @@ pub enum Message {
     NavigateSibling(i32),
     NavigateRank(i32),
     PendingInput(PendingKey),
+    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>),
     SetTitle(usize, String),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
@@ -61,6 +64,9 @@ fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usi
     (rows.max(1), cols.max(1))
 }
 
+/// Writers for parent socket connections awaiting a response, keyed by tab ID.
+type ResponseWriters = Arc<Mutex<HashMap<usize, unix::UnixStream>>>;
+
 pub struct App {
     config: Config,
     tabs: Vec<TerminalTab>,
@@ -70,6 +76,7 @@ pub struct App {
     window_size: Option<Size>,
     parent_socket_dir: PathBuf,
     parent_socket_path: PathBuf,
+    response_writers: ResponseWriters,
 }
 
 impl App {
@@ -86,7 +93,11 @@ impl App {
         let listener = unix::UnixListener::bind(&parent_socket_path)
             .expect("failed to bind parent socket");
 
-        let listen_task = Task::run(parent_socket_stream(listener), |msg| msg);
+        let response_writers: ResponseWriters = Arc::new(Mutex::new(HashMap::new()));
+        let listen_task = Task::run(
+            parent_socket_stream(listener, Arc::clone(&response_writers)),
+            |msg| msg,
+        );
 
         let app = Self {
             config,
@@ -97,6 +108,7 @@ impl App {
             window_size: None,
             parent_socket_dir,
             parent_socket_path,
+            response_writers,
         };
 
         (app, listen_task)
@@ -187,6 +199,15 @@ impl App {
             .map(|t| t.id)
     }
 
+    fn respond_to_tab(&self, tab_id: usize, response: serde_json::Value) {
+        if let Some(mut stream) = self.response_writers.lock().unwrap().remove(&tab_id) {
+            let mut msg = serde_json::to_string(&response).unwrap();
+            msg.push('\n');
+            let _ = stream.write_all(msg.as_bytes());
+            let _ = stream.flush();
+        }
+    }
+
     fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return Task::none();
@@ -238,6 +259,61 @@ impl App {
                     tab.title = Some(title);
                 }
                 Task::none()
+            }
+            Message::McpSpawnAgent(requesting_tab_id, working_directory, project_tab_id) => {
+                let requester = self.tabs.iter().find(|t| t.id == requesting_tab_id);
+                let Some(requester) = requester else {
+                    self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown tab"}));
+                    return Task::none();
+                };
+
+                let (rank, project_dir, parent_id) = match requester.rank {
+                    AgentRank::Home => {
+                        if let Some(ptid) = project_tab_id {
+                            // Spawn a task under an existing project.
+                            let project = self.tabs.iter().find(|t| t.id == ptid);
+                            let Some(project) = project else {
+                                self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown project tab"}));
+                                return Task::none();
+                            };
+                            if project.rank != AgentRank::Project {
+                                self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "target tab is not a project agent"}));
+                                return Task::none();
+                            }
+                            let dir = project.project_dir.clone();
+                            (AgentRank::Task, dir, Some(ptid))
+                        } else {
+                            let Some(wd) = working_directory else {
+                                self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "working_directory or project_tab_id required from home agent"}));
+                                return Task::none();
+                            };
+                            let canonical = std::fs::canonicalize(&wd).unwrap_or(wd);
+                            if let Some(existing) = self.find_project_for_dir(&canonical) {
+                                self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": existing}));
+                                self.active_tab_id = existing;
+                                return Task::none();
+                            }
+                            (AgentRank::Project, Some(canonical), Some(requesting_tab_id))
+                        }
+                    }
+                    AgentRank::Project => {
+                        let dir = requester.project_dir.clone();
+                        (AgentRank::Task, dir, Some(requesting_tab_id))
+                    }
+                    AgentRank::Task => {
+                        let project_id = requester.parent_id;
+                        let dir = project_id.and_then(|pid| {
+                            self.tabs.iter().find(|t| t.id == pid)
+                                .and_then(|t| t.project_dir.clone())
+                        });
+                        (AgentRank::Task, dir, project_id)
+                    }
+                };
+
+                let task = self.spawn_tab(true, rank, project_dir, parent_id);
+                let new_tab_id = self.active_tab_id;
+                self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
+                task
             }
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
@@ -537,6 +613,7 @@ impl Drop for App {
 /// from all connected MCP server instances.
 fn parent_socket_stream(
     listener: unix::UnixListener,
+    response_writers: ResponseWriters,
 ) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         64,
@@ -548,8 +625,10 @@ fn parent_socket_stream(
                 for stream in listener.incoming() {
                     let Ok(stream) = stream else { break };
                     let mut sender = sender.clone();
+                    let response_writers = Arc::clone(&response_writers);
 
                     std::thread::spawn(move || {
+                        let writer = stream.try_clone().expect("failed to clone stream");
                         let reader = std::io::BufReader::new(stream);
                         for line in reader.lines() {
                             let Ok(line) = line else { break };
@@ -573,6 +652,21 @@ fn parent_socket_stream(
                                         .unwrap_or("")
                                         .to_string();
                                     Some(Message::SetTitle(tab_id, title))
+                                }
+                                "spawn_agent" => {
+                                    let wd = msg
+                                        .get("working_directory")
+                                        .and_then(|v| v.as_str())
+                                        .map(PathBuf::from);
+                                    let project_tab_id = msg
+                                        .get("project_tab_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id))
                                 }
                                 _ => None,
                             };

@@ -54,29 +54,77 @@ fn handle_tools_list(id: Value) -> Response {
     Response::ok(
         id,
         serde_json::json!({
-            "tools": [{
-                "name": "set_title",
-                "description": "Set the title of this tab in the parent application",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "title": {
-                            "type": "string",
-                            "description": "The title to display on this tab",
+            "tools": [
+                {
+                    "name": "set_title",
+                    "description": "Set the title of this tab in the parent application",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "The title to display on this tab",
+                            },
+                        },
+                        "required": ["title"],
+                    },
+                },
+                {
+                    "name": "spawn_agent",
+                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project or task agent: creates a new task agent within the same project (no arguments needed).",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "working_directory": {
+                                "type": "string",
+                                "description": "Absolute path to the project directory. Used from the home agent to spawn a project agent.",
+                            },
+                            "project_tab_id": {
+                                "type": "integer",
+                                "description": "Tab ID of an existing project agent. Used from the home agent to spawn a task agent under that project.",
+                            },
                         },
                     },
-                    "required": ["title"],
                 },
-            }],
+            ],
         }),
     )
+}
+
+async fn send_to_parent(
+    parent_writer: &mut tokio::io::WriteHalf<UnixStream>,
+    msg: Value,
+) -> Result<(), String> {
+    let mut msg_str = serde_json::to_string(&msg).unwrap();
+    msg_str.push('\n');
+    parent_writer
+        .write_all(msg_str.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to send: {e}"))?;
+    parent_writer
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush: {e}"))?;
+    Ok(())
+}
+
+async fn read_from_parent(
+    parent_reader: &mut BufReader<tokio::io::ReadHalf<UnixStream>>,
+) -> Result<Value, String> {
+    let mut line = String::new();
+    parent_reader
+        .read_line(&mut line)
+        .await
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+    serde_json::from_str(&line).map_err(|e| format!("Failed to parse response: {e}"))
 }
 
 async fn handle_tools_call(
     id: Value,
     params: Option<Value>,
     tab_id: &str,
-    parent: &mut tokio::io::WriteHalf<UnixStream>,
+    parent_writer: &mut tokio::io::WriteHalf<UnixStream>,
+    parent_reader: &mut BufReader<tokio::io::ReadHalf<UnixStream>>,
 ) -> Response {
     let Some(params) = params else {
         return Response::err(id, -32602, "Missing params".into());
@@ -100,13 +148,10 @@ async fn handle_tools_call(
                 "tab_id": tab_id,
                 "title": title,
             });
-            let mut msg_str = serde_json::to_string(&msg).unwrap();
-            msg_str.push('\n');
 
-            if let Err(e) = parent.write_all(msg_str.as_bytes()).await {
-                return Response::err(id, -32000, format!("Failed to send: {e}"));
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
             }
-            let _ = parent.flush().await;
 
             Response::ok(
                 id,
@@ -114,6 +159,46 @@ async fn handle_tools_call(
                     "content": [{ "type": "text", "text": "Title set" }],
                 }),
             )
+        }
+        "spawn_agent" => {
+            let args = params.get("arguments");
+            let working_directory = args
+                .and_then(|a| a.get("working_directory"))
+                .and_then(|v| v.as_str());
+            let project_tab_id = args
+                .and_then(|a| a.get("project_tab_id"))
+                .and_then(|v| v.as_u64());
+
+            let mut msg = serde_json::json!({
+                "type": "spawn_agent",
+                "tab_id": tab_id,
+            });
+            if let Some(wd) = working_directory {
+                msg["working_directory"] = Value::String(wd.to_string());
+            }
+            if let Some(ptid) = project_tab_id {
+                msg["project_tab_id"] = Value::Number(ptid.into());
+            }
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let new_tab_id = resp
+                        .get("tab_id")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    Response::ok(
+                        id,
+                        serde_json::json!({
+                            "content": [{ "type": "text", "text": format!("Agent spawned with tab ID {new_tab_id}") }],
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
         }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
@@ -126,7 +211,8 @@ pub async fn run(
     parent_socket: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parent = UnixStream::connect(parent_socket).await?;
-    let (_, mut parent_writer) = tokio::io::split(parent);
+    let (parent_read, mut parent_writer) = tokio::io::split(parent);
+    let mut parent_reader = BufReader::new(parent_read);
 
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
@@ -164,7 +250,10 @@ pub async fn run(
             "initialize" => handle_initialize(id),
             "tools/list" => handle_tools_list(id),
             "tools/call" => {
-                handle_tools_call(id, request.params, tab_id, &mut parent_writer).await
+                handle_tools_call(
+                    id, request.params, tab_id,
+                    &mut parent_writer, &mut parent_reader,
+                ).await
             }
             _ => Response::err(id, -32601, format!("Method not found: {}", request.method)),
         };
@@ -260,6 +349,34 @@ mod tests {
         assert_eq!(parent_msg["type"], "set_title");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["title"], "my cool tab");
+
+        // -- tools/call spawn_agent --
+        // Get a writer to the parent stream so we can send a response back.
+        let parent_writer = parent_reader.get_ref().try_clone().unwrap();
+
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"spawn_agent","arguments":{"working_directory":"/tmp/test-project"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        // Parent receives the spawn_agent message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "spawn_agent");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["working_directory"], "/tmp/test-project");
+
+        // Parent writes back the new tab ID.
+        let mut parent_writer = parent_writer;
+        parent_writer.write_all(b"{\"tab_id\":7}\n").unwrap();
+        parent_writer.flush().unwrap();
+
+        // MCP server returns the new tab ID to Claude.
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Agent spawned with tab ID 7");
 
         // Close stdin to shut down the server.
         drop(child_stdin);
