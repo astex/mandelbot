@@ -18,6 +18,7 @@ use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
 
 use crate::config::Config;
 use crate::keys;
+use crate::links;
 use crate::terminal::TerminalTab;
 use crate::theme::TerminalTheme;
 use crate::ui::Message;
@@ -77,6 +78,11 @@ enum Interaction {
         drag_start_offset: usize,
     },
     Selecting,
+    HoveringLink {
+        url: String,
+        /// Grid line and column range for each row the link spans.
+        cells: Vec<(Line, usize, usize)>,
+    },
 }
 
 #[derive(Default)]
@@ -86,6 +92,7 @@ struct TerminalState {
     click_count: u8,
     last_click_time: Option<Instant>,
     last_click_point: Option<Point>,
+    modifiers: keyboard::Modifiers,
 }
 
 pub struct TerminalWidget<'a> {
@@ -140,6 +147,31 @@ impl<'a> TerminalWidget<'a> {
         let line = Line(row) - display_offset;
 
         (GridPoint::new(line, Column(col)), side)
+    }
+
+    fn detect_link(&self, bounds: &Rectangle, pos: Point) -> Option<Interaction> {
+        let (grid_point, _side) = self.pixel_to_grid(bounds, pos);
+        let logical = self.tab.logical_line_at(grid_point.line);
+        let char_off = logical.char_offset(grid_point.line, grid_point.column.0);
+        let url_match = links::find_url_at(&logical.text, char_off)?;
+
+        let mut cells = Vec::new();
+        let (start_line, start_col) = logical.grid_position(url_match.start);
+        let (end_line, end_col) = logical.grid_position(url_match.end.saturating_sub(1));
+
+        // Build per-row (line, start_col, end_col_exclusive) spans.
+        let mut line = start_line;
+        loop {
+            let row_start = if line == start_line { start_col } else { 0 };
+            let row_end = if line == end_line { end_col + 1 } else { logical.cols };
+            cells.push((line, row_start, row_end));
+            if line == end_line {
+                break;
+            }
+            line = line - 1; // move down one screen row
+        }
+
+        Some(Interaction::HoveringLink { url: url_match.url, cells })
     }
 
     fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
@@ -295,8 +327,35 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }
         }
 
+        // Draw underline for hovered link.
+        let state = tree.state.downcast_ref::<TerminalState>();
+        if let Interaction::HoveringLink { cells, .. } = &state.interaction {
+            let underline_thickness = (self.config.font_size * 0.07).max(1.0);
+            for &(line, start_col, end_col) in cells {
+                // Convert grid line to screen row.
+                let screen_row = line.0 + display_offset as i32;
+                if screen_row < 0 || screen_row >= grid.screen_lines() as i32 {
+                    continue;
+                }
+                let y = bounds.y + screen_row as f32 * self.char_height()
+                    + self.char_height() - underline_thickness;
+                let x = bounds.x + start_col as f32 * self.char_width();
+                let width = (end_col - start_col) as f32 * self.char_width();
+                renderer.fill_quad(
+                    Quad {
+                        bounds: Rectangle::new(
+                            Point::new(x, y),
+                            Size::new(width, underline_thickness),
+                        ),
+                        border: Border::default(),
+                        ..Quad::default()
+                    },
+                    self.theme.fg,
+                );
+            }
+        }
+
         if let Some(thumb) = self.thumb_rect(&bounds) {
-            let state = tree.state.downcast_ref::<TerminalState>();
             let scrollbar_active = matches!(state.interaction, Interaction::Scrollbar { .. });
             let alpha = if scrollbar_active || state.scrollbar_hovered { 0.7 } else { 0.4 };
 
@@ -329,6 +388,22 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         }
     }
 
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+        _renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        let state = tree.state.downcast_ref::<TerminalState>();
+        if matches!(state.interaction, Interaction::HoveringLink { .. }) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -352,6 +427,13 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor_pos {
+                    // Open link on control+click.
+                    if let Interaction::HoveringLink { url, .. } = &state.interaction {
+                        let _ = open::that(url);
+                        shell.capture_event();
+                        return;
+                    }
+
                     // Scrollbar takes priority.
                     let scrollbar = self.scrollbar_rect(&bounds);
                     if scrollbar.contains(pos) && self.tab.history_size() > 0 {
@@ -414,6 +496,20 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     shell.request_redraw();
                 }
 
+                // Link detection when control modifier is held.
+                if matches!(state.interaction, Interaction::Idle | Interaction::HoveringLink { .. })
+                    && self.config.matches_control(state.modifiers)
+                    && bounds.contains(*position)
+                {
+                    let had_link = matches!(state.interaction, Interaction::HoveringLink { .. });
+                    state.interaction = self.detect_link(&bounds, *position)
+                        .unwrap_or(Interaction::Idle);
+                    let has_link = matches!(state.interaction, Interaction::HoveringLink { .. });
+                    if had_link || has_link {
+                        shell.request_redraw();
+                    }
+                }
+
                 match &state.interaction {
                     Interaction::Scrollbar { drag_start_y, drag_start_offset } => {
                         if let Some(track) = self.track_geometry(&bounds) {
@@ -440,7 +536,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         shell.request_redraw();
                         shell.capture_event();
                     }
-                    Interaction::Idle => {}
+                    Interaction::Idle | Interaction::HoveringLink { .. } => {}
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -459,12 +555,29 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         state.interaction = Interaction::Idle;
                         shell.request_redraw();
                     }
-                    Interaction::Idle => {}
+                    Interaction::Idle | Interaction::HoveringLink { .. } => {}
                 }
             }
             Event::Mouse(mouse::Event::CursorLeft) => {
+                let mut needs_redraw = false;
                 if state.scrollbar_hovered {
                     state.scrollbar_hovered = false;
+                    needs_redraw = true;
+                }
+                if matches!(state.interaction, Interaction::HoveringLink { .. }) {
+                    state.interaction = Interaction::Idle;
+                    needs_redraw = true;
+                }
+                if needs_redraw {
+                    shell.request_redraw();
+                }
+            }
+            Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+                state.modifiers = *modifiers;
+                if !self.config.matches_control(*modifiers)
+                    && matches!(state.interaction, Interaction::HoveringLink { .. })
+                {
+                    state.interaction = Interaction::Idle;
                     shell.request_redraw();
                 }
             }
