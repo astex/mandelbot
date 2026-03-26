@@ -506,14 +506,14 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 
                 // Tree navigation.
                 if self.config.matches_movement(*modifiers) {
-                    if let keyboard::Key::Character(c) = &key {
-                        if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (1..=9).contains(&d)) {
-                            shell.publish(Message::SelectTabByIndex(digit - 1));
-                            shell.capture_event();
-                            return;
-                        }
-                    }
                     match &key {
+                        keyboard::Key::Character(c) => {
+                            if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (1..=9).contains(&d)) {
+                                shell.publish(Message::SelectTabByIndex(digit - 1));
+                                shell.capture_event();
+                                return;
+                            }
+                        }
                         keyboard::Key::Named(Named::ArrowDown) => {
                             shell.publish(Message::NavigateSibling(1));
                             shell.capture_event();
