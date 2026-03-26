@@ -60,10 +60,15 @@ fn main() -> iced::Result {
     let cfg = config::Config::load();
     let window_size = ui::initial_window_size(&cfg);
 
-    iced::application(ui::App::boot, ui::App::update, ui::App::view)
+    let mut app = iced::application(ui::App::boot, ui::App::update, ui::App::view)
         .title("Mandelbot")
         .subscription(ui::App::subscription)
         .theme(ui::App::theme)
-        .window_size(window_size)
-        .run()
+        .window_size(window_size);
+
+    if let Some(font_bytes) = config::find_font_bytes(&cfg.font) {
+        app = app.font(font_bytes);
+    }
+
+    app.run()
 }
