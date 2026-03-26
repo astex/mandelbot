@@ -86,6 +86,21 @@ fn handle_tools_list(id: Value) -> Response {
                         },
                     },
                 },
+                {
+                    "name": "set_status",
+                    "description": "Set the status indicator for this tab. Use this to communicate your current state to the user.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": ["idle", "working", "blocked", "needs_review", "error"],
+                                "description": "idle = waiting for user input, working = actively processing, blocked = waiting for permission, needs_review = presenting plan/output for review, error = something went wrong",
+                            },
+                        },
+                        "required": ["status"],
+                    },
+                },
             ],
         }),
     )
@@ -199,6 +214,30 @@ async fn handle_tools_call(
                 }
                 Err(e) => Response::err(id, -32000, e),
             }
+        }
+        "set_status" => {
+            let status = params
+                .get("arguments")
+                .and_then(|a| a.get("status"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("idle");
+
+            let msg = serde_json::json!({
+                "type": "set_status",
+                "tab_id": tab_id,
+                "status": status,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            Response::ok(
+                id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": "Status set" }],
+                }),
+            )
         }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
@@ -335,6 +374,8 @@ mod tests {
         let resp = send(list, &mut child_stdin, &mut child_reader);
         let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
+        assert_eq!(resp["result"]["tools"][1]["name"], "spawn_agent");
+        assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -377,6 +418,25 @@ mod tests {
         child_reader.read_line(&mut resp_line).unwrap();
         let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
         assert_eq!(resp["result"]["content"][0]["text"], "Agent spawned with tab ID 7");
+
+        // -- tools/call set_status --
+        let call = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_status","arguments":{"status":"working"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Status set");
+
+        // Verify parent received the set_status message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_status");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["status"], "working");
 
         // Close stdin to shut down the server.
         drop(child_stdin);
