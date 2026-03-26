@@ -1,6 +1,6 @@
 use std::io::BufRead;
 use std::os::unix::net as unix;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Border, Element, Fill, Size, Subscription, Task, Theme};
@@ -9,13 +9,13 @@ use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
 use crate::config::Config;
-use crate::terminal::TerminalTab;
+use crate::terminal::{AgentRank, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
 const TAB_BAR_WIDTH: f32 = 320.0;
-const TAB_GROUP_GAP: f32 = 100.0;
+const TAB_GROUP_GAP: f32 = 28.0;
 const INITIAL_ROWS: u16 = 50;
 const INITIAL_COLS: u16 = 120;
 
@@ -27,6 +27,14 @@ pub fn initial_window_size(config: &Config) -> Size {
 }
 
 #[derive(Debug, Clone)]
+pub enum PendingKey {
+    Char(char),
+    Backspace,
+    Submit,
+    Cancel,
+}
+
+#[derive(Debug, Clone)]
 pub enum Message {
     TerminalOutput(usize, Vec<u8>),
     ShellExited(usize),
@@ -35,10 +43,13 @@ pub enum Message {
     ScrollTo(usize),
     WindowResized(Size),
     NewTab,
-    NewClaudeTab,
+    SpawnAgent,
     CloseTab(usize),
     SelectTab(usize),
     SelectTabByIndex(usize),
+    NavigateSibling(i32),
+    NavigateRank(i32),
+    PendingInput(PendingKey),
     SetTitle(usize, String),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
@@ -99,17 +110,81 @@ impl App {
         self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
     }
 
-    fn spawn_tab(&mut self, is_claude: bool) -> Task<Message> {
+    fn spawn_tab(
+        &mut self,
+        is_claude: bool,
+        rank: AgentRank,
+        project_dir: Option<PathBuf>,
+        parent_id: Option<usize>,
+    ) -> Task<Message> {
         let Some(size) = self.window_size else {
             return Task::none();
         };
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let (tab, task) = TerminalTab::new(id, rows, cols, is_claude, &self.config.shell, &self.parent_socket_path);
+        let (tab, task) = TerminalTab::spawn(
+            id, rows, cols, is_claude, rank, project_dir, parent_id,
+            &self.config.shell, &self.parent_socket_path,
+        );
         self.tabs.push(tab);
         self.active_tab_id = id;
         task
+    }
+
+    fn active_rank(&self) -> Option<AgentRank> {
+        self.active_tab().map(|t| t.rank)
+    }
+
+    fn project_for_tab(&self, tab_id: usize) -> Option<usize> {
+        let tab = self.tabs.iter().find(|t| t.id == tab_id)?;
+        match tab.rank {
+            AgentRank::Project => Some(tab.id),
+            AgentRank::Task => tab.parent_id,
+            AgentRank::Home => None,
+        }
+    }
+
+    fn first_child(&self, tab_id: usize) -> Option<usize> {
+        self.tabs.iter()
+            .find(|t| t.parent_id == Some(tab_id) && t.is_claude)
+            .map(|t| t.id)
+    }
+
+    /// Returns tab IDs in tree display order: Home, then projects with their
+    /// tasks nested underneath, then shell tabs.
+    fn tab_display_order(&self) -> Vec<usize> {
+        let mut order = Vec::new();
+
+        // Home agent first.
+        if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
+            order.push(home.id);
+
+            // Projects under home.
+            for proj in self.tabs.iter().filter(|t| t.rank == AgentRank::Project) {
+                order.push(proj.id);
+
+                // Tasks under this project.
+                for task in self.tabs.iter().filter(|t| {
+                    t.rank == AgentRank::Task && t.parent_id == Some(proj.id)
+                }) {
+                    order.push(task.id);
+                }
+            }
+        }
+
+        // Shell tabs at the end.
+        for tab in self.tabs.iter().filter(|t| !t.is_claude) {
+            order.push(tab.id);
+        }
+
+        order
+    }
+
+    fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
+        self.tabs.iter()
+            .find(|t| t.rank == AgentRank::Project && t.project_dir.as_deref() == Some(dir))
+            .map(|t| t.id)
     }
 
     fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
@@ -134,7 +209,14 @@ impl App {
         match message {
             Message::WindowResized(size) if self.window_size.is_none() => {
                 self.window_size = Some(size);
-                self.spawn_tab(true)
+                let home = std::env::var("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."));
+                let task = self.spawn_tab(true, AgentRank::Home, Some(home), None);
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.title = Some("home".into());
+                }
+                task
             }
             Message::WindowResized(size) => {
                 self.window_size = Some(size);
@@ -175,8 +257,117 @@ impl App {
                 }
                 Task::none()
             }
-            Message::NewTab => self.spawn_tab(false),
-            Message::NewClaudeTab => self.spawn_tab(true),
+            Message::NewTab => self.spawn_tab(false, AgentRank::Home, None, None),
+            Message::SpawnAgent => {
+                match self.active_rank() {
+                    Some(AgentRank::Home) => {
+                        // Create a pending project tab.
+                        let Some(size) = self.window_size else {
+                            return Task::none();
+                        };
+                        let (rows, cols) = terminal_size(
+                            size, self.config.char_width(), self.config.char_height(),
+                        );
+                        let home_id = self.active_tab_id;
+                        let id = self.next_tab_id;
+                        self.next_tab_id += 1;
+                        let tab = TerminalTab::new_pending(id, rows, cols, home_id);
+                        self.tabs.push(tab);
+                        self.active_tab_id = id;
+                        Task::none()
+                    }
+                    Some(AgentRank::Project | AgentRank::Task) => {
+                        let project_id = self.project_for_tab(self.active_tab_id);
+                        let project_dir = project_id.and_then(|pid| {
+                            self.tabs.iter().find(|t| t.id == pid)
+                                .and_then(|t| t.project_dir.clone())
+                        });
+                        if let (Some(pid), Some(dir)) = (project_id, project_dir) {
+                            self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid))
+                        } else {
+                            Task::none()
+                        }
+                    }
+                    None => Task::none(),
+                }
+            }
+            Message::NavigateSibling(delta) => {
+                let order = self.tab_display_order();
+                if let Some(idx) = order.iter().position(|&id| id == self.active_tab_id) {
+                    let new_idx = (idx as i32 + delta)
+                        .rem_euclid(order.len() as i32) as usize;
+                    self.active_tab_id = order[new_idx];
+                }
+                Task::none()
+            }
+            Message::NavigateRank(delta) => {
+                if delta > 0 {
+                    // Go to first child.
+                    if let Some(child) = self.first_child(self.active_tab_id) {
+                        self.active_tab_id = child;
+                    }
+                } else {
+                    // Go to parent.
+                    if let Some(tab) = self.active_tab() {
+                        if let Some(pid) = tab.parent_id {
+                            self.active_tab_id = pid;
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::PendingInput(key) => {
+                let tab_id = self.active_tab_id;
+                let tab = self.tabs.iter_mut().find(|t| t.id == tab_id);
+                let Some(tab) = tab else { return Task::none() };
+                let Some(input) = &mut tab.pending_input else { return Task::none() };
+
+                match key {
+                    PendingKey::Char(c) => {
+                        input.push(c);
+                        Task::none()
+                    }
+                    PendingKey::Backspace => {
+                        input.pop();
+                        Task::none()
+                    }
+                    PendingKey::Cancel => {
+                        self.close_tab(tab_id)
+                    }
+                    PendingKey::Submit => {
+                        let raw_path = input.clone();
+                        let expanded = if raw_path.starts_with('~') {
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            raw_path.replacen('~', &home, 1)
+                        } else {
+                            raw_path
+                        };
+                        let path = PathBuf::from(&expanded);
+                        let canonical = std::fs::canonicalize(&path)
+                            .unwrap_or(path);
+
+                        // Check if project already exists for this dir.
+                        if let Some(existing) = self.find_project_for_dir(&canonical) {
+                            self.active_tab_id = existing;
+                            return self.close_tab(tab_id);
+                        }
+
+                        // Replace pending tab with a real project agent.
+                        let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+                            return Task::none();
+                        };
+                        let parent_id = self.tabs[idx].parent_id;
+                        self.tabs.remove(idx);
+
+                        self.spawn_tab(
+                            true,
+                            AgentRank::Project,
+                            Some(canonical),
+                            parent_id,
+                        )
+                    }
+                }
+            }
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::SelectTab(tab_id) => {
                 if self.tabs.iter().any(|t| t.id == tab_id) {
@@ -185,8 +376,9 @@ impl App {
                 Task::none()
             }
             Message::SelectTabByIndex(index) => {
-                if let Some(tab) = self.tabs.get(index) {
-                    self.active_tab_id = tab.id;
+                let display_order = self.tab_display_order();
+                if let Some(&tab_id) = display_order.get(index) {
+                    self.active_tab_id = tab_id;
                 }
                 Task::none()
             }
@@ -211,44 +403,83 @@ impl App {
         let fg = self.terminal_theme.fg;
 
         let mut tab_col = column![];
+        let display_order = self.tab_display_order();
 
-        let tab_button = |tab: &TerminalTab, index: usize, active_tab_id: usize| {
+        let tab_button = |tab: &TerminalTab, display_index: usize, active_tab_id: usize, indent: f32| {
             let is_active = tab.id == active_tab_id;
             let bg = if is_active { active_bg } else { inactive_bg };
             let tab_id = tab.id;
 
-            let label_text = match &tab.title {
-                Some(title) => format!("{} {}", index + 1, title),
-                None => format!("{}", index + 1),
+            let label_text = if tab.is_pending() {
+                "new project...".to_string()
+            } else if let Some(title) = &tab.title {
+                title.clone()
+            } else if tab.rank == AgentRank::Project {
+                if let Some(dir) = &tab.project_dir {
+                    dir.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
             };
+
+            let number_text = format!("{}", display_index + 1);
+
             let label = text(label_text)
                 .size(self.config.font_size)
                 .color(fg);
+            let number = text(number_text)
+                .size(self.config.font_size)
+                .color(fg);
 
-            button(label)
+            let content = row![label, Space::new().width(Fill), number];
+
+            let btn = button(content)
                 .on_press(Message::SelectTab(tab_id))
-                .width(TAB_BAR_WIDTH)
+                .width(TAB_BAR_WIDTH - indent)
                 .style(move |_theme, _status| button::Style {
                     background: Some(bg.into()),
                     text_color: fg,
                     border: Border::default(),
                     ..Default::default()
-                })
+                });
+
+            if indent > 0.0 {
+                row![Space::new().width(indent), btn].width(TAB_BAR_WIDTH).into()
+            } else {
+                Element::from(btn)
+            }
         };
 
-        // Claude tabs group
-        for (i, tab) in self.tabs.iter().enumerate() {
+        // Agent tree: Home → Projects → Tasks.
+        let indent_step = 20.0_f32;
+        let mut has_agents = false;
+        for (display_idx, &tab_id) in display_order.iter().enumerate() {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if !tab.is_claude { continue; }
-            tab_col = tab_col.push(tab_button(tab, i, self.active_tab_id));
+            has_agents = true;
+            let indent = match tab.rank {
+                AgentRank::Home => 0.0,
+                AgentRank::Project => indent_step,
+                AgentRank::Task => indent_step * 2.0,
+            };
+            tab_col = tab_col.push(tab_button(tab, display_idx, self.active_tab_id, indent));
         }
 
-        // Gap between groups
-        tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
+        // Gap between agent tree and shell tabs.
+        let has_shells = self.tabs.iter().any(|t| !t.is_claude);
+        if has_agents && has_shells {
+            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
+        }
 
-        // Shell tabs group
-        for (i, tab) in self.tabs.iter().enumerate() {
+        // Shell tabs (flat).
+        for (display_idx, &tab_id) in display_order.iter().enumerate() {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if tab.is_claude { continue; }
-            tab_col = tab_col.push(tab_button(tab, i, self.active_tab_id));
+            tab_col = tab_col.push(tab_button(tab, display_idx, self.active_tab_id, 0.0));
         }
 
         let tab_bar = container(tab_col)

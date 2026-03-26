@@ -23,7 +23,7 @@ fn default_control_prefix() -> String {
 }
 
 fn default_movement_prefix() -> String {
-    "alt".to_string()
+    "alt+shift".to_string()
 }
 
 fn default_shell() -> String {
