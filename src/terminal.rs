@@ -16,23 +16,37 @@ use portable_pty::{MasterPty, PtySize};
 use crate::pty;
 use crate::ui::Message;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRank {
+    Home,
+    Project,
+    Task,
+}
+
 pub struct TerminalTab {
     pub id: usize,
     pub is_claude: bool,
+    pub rank: AgentRank,
+    pub project_dir: Option<PathBuf>,
+    pub parent_id: Option<usize>,
     pub title: Option<String>,
+    pub pending_input: Option<String>,
     term: Term<VoidListener>,
     parser: ansi::Processor,
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
+    writer: Option<Box<dyn Write + Send>>,
     pty_cols: usize,
 }
 
 impl TerminalTab {
-    pub fn new(
+    pub fn spawn(
         id: usize,
         rows: usize,
         cols: usize,
         is_claude: bool,
+        rank: AgentRank,
+        project_dir: Option<PathBuf>,
+        parent_id: Option<usize>,
         shell: &str,
         parent_socket: &Path,
     ) -> (Self, iced::Task<Message>) {
@@ -47,15 +61,19 @@ impl TerminalTab {
         let (command, args_vec, env, cwd);
         if is_claude {
             command = "claude";
-            args_vec = vec![
+            let mut args = vec![
                 "--mcp-config", &mcp_config_flag,
                 "--append-system-prompt-file", &system_prompt_flag,
             ];
+            if rank == AgentRank::Task {
+                args.push("-w");
+            }
+            args_vec = args;
             env = HashMap::from([
                 ("MANDELBOT_TAB_ID", id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET", parent_socket.to_string_lossy().into_owned()),
             ]);
-            cwd = None;
+            cwd = project_dir.as_deref();
         } else {
             let parts: Vec<&str> = shell.split_whitespace().collect();
             let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
@@ -82,16 +100,44 @@ impl TerminalTab {
         let tab = Self {
             id,
             is_claude,
+            rank,
+            project_dir,
+            parent_id,
             title: None,
+            pending_input: None,
             term,
             parser: ansi::Processor::new(),
-            master,
-            writer,
+            master: Some(master),
+            writer: Some(writer),
             pty_cols: cols,
         };
 
         let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
         (tab, task)
+    }
+
+    pub fn new_pending(id: usize, rows: usize, cols: usize, parent_id: usize) -> Self {
+        let size = TermSize::new(cols, rows);
+        let term = Term::new(Config::default(), &size, VoidListener);
+
+        Self {
+            id,
+            is_claude: true,
+            rank: AgentRank::Project,
+            project_dir: None,
+            parent_id: Some(parent_id),
+            title: None,
+            pending_input: Some(String::new()),
+            term,
+            parser: ansi::Processor::new(),
+            master: None,
+            writer: None,
+            pty_cols: cols,
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.pending_input.is_some()
     }
 
     pub fn feed(&mut self, data: &[u8]) {
@@ -103,8 +149,10 @@ impl TerminalTab {
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        if let Some(writer) = &mut self.writer {
+            let _ = writer.write_all(bytes);
+            let _ = writer.flush();
+        }
     }
 
     pub fn scroll(&mut self, delta: i32) {
@@ -126,12 +174,14 @@ impl TerminalTab {
         self.term.resize(size);
         self.pty_cols = cols;
 
-        let _ = self.master.resize(PtySize {
-            rows: rows as u16,
-            cols: cols as u16,
-            pixel_width,
-            pixel_height,
-        });
+        if let Some(master) = &self.master {
+            let _ = master.resize(PtySize {
+                rows: rows as u16,
+                cols: cols as u16,
+                pixel_width,
+                pixel_height,
+            });
+        }
     }
 
     pub fn rows(&self) -> usize {

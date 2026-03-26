@@ -187,6 +187,30 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
+
+        // Pending tab: render a simple text prompt at top-left.
+        if let Some(input) = &self.tab.pending_input {
+            let label = format!("Project directory: {}_", input);
+
+            renderer.fill_text(
+                Text {
+                    content: label,
+                    bounds: Size::new(bounds.width, self.char_height()),
+                    size: self.config.font_size.into(),
+                    line_height: text::LineHeight::Absolute(self.char_height().into()),
+                    font: Font::MONOSPACE,
+                    align_x: iced::alignment::Horizontal::Left.into(),
+                    align_y: iced::alignment::Vertical::Top.into(),
+                    shaping: text::Shaping::Advanced,
+                    wrapping: text::Wrapping::None,
+                },
+                Point::new(bounds.x, bounds.y),
+                self.theme.fg,
+                bounds,
+            );
+            return;
+        }
+
         let grid = self.tab.grid();
         let display_offset = grid.display_offset();
         let cursor_point = grid.cursor.point;
@@ -452,6 +476,94 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }) => {
                 let key = key.clone();
                 let text = text.clone();
+                use keyboard::key::Named;
+
+                // Global bindings (work for both normal and pending tabs).
+
+                if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Character("t".into())
+                {
+                    shell.publish(Message::NewTab);
+                    shell.capture_event();
+                    return;
+                }
+
+                if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Named(Named::Space)
+                {
+                    shell.publish(Message::SpawnAgent);
+                    shell.capture_event();
+                    return;
+                }
+
+                if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Character("w".into())
+                {
+                    shell.publish(Message::CloseTab(self.tab.id));
+                    shell.capture_event();
+                    return;
+                }
+
+                // Tree navigation.
+                if self.config.matches_movement(*modifiers) {
+                    match &key {
+                        keyboard::Key::Named(Named::ArrowDown) => {
+                            shell.publish(Message::NavigateSibling(1));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::ArrowUp) => {
+                            shell.publish(Message::NavigateSibling(-1));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::ArrowRight) => {
+                            shell.publish(Message::NavigateRank(1));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::ArrowLeft) => {
+                            shell.publish(Message::NavigateRank(-1));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Character(c) => {
+                            if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (0..=9).contains(&d)) {
+                                shell.publish(Message::SelectTabByIndex(digit));
+                                shell.capture_event();
+                                return;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Pending tab: route input to PendingInput messages.
+                if self.tab.is_pending() {
+                    use crate::ui::PendingKey;
+                    match &key {
+                        keyboard::Key::Named(Named::Enter) => {
+                            shell.publish(Message::PendingInput(PendingKey::Submit));
+                        }
+                        keyboard::Key::Named(Named::Escape) => {
+                            shell.publish(Message::PendingInput(PendingKey::Cancel));
+                        }
+                        keyboard::Key::Named(Named::Backspace) => {
+                            shell.publish(Message::PendingInput(PendingKey::Backspace));
+                        }
+                        _ => {
+                            if let Some(chars) = &text {
+                                for c in chars.chars() {
+                                    shell.publish(Message::PendingInput(PendingKey::Char(c)));
+                                }
+                            }
+                        }
+                    }
+                    shell.capture_event();
+                    return;
+                }
+
+                // Normal tab bindings below.
 
                 // Copy selection.
                 if self.config.matches_control(*modifiers)
@@ -465,46 +577,12 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 }
 
                 if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("t".into())
-                {
-                    shell.publish(Message::NewTab);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(keyboard::key::Named::Space)
-                {
-                    shell.publish(Message::NewClaudeTab);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("w".into())
-                {
-                    shell.publish(Message::CloseTab(self.tab.id));
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
                     && key == keyboard::Key::Character("v".into())
                 {
                     if let Some(content) = _clipboard.read(iced::advanced::clipboard::Kind::Standard) {
                         shell.publish(Message::PtyInput(content.into_bytes()));
                         shell.capture_event();
                         return;
-                    }
-                }
-
-                if self.config.matches_movement(*modifiers) {
-                    if let keyboard::Key::Character(c) = &key {
-                        if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (1..=9).contains(&d)) {
-                            shell.publish(Message::SelectTabByIndex(digit - 1));
-                            shell.capture_event();
-                            return;
-                        }
                     }
                 }
 
