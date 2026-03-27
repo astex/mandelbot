@@ -131,9 +131,9 @@ impl App {
         project_dir: Option<PathBuf>,
         parent_id: Option<usize>,
         prompt: Option<String>,
-    ) -> Task<Message> {
+    ) -> (usize, Task<Message>) {
         let Some(size) = self.window_size else {
-            return Task::none();
+            return (0, Task::none());
         };
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
@@ -151,8 +151,7 @@ impl App {
             &self.config.shell, &self.parent_socket_path, prompt,
         );
         self.tabs.push(tab);
-        self.active_tab_id = id;
-        task
+        (id, task)
     }
 
     fn active_rank(&self) -> Option<AgentRank> {
@@ -259,7 +258,8 @@ impl App {
                 let home = std::env::var("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("."));
-                let task = self.spawn_tab(true, AgentRank::Home, Some(home), None, None);
+                let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, None);
+                self.active_tab_id = id;
                 if let Some(tab) = self.active_tab_mut() {
                     tab.title = Some("home".into());
                 }
@@ -337,8 +337,7 @@ impl App {
                     }
                 };
 
-                let task = self.spawn_tab(true, rank, project_dir, parent_id, prompt);
-                let new_tab_id = self.active_tab_id;
+                let (new_tab_id, task) = self.spawn_tab(true, rank, project_dir, parent_id, prompt);
                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
                 task
             }
@@ -380,7 +379,11 @@ impl App {
                 }
                 Task::none()
             }
-            Message::NewTab => self.spawn_tab(false, AgentRank::Home, None, None, None),
+            Message::NewTab => {
+                let (id, task) = self.spawn_tab(false, AgentRank::Home, None, None, None);
+                self.active_tab_id = id;
+                task
+            }
             Message::SpawnAgent => {
                 match self.active_rank() {
                     Some(AgentRank::Home) => {
@@ -404,7 +407,9 @@ impl App {
                             .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
                         let project_dir = self.project_dir_for_tab(self.active_tab_id);
                         if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
-                            self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None)
+                            let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None);
+                            self.active_tab_id = id;
+                            task
                         } else {
                             Task::none()
                         }
@@ -432,7 +437,9 @@ impl App {
                     }
                     Some(AgentRank::Project | AgentRank::Task) => {
                         if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
-                            self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None)
+                            let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None);
+                            self.active_tab_id = id;
+                            task
                         } else {
                             Task::none()
                         }
@@ -508,13 +515,15 @@ impl App {
                         let parent_id = self.tabs[idx].parent_id;
                         self.tabs.remove(idx);
 
-                        self.spawn_tab(
+                        let (id, task) = self.spawn_tab(
                             true,
                             AgentRank::Project,
                             Some(canonical),
                             parent_id,
                             None,
-                        )
+                        );
+                        self.active_tab_id = id;
+                        task
                     }
                 }
             }
