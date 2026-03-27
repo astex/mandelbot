@@ -331,6 +331,20 @@ impl App {
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
+                    // When the user presses Enter while an agent is in
+                    // NeedsReview (e.g. submitting feedback on an
+                    // ExitPlanMode permission dialog), transition to
+                    // Working.  There is no Claude Code hook that fires
+                    // on permission responses, so we detect the
+                    // transition on the mandelbot side.  We check for
+                    // bare \r (Enter without modifiers) to avoid false
+                    // triggers from arrow keys or other navigation.
+                    if tab.is_claude
+                        && tab.status == AgentStatus::NeedsReview
+                        && bytes == b"\r"
+                    {
+                        tab.status = AgentStatus::Working;
+                    }
                 }
                 Task::none()
             }
