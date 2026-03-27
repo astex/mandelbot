@@ -131,19 +131,17 @@ impl TerminalTab {
             if rank == AgentRank::Task {
                 claude_args.push_str(" -w");
             }
-            {
-                let plugin_dir = write_plugin_dir(&config_dir);
-                claude_args.push_str(&format!(
-                    " --plugin-dir {}",
-                    pty::shell_quote(&plugin_dir.to_string_lossy()),
-                ));
-                let home = std::env::var("HOME").unwrap_or_default();
-                let mandelbot_dir = PathBuf::from(home).join(".mandelbot");
-                claude_args.push_str(&format!(
-                    " --add-dir {}",
-                    pty::shell_quote(&mandelbot_dir.to_string_lossy()),
-                ));
-            }
+            let plugin_dir = write_plugin_dir(&config_dir);
+            claude_args.push_str(&format!(
+                " --plugin-dir {}",
+                pty::shell_quote(&plugin_dir.to_string_lossy()),
+            ));
+            let home = std::env::var("HOME").unwrap_or_default();
+            let mandelbot_dir = PathBuf::from(home).join(".mandelbot");
+            claude_args.push_str(&format!(
+                " --add-dir {}",
+                pty::shell_quote(&mandelbot_dir.to_string_lossy()),
+            ));
             if !prompt_flag.is_empty() {
                 claude_args.push_str(" -- ");
                 claude_args.push_str(&pty::shell_quote(&prompt_flag));
