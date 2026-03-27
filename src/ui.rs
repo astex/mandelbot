@@ -138,8 +138,16 @@ impl App {
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
+        let parent = parent_id.and_then(|pid| self.tabs.iter().find(|t| t.id == pid));
+        let depth = parent.map_or(0, |p| p.depth + 1);
+        let project_id = match rank {
+            AgentRank::Home => None,
+            AgentRank::Project => Some(id),
+            AgentRank::Task => parent.and_then(|p| p.project_id),
+        };
         let (tab, task) = TerminalTab::spawn(
             id, rows, cols, is_claude, rank, project_dir, parent_id,
+            depth, project_id,
             &self.config.shell, &self.parent_socket_path, prompt,
         );
         self.tabs.push(tab);
@@ -152,17 +160,7 @@ impl App {
     }
 
     fn project_for_tab(&self, tab_id: usize) -> Option<usize> {
-        let mut current_id = tab_id;
-        loop {
-            let tab = self.tabs.iter().find(|t| t.id == current_id)?;
-            match tab.rank {
-                AgentRank::Project => return Some(tab.id),
-                AgentRank::Home => return None,
-                AgentRank::Task => {
-                    current_id = tab.parent_id?;
-                }
-            }
-        }
+        self.tabs.iter().find(|t| t.id == tab_id)?.project_id
     }
 
     fn first_child(&self, tab_id: usize) -> Option<usize> {
@@ -198,17 +196,7 @@ impl App {
     }
 
     fn tab_depth(&self, tab_id: usize) -> usize {
-        let mut depth = 0;
-        let mut current_id = tab_id;
-        while let Some(tab) = self.tabs.iter().find(|t| t.id == current_id) {
-            if let Some(pid) = tab.parent_id {
-                depth += 1;
-                current_id = pid;
-            } else {
-                break;
-            }
-        }
-        depth
+        self.tabs.iter().find(|t| t.id == tab_id).map_or(0, |t| t.depth)
     }
 
     fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
@@ -232,6 +220,7 @@ impl App {
         };
 
         let closing_parent_id = self.tabs[idx].parent_id;
+        let closing_depth = self.tabs[idx].depth;
 
         // Promote the first child to take this tab's place in the hierarchy.
         let first_child_id = self.tabs.iter()
@@ -239,9 +228,10 @@ impl App {
             .map(|t| t.id);
 
         if let Some(promoted_id) = first_child_id {
-            // Promoted child inherits the closing tab's parent.
+            // Promoted child inherits the closing tab's parent and depth.
             if let Some(promoted) = self.tabs.iter_mut().find(|t| t.id == promoted_id) {
                 promoted.parent_id = closing_parent_id;
+                promoted.depth = closing_depth;
             }
             // Re-parent remaining children under the promoted child.
             for tab in self.tabs.iter_mut() {
