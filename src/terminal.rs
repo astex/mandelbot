@@ -131,6 +131,19 @@ impl TerminalTab {
             if rank == AgentRank::Task {
                 claude_args.push_str(" -w");
             }
+            if rank == AgentRank::Project || rank == AgentRank::Task {
+                let plugin_dir = write_plugin_dir(&config_dir);
+                claude_args.push_str(&format!(
+                    " --plugin-dir {}",
+                    pty::shell_quote(&plugin_dir.to_string_lossy()),
+                ));
+                let home = std::env::var("HOME").unwrap_or_default();
+                let mandelbot_dir = PathBuf::from(home).join(".mandelbot");
+                claude_args.push_str(&format!(
+                    " --add-dir {}",
+                    pty::shell_quote(&mandelbot_dir.to_string_lossy()),
+                ));
+            }
             if !prompt_flag.is_empty() {
                 claude_args.push_str(" -- ");
                 claude_args.push_str(&pty::shell_quote(&prompt_flag));
@@ -473,6 +486,11 @@ const SYSTEM_PROMPT: &str = include_str!("agents/PROMPT.md");
 const HOME_PROMPT: &str = include_str!("agents/HOME_PROMPT.md");
 const PROJECT_PROMPT: &str = include_str!("agents/PROJECT_PROMPT.md");
 
+const SKILL_DELEGATE: &str = include_str!("agents/skills/delegate/SKILL.md");
+const SKILL_DELEGATE_TEMPLATE: &str = include_str!("agents/skills/delegate/template.md");
+const SKILL_DELEGATE_WATCH: &str = include_str!("agents/skills/delegate/watch.sh");
+const SKILL_WORK_AS_SUBTASK: &str = include_str!("agents/skills/work-as-subtask/SKILL.md");
+
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to the running command.
 _mandelbot_preexec() { printf '\e]0;%s\a' "$1" }
@@ -562,6 +580,33 @@ fn write_system_prompt(dir: &Path, rank: AgentRank) -> PathBuf {
         std::fs::write(&path, content).expect("failed to write system prompt");
     }
     path
+}
+
+fn write_plugin_dir(dir: &Path) -> PathBuf {
+    let plugin_dir = dir.join("plugins");
+
+    let delegate_dir = plugin_dir.join("skills").join("delegate");
+    std::fs::create_dir_all(&delegate_dir).expect("failed to create delegate skill dir");
+
+    let subtask_dir = plugin_dir.join("skills").join("work-as-subtask");
+    std::fs::create_dir_all(&subtask_dir).expect("failed to create work-as-subtask skill dir");
+
+    let skill_path = delegate_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        std::fs::write(&skill_path, SKILL_DELEGATE).expect("failed to write delegate skill");
+        std::fs::write(delegate_dir.join("template.md"), SKILL_DELEGATE_TEMPLATE)
+            .expect("failed to write delegate template");
+        std::fs::write(delegate_dir.join("watch.sh"), SKILL_DELEGATE_WATCH)
+            .expect("failed to write delegate watch script");
+    }
+
+    let skill_path = subtask_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        std::fs::write(&skill_path, SKILL_WORK_AS_SUBTASK)
+            .expect("failed to write work-as-subtask skill");
+    }
+
+    plugin_dir
 }
 
 fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
