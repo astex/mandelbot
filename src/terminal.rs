@@ -408,6 +408,19 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
         })
     };
 
+    // A conditional variant that only sets status when the tool_name is NOT
+    // ExitPlanMode. This avoids a race between the catch-all "blocked" hook
+    // and the ExitPlanMode-specific "needs_review" hook, which both fire in
+    // parallel on an ExitPlanMode permission request.
+    let set_status_unless_exit_plan = |status: &str| -> serde_json::Value {
+        serde_json::json!({
+            "type": "command",
+            "command": format!(
+                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || {exe} --set-status {status}"#,
+            ),
+        })
+    };
+
     let settings = serde_json::json!({
         "hooks": {
             "UserPromptSubmit": [{
@@ -419,7 +432,7 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
             }],
             "PermissionRequest": [
                 {
-                    "hooks": [set_status("blocked")],
+                    "hooks": [set_status_unless_exit_plan("blocked")],
                 },
                 {
                     "matcher": "ExitPlanMode",
