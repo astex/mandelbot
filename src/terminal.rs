@@ -128,7 +128,7 @@ impl TerminalTab {
                 claude_args.push_str(" -w");
             }
             if !prompt_flag.is_empty() {
-                claude_args.push(' ');
+                claude_args.push_str(" -- ");
                 claude_args.push_str(&pty::shell_quote(&prompt_flag));
             }
 
