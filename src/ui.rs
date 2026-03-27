@@ -159,8 +159,9 @@ impl App {
         self.active_tab().map(|t| t.rank)
     }
 
-    fn project_for_tab(&self, tab_id: usize) -> Option<usize> {
-        self.tabs.iter().find(|t| t.id == tab_id)?.project_id
+    fn project_dir_for_tab(&self, tab_id: usize) -> Option<PathBuf> {
+        let project_id = self.tabs.iter().find(|t| t.id == tab_id)?.project_id?;
+        self.tabs.iter().find(|t| t.id == project_id)?.project_dir.clone()
     }
 
     fn first_child(&self, tab_id: usize) -> Option<usize> {
@@ -193,10 +194,6 @@ impl App {
             order.push(tab.id);
             self.collect_children(tab.id, order);
         }
-    }
-
-    fn tab_depth(&self, tab_id: usize) -> usize {
-        self.tabs.iter().find(|t| t.id == tab_id).map_or(0, |t| t.depth)
     }
 
     fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
@@ -335,11 +332,7 @@ impl App {
                         (AgentRank::Task, dir, Some(requesting_tab_id))
                     }
                     AgentRank::Task => {
-                        let dir = self.project_for_tab(requesting_tab_id)
-                            .and_then(|pid| {
-                                self.tabs.iter().find(|t| t.id == pid)
-                                    .and_then(|t| t.project_dir.clone())
-                            });
+                        let dir = self.project_dir_for_tab(requesting_tab_id);
                         (AgentRank::Task, dir, Some(requesting_tab_id))
                     }
                 };
@@ -409,11 +402,7 @@ impl App {
                     Some(AgentRank::Project | AgentRank::Task) => {
                         let parent_id = self.active_tab()
                             .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
-                        let project_dir = self.project_for_tab(self.active_tab_id)
-                            .and_then(|pid| {
-                                self.tabs.iter().find(|t| t.id == pid)
-                                    .and_then(|t| t.project_dir.clone())
-                            });
+                        let project_dir = self.project_dir_for_tab(self.active_tab_id);
                         if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
                             self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None)
                         } else {
@@ -442,12 +431,7 @@ impl App {
                         Task::none()
                     }
                     Some(AgentRank::Project | AgentRank::Task) => {
-                        let project_dir = self.project_for_tab(self.active_tab_id)
-                            .and_then(|pid| {
-                                self.tabs.iter().find(|t| t.id == pid)
-                                    .and_then(|t| t.project_dir.clone())
-                            });
-                        if let Some(dir) = project_dir {
+                        if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
                             self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None)
                         } else {
                             Task::none()
@@ -644,7 +628,7 @@ impl App {
             let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if !tab.is_claude { continue; }
             has_agents = true;
-            let indent = self.tab_depth(tab.id) as f32 * indent_step;
+            let indent = tab.depth as f32 * indent_step;
             tab_col = tab_col.push(tab_button(tab, display_idx, self.active_tab_id, indent));
         }
 
