@@ -70,8 +70,8 @@ fn handle_tools_list(id: Value) -> Response {
                     },
                 },
                 {
-                    "name": "spawn_agent",
-                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project or task agent: creates a new task agent within the same project (no arguments needed).",
+                    "name": "spawn_tab",
+                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project agent: creates a task agent (no arguments needed). From a task agent: creates a child task agent nested under this task (no arguments needed).",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -179,7 +179,7 @@ async fn handle_tools_call(
                 }),
             )
         }
-        "spawn_agent" => {
+        "spawn_tab" => {
             let args = params.get("arguments");
             let working_directory = args
                 .and_then(|a| a.get("working_directory"))
@@ -192,7 +192,7 @@ async fn handle_tools_call(
                 .and_then(|v| v.as_str());
 
             let mut msg = serde_json::json!({
-                "type": "spawn_agent",
+                "type": "spawn_tab",
                 "tab_id": tab_id,
             });
             if let Some(wd) = working_directory {
@@ -384,7 +384,7 @@ mod tests {
         let resp = send(list, &mut child_stdin, &mut child_reader);
         let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
-        assert_eq!(resp["result"]["tools"][1]["name"], "spawn_agent");
+        assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
         assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
 
         // -- tools/call set_title --
@@ -401,20 +401,20 @@ mod tests {
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["title"], "my cool tab");
 
-        // -- tools/call spawn_agent --
+        // -- tools/call spawn_tab --
         // Get a writer to the parent stream so we can send a response back.
         let parent_writer = parent_reader.get_ref().try_clone().unwrap();
 
-        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"spawn_agent","arguments":{"working_directory":"/tmp/test-project"}}}"#;
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"spawn_tab","arguments":{"working_directory":"/tmp/test-project"}}}"#;
         child_stdin.write_all(call.as_bytes()).unwrap();
         child_stdin.write_all(b"\n").unwrap();
         child_stdin.flush().unwrap();
 
-        // Parent receives the spawn_agent message.
+        // Parent receives the spawn_tab message.
         parent_line.clear();
         parent_reader.read_line(&mut parent_line).unwrap();
         let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
-        assert_eq!(parent_msg["type"], "spawn_agent");
+        assert_eq!(parent_msg["type"], "spawn_tab");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["working_directory"], "/tmp/test-project");
 
