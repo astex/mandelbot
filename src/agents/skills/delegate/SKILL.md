@@ -20,22 +20,7 @@ Use Claude's normal planning mechanism to create a plan. Note the plan file path
 mkdir -p ~/.mandelbot/coordination
 ```
 
-Create a status file at `~/.mandelbot/coordination/<descriptive-name>.md` using the template in this skill's directory as a reference. The format is:
-
-```markdown
-# Coordination: <title>
-
-**Plan:** `<path to your plan file>`
-
-## Tasks
-
-| # | Label | Status | Notes |
-|---|-------|--------|-------|
-| 1 | <short label> | pending | |
-| 2 | <short label> | pending | |
-
-## Summary
-```
+Create a status file at `~/.mandelbot/coordination/<descriptive-name>.md` using the template at `<plugin-dir>/skills/delegate/template.md` as a starting point. Fill in the title, plan path, and one row per task.
 
 - **Labels** should be short identifiers (a few words), just enough to match back to the plan step. Don't duplicate the full plan text.
 - All tasks start as `pending`.
