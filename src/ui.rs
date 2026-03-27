@@ -46,6 +46,7 @@ pub enum Message {
     WindowResized(Size),
     NewTab,
     SpawnAgent,
+    SpawnChild,
     CloseTab(usize),
     SelectTab(usize),
     SelectTabByIndex(usize),
@@ -137,8 +138,16 @@ impl App {
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
+        let parent = parent_id.and_then(|pid| self.tabs.iter().find(|t| t.id == pid));
+        let depth = parent.map_or(0, |p| p.depth + 1);
+        let project_id = match rank {
+            AgentRank::Home => None,
+            AgentRank::Project => Some(id),
+            AgentRank::Task => parent.and_then(|p| p.project_id),
+        };
         let (tab, task) = TerminalTab::spawn(
             id, rows, cols, is_claude, rank, project_dir, parent_id,
+            depth, project_id,
             &self.config.shell, &self.parent_socket_path, prompt,
         );
         self.tabs.push(tab);
@@ -150,13 +159,9 @@ impl App {
         self.active_tab().map(|t| t.rank)
     }
 
-    fn project_for_tab(&self, tab_id: usize) -> Option<usize> {
-        let tab = self.tabs.iter().find(|t| t.id == tab_id)?;
-        match tab.rank {
-            AgentRank::Project => Some(tab.id),
-            AgentRank::Task => tab.parent_id,
-            AgentRank::Home => None,
-        }
+    fn project_dir_for_tab(&self, tab_id: usize) -> Option<PathBuf> {
+        let project_id = self.tabs.iter().find(|t| t.id == tab_id)?.project_id?;
+        self.tabs.iter().find(|t| t.id == project_id)?.project_dir.clone()
     }
 
     fn first_child(&self, tab_id: usize) -> Option<usize> {
@@ -166,25 +171,14 @@ impl App {
     }
 
     /// Returns tab IDs in tree display order: Home, then projects with their
-    /// tasks nested underneath, then shell tabs.
+    /// tasks nested underneath (recursively), then shell tabs.
     fn tab_display_order(&self) -> Vec<usize> {
         let mut order = Vec::new();
 
-        // Home agent first.
+        // Home agent first, then its descendants depth-first.
         if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
             order.push(home.id);
-
-            // Projects under home.
-            for proj in self.tabs.iter().filter(|t| t.rank == AgentRank::Project) {
-                order.push(proj.id);
-
-                // Tasks under this project.
-                for task in self.tabs.iter().filter(|t| {
-                    t.rank == AgentRank::Task && t.parent_id == Some(proj.id)
-                }) {
-                    order.push(task.id);
-                }
-            }
+            self.collect_children(home.id, &mut order);
         }
 
         // Shell tabs at the end.
@@ -193,6 +187,13 @@ impl App {
         }
 
         order
+    }
+
+    fn collect_children(&self, parent_id: usize, order: &mut Vec<usize>) {
+        for tab in self.tabs.iter().filter(|t| t.parent_id == Some(parent_id) && t.is_claude) {
+            order.push(tab.id);
+            self.collect_children(tab.id, order);
+        }
     }
 
     fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
@@ -214,6 +215,29 @@ impl App {
         let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return Task::none();
         };
+
+        let closing_parent_id = self.tabs[idx].parent_id;
+        let closing_depth = self.tabs[idx].depth;
+
+        // Promote the first child to take this tab's place in the hierarchy.
+        let first_child_id = self.tabs.iter()
+            .find(|t| t.parent_id == Some(tab_id))
+            .map(|t| t.id);
+
+        if let Some(promoted_id) = first_child_id {
+            // Promoted child inherits the closing tab's parent and depth.
+            if let Some(promoted) = self.tabs.iter_mut().find(|t| t.id == promoted_id) {
+                promoted.parent_id = closing_parent_id;
+                promoted.depth = closing_depth;
+            }
+            // Re-parent remaining children under the promoted child.
+            for tab in self.tabs.iter_mut() {
+                if tab.parent_id == Some(tab_id) && tab.id != promoted_id {
+                    tab.parent_id = Some(promoted_id);
+                }
+            }
+        }
+
         self.tabs.remove(idx);
 
         if self.tabs.is_empty() {
@@ -308,12 +332,8 @@ impl App {
                         (AgentRank::Task, dir, Some(requesting_tab_id))
                     }
                     AgentRank::Task => {
-                        let project_id = requester.parent_id;
-                        let dir = project_id.and_then(|pid| {
-                            self.tabs.iter().find(|t| t.id == pid)
-                                .and_then(|t| t.project_dir.clone())
-                        });
-                        (AgentRank::Task, dir, project_id)
+                        let dir = self.project_dir_for_tab(requesting_tab_id);
+                        (AgentRank::Task, dir, Some(requesting_tab_id))
                     }
                 };
 
@@ -380,13 +400,39 @@ impl App {
                         Task::none()
                     }
                     Some(AgentRank::Project | AgentRank::Task) => {
-                        let project_id = self.project_for_tab(self.active_tab_id);
-                        let project_dir = project_id.and_then(|pid| {
-                            self.tabs.iter().find(|t| t.id == pid)
-                                .and_then(|t| t.project_dir.clone())
-                        });
-                        if let (Some(pid), Some(dir)) = (project_id, project_dir) {
+                        let parent_id = self.active_tab()
+                            .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
+                        let project_dir = self.project_dir_for_tab(self.active_tab_id);
+                        if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
                             self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None)
+                        } else {
+                            Task::none()
+                        }
+                    }
+                    None => Task::none(),
+                }
+            }
+            Message::SpawnChild => {
+                match self.active_rank() {
+                    Some(AgentRank::Home) => {
+                        // Same as SpawnAgent from home: create a pending project tab.
+                        let Some(size) = self.window_size else {
+                            return Task::none();
+                        };
+                        let (rows, cols) = terminal_size(
+                            size, self.config.char_width(), self.config.char_height(),
+                        );
+                        let home_id = self.active_tab_id;
+                        let id = self.next_tab_id;
+                        self.next_tab_id += 1;
+                        let tab = TerminalTab::new_pending(id, rows, cols, home_id);
+                        self.tabs.push(tab);
+                        self.active_tab_id = id;
+                        Task::none()
+                    }
+                    Some(AgentRank::Project | AgentRank::Task) => {
+                        if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
+                            self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None)
                         } else {
                             Task::none()
                         }
@@ -582,11 +628,7 @@ impl App {
             let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if !tab.is_claude { continue; }
             has_agents = true;
-            let indent = match tab.rank {
-                AgentRank::Home => 0.0,
-                AgentRank::Project => indent_step,
-                AgentRank::Task => indent_step * 2.0,
-            };
+            let indent = tab.depth as f32 * indent_step;
             tab_col = tab_col.push(tab_button(tab, display_idx, self.active_tab_id, indent));
         }
 
@@ -708,7 +750,7 @@ fn parent_socket_stream(
                                         .to_string();
                                     Some(Message::SetTitle(tab_id, title))
                                 }
-                                "spawn_agent" => {
+                                "spawn_tab" => {
                                     let wd = msg
                                         .get("working_directory")
                                         .and_then(|v| v.as_str())

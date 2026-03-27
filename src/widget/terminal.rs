@@ -638,6 +638,22 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 }
 
                 if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Named(Named::ArrowDown)
+                {
+                    shell.publish(Message::SpawnAgent);
+                    shell.capture_event();
+                    return;
+                }
+
+                if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Named(Named::ArrowRight)
+                {
+                    shell.publish(Message::SpawnChild);
+                    shell.capture_event();
+                    return;
+                }
+
+                if self.config.matches_control(*modifiers)
                     && key == keyboard::Key::Character("w".into())
                 {
                     shell.publish(Message::CloseTab(self.tab.id));
