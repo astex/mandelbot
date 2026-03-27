@@ -255,9 +255,13 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         use std::sync::OnceLock;
         static FONT_NAME: OnceLock<String> = OnceLock::new();
         let font_name = FONT_NAME.get_or_init(|| self.config.font.clone());
-        let base_font = Font {
-            family: iced::font::Family::Name(font_name.as_str()),
-            ..Font::MONOSPACE
+        let base_font = if font_name == "monospace" {
+            Font::MONOSPACE
+        } else {
+            Font {
+                family: iced::font::Family::Name(font_name.as_str()),
+                ..Font::MONOSPACE
+            }
         };
 
         for row in 0..grid.screen_lines() {
