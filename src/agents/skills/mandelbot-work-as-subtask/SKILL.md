@@ -1,5 +1,5 @@
 ---
-name: work-as-subtask
+name: mandelbot-work-as-subtask
 description: Use this skill when your prompt references a coordination file and assigns you a task number. You are a subtask agent — part of a larger coordinated effort. Follow the protocol to read your assignment, do your work, and report progress.
 allowed-tools: [Read, Edit, Write, Bash, Glob, Grep]
 ---
