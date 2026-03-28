@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Mandelbot
+Comment=A fractal agent tree for agentic development
+Exec=mandelbot
+Icon=mandelbot
+Type=Application
+Categories=Development;TerminalEmulator;
+Terminal=false
