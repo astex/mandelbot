@@ -8,6 +8,11 @@ installers = ["shell", "homebrew"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 install-path = "CARGO_HOME"
 install-updater = false
+include = [
+  "assets/mandelbot.desktop",
+  "assets/icons/hicolor/",
+  "scripts/install-desktop.sh",
+]
 
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "ubuntu-22.04"

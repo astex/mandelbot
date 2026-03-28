@@ -19,7 +19,11 @@ brew install mandelbot
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/astex/mandelbot/releases/latest/download/mandelbot-installer.sh | sh
 ```
 
-Linux users need `libfontconfig1` and `libfreetype6` installed.
+Linux users need `libfontconfig1` and `libfreetype6` installed. To add a desktop entry and icons:
+
+```sh
+./install-desktop.sh
+```
 
 ## Building from source
 
