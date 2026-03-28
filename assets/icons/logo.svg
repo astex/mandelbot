@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect width="512" height="512" fill="#1a1a2e"/>
+
+  <g fill="#4fd1c5" stroke="#4fd1c5">
+    <!-- Top line -->
+    <line x1="175" y1="0" x2="175" y2="106" stroke-width="5" stroke-linecap="round" fill="none"/>
+
+    <!-- Node 1 (top) -->
+    <g transform="translate(153, 118)">
+      <line x1="22" y1="-12" x2="22" y2="6" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="22" cy="-12" r="5"/>
+      <rect x="0" y="6" width="44" height="34" rx="6" fill="none" stroke-width="5"/>
+      <circle cx="14" cy="23" r="3.5"/>
+      <circle cx="30" cy="23" r="3.5"/>
+      <line x1="22" y1="40" x2="22" y2="54" stroke-width="5" stroke-linecap="round"/>
+    </g>
+
+    <!-- Trunk: node1 stem to node3 antenna -->
+    <line x1="175" y1="172" x2="175" y2="343" stroke-width="5" stroke-linecap="round" fill="none"/>
+
+    <!-- Branch: curves right into node2 antenna -->
+    <path d="M 175,235 L 175,248 Q 175,258 185,258 L 293,258 Q 303,258 303,268" stroke-width="5" stroke-linecap="round" fill="none"/>
+
+    <!-- Node 2 (branch, with prompt) -->
+    <g transform="translate(281, 280)">
+      <line x1="22" y1="-12" x2="22" y2="6" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="22" cy="-12" r="5"/>
+      <rect x="0" y="6" width="44" height="34" rx="6" fill="none" stroke-width="5"/>
+      <circle cx="14" cy="23" r="3.5"/>
+      <circle cx="30" cy="23" r="3.5"/>
+      <line x1="22" y1="40" x2="22" y2="54" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <!-- Prompt _ -->
+    <text x="345" y="315" font-family="monospace" font-size="40" fill="#4fd1c5" stroke="none">_</text>
+
+    <!-- Node 3 (bottom) -->
+    <g transform="translate(153, 355)">
+      <line x1="22" y1="-12" x2="22" y2="6" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="22" cy="-12" r="5"/>
+      <rect x="0" y="6" width="44" height="34" rx="6" fill="none" stroke-width="5"/>
+      <circle cx="14" cy="23" r="3.5"/>
+      <circle cx="30" cy="23" r="3.5"/>
+      <line x1="22" y1="40" x2="22" y2="54" stroke-width="5" stroke-linecap="round"/>
+    </g>
+
+    <!-- Bottom line -->
+    <line x1="175" y1="409" x2="175" y2="512" stroke-width="5" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>
