@@ -3,6 +3,9 @@ name = "mandelbot"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
+description = "A fractal agent tree for agentic development"
+repository = "https://github.com/astex/mandelbot"
+homepage = "https://github.com/astex/mandelbot"
 
 [dependencies]
 alacritty_terminal = { version = "0.26.0-rc1", default-features = false }
@@ -13,3 +16,8 @@ serde_json = "1.0.149"
 open = "5"
 regex = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "io-std", "time", "process"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
