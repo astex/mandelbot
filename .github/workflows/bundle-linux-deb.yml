@@ -1,0 +1,131 @@
+name: Bundle Linux .deb
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Get release tag
+        id: tag
+        run: |
+          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -1)
+          if [[ -z "$TAG" ]]; then
+            echo "No tag found for this commit, skipping"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download release archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --pattern "mandelbot-${{ matrix.target }}.tar.xz" \
+            --dir /tmp/download
+
+      - name: Extract binary
+        run: |
+          mkdir -p /tmp/extracted
+          tar -xJf /tmp/download/mandelbot-${{ matrix.target }}.tar.xz -C /tmp/extracted
+          find /tmp/extracted -name mandelbot -type f -exec cp {} /tmp/mandelbot \;
+          chmod +x /tmp/mandelbot
+
+      - name: Bundle .deb
+        run: |
+          scripts/bundle-linux-deb.sh \
+            --binary /tmp/mandelbot \
+            --version "${{ steps.tag.outputs.version }}" \
+            --arch "${{ matrix.arch }}" \
+            --output /tmp/bundle
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            /tmp/bundle/mandelbot_${{ steps.tag.outputs.version }}_${{ matrix.arch }}.deb \
+            --clobber
+
+  publish-apt:
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Get release tag
+        id: tag
+        run: |
+          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -1)
+          if [[ -z "$TAG" ]]; then
+            echo "No tag found for this commit, skipping"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download .deb artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/debs
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --pattern "mandelbot_*.deb" \
+            --dir /tmp/debs
+
+      - name: Checkout apt repo
+        uses: actions/checkout@v6
+        with:
+          repository: astex/apt-mandelbot
+          token: ${{ secrets.APT_REPO_TOKEN }}
+          path: apt-repo
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: Install reprepro
+        run: sudo apt-get update && sudo apt-get install -y reprepro
+
+      - name: Add .deb packages to apt repo
+        run: |
+          cd apt-repo
+          for deb in /tmp/debs/mandelbot_*.deb; do
+            reprepro includedeb stable "$deb"
+          done
+
+      - name: Push apt repo
+        run: |
+          cd apt-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Update mandelbot to ${{ steps.tag.outputs.version }}"
+          git push
