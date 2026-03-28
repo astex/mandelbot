@@ -53,6 +53,9 @@ jobs:
           find /tmp/extracted -name mandelbot -type f -exec cp {} /tmp/mandelbot \;
           chmod +x /tmp/mandelbot
 
+      - name: Install rsvg-convert
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
+
       - name: Bundle .deb
         run: |
           scripts/bundle-linux-deb.sh \

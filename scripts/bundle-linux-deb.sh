@@ -35,8 +35,8 @@ cp "$BINARY" "$PKG_DIR/usr/bin/mandelbot"
 chmod +x "$PKG_DIR/usr/bin/mandelbot"
 
 cp "$REPO_ROOT/assets/mandelbot.desktop" "$PKG_DIR/usr/share/applications/mandelbot.desktop"
-cp "$REPO_ROOT/assets/icons/logo-sm.svg" "$PKG_DIR/usr/share/icons/hicolor/32x32/apps/mandelbot.svg"
-cp "$REPO_ROOT/assets/icons/logo-md.svg" "$PKG_DIR/usr/share/icons/hicolor/128x128/apps/mandelbot.svg"
+rsvg-convert -w 32 -h 32 "$REPO_ROOT/assets/icons/logo-sm.svg" -o "$PKG_DIR/usr/share/icons/hicolor/32x32/apps/mandelbot.png"
+rsvg-convert -w 128 -h 128 "$REPO_ROOT/assets/icons/logo-md.svg" -o "$PKG_DIR/usr/share/icons/hicolor/128x128/apps/mandelbot.png"
 cp "$REPO_ROOT/assets/icons/logo.svg" "$PKG_DIR/usr/share/icons/hicolor/scalable/apps/mandelbot.svg"
 
 cat > "$PKG_DIR/DEBIAN/control" <<CONTROL
