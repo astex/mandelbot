@@ -19,11 +19,13 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-tags: true
+          fetch-depth: 0
 
       - name: Get release tag
         id: tag
         run: |
-          TAG=$(git describe --tags --exact-match "${{ github.event.workflow_run.head_sha }}" 2>/dev/null || true)
+          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -1)
           if [[ -z "$TAG" ]]; then
             echo "No tag found for this commit, skipping"
             exit 1
