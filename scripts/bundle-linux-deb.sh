@@ -52,5 +52,14 @@ Section: devel
 Priority: optional
 CONTROL
 
+cat > "$PKG_DIR/DEBIAN/postinst" <<'POSTINST'
+#!/bin/sh
+set -e
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
+fi
+POSTINST
+chmod 755 "$PKG_DIR/DEBIAN/postinst"
+
 dpkg-deb --build "$PKG_DIR" "$OUTPUT/${PKG_NAME}.deb"
 echo "Created $OUTPUT/${PKG_NAME}.deb"
