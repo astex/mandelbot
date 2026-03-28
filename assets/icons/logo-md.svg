@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Background -->
+  <rect width="128" height="128" fill="#1a1a2e"/>
+
+  <g fill="#4fd1c5" stroke="#4fd1c5">
+    <!-- Top line into antenna -->
+    <line x1="42" y1="0" x2="42" y2="30" stroke-width="3" stroke-linecap="round" fill="none"/>
+
+    <!-- Bot head -->
+    <g transform="translate(28, 38)">
+      <!-- Antenna -->
+      <line x1="14" y1="-8" x2="14" y2="5" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="14" cy="-8" r="3"/>
+      <!-- Head -->
+      <rect x="2" y="5" width="24" height="20" rx="4" fill="none" stroke-width="3"/>
+      <!-- Eyes -->
+      <circle cx="10" cy="15" r="2.5"/>
+      <circle cx="18" cy="15" r="2.5"/>
+      <!-- Stem -->
+      <line x1="14" y1="25" x2="14" y2="34" stroke-width="3" stroke-linecap="round"/>
+    </g>
+
+    <!-- Prompt _ -->
+    <text x="64" y="62" font-family="monospace" font-size="28" fill="#4fd1c5" stroke="none">_</text>
+
+    <!-- Single continuous line from stem: straight down with a branch curving right -->
+    <line x1="42" y1="72" x2="42" y2="128" stroke-width="3" stroke-linecap="round" fill="none"/>
+
+    <!-- Branch: curves right from the line, then down -->
+    <path d="M 42,88 Q 42,98 52,98 L 76,98 Q 86,98 86,108" stroke-width="3" stroke-linecap="round" fill="none"/>
+    <line x1="86" y1="108" x2="86" y2="128" stroke-width="3" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>
