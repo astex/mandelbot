@@ -1,0 +1,64 @@
+name: Bundle macOS .app
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Get release tag
+        id: tag
+        run: |
+          TAG=$(git describe --tags --exact-match "${{ github.event.workflow_run.head_sha }}" 2>/dev/null || true)
+          if [[ -z "$TAG" ]]; then
+            echo "No tag found for this commit, skipping"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download release archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --pattern "mandelbot-${{ matrix.target }}.tar.xz" \
+            --dir /tmp/download
+
+      - name: Extract binary
+        run: |
+          mkdir -p /tmp/extracted
+          tar -xJf /tmp/download/mandelbot-${{ matrix.target }}.tar.xz -C /tmp/extracted
+          find /tmp/extracted -name mandelbot -type f -exec cp {} /tmp/mandelbot \;
+          chmod +x /tmp/mandelbot
+
+      - name: Bundle .app
+        run: |
+          scripts/bundle-macos.sh \
+            --binary /tmp/mandelbot \
+            --version "${{ steps.tag.outputs.version }}" \
+            --output /tmp/bundle
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mv /tmp/bundle/Mandelbot.app.zip /tmp/bundle/Mandelbot-${{ matrix.target }}.app.zip
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            /tmp/bundle/Mandelbot-${{ matrix.target }}.app.zip \
+            --clobber
