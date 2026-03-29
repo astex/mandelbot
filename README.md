@@ -10,7 +10,7 @@ Mandelbot is a terminal emulator that organizes agents into a hierarchical tree.
 
 ```sh
 brew tap astex/mandelbot
-brew install mandelbot
+brew install --cask mandelbot
 ```
 
 ### Linux / macOS (shell script)
