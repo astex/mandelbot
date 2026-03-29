@@ -53,6 +53,7 @@ pub enum Message {
     NavigateSibling(i32),
     NavigateRank(i32),
     FocusPreviousTab,
+    NextIdle,
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>),
     SetTitle(usize, String),
@@ -495,6 +496,33 @@ impl App {
                     if self.tabs.iter().any(|t| t.id == prev) {
                         self.focus_tab(prev);
                     }
+                }
+                Task::none()
+            }
+            Message::NextIdle => {
+                let order = self.tab_display_order();
+                let cur = order.iter().position(|&id| id == self.active_tab_id).unwrap_or(0);
+
+                // Search order rotated to start after current tab.
+                let candidates: Vec<usize> = order.iter()
+                    .cycle()
+                    .skip(cur + 1)
+                    .take(order.len())
+                    .copied()
+                    .collect();
+
+                let status_of = |id: usize| -> Option<(AgentStatus, AgentRank)> {
+                    self.tabs.iter().find(|t| t.id == id).map(|t| (t.status, t.rank))
+                };
+
+                // Priority: Blocked > NeedsReview > Idle Task > Idle Project.
+                let target = candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::Blocked, _))))
+                    .or_else(|| candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::NeedsReview, _)))))
+                    .or_else(|| candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::Idle, AgentRank::Task)))))
+                    .or_else(|| candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::Idle, AgentRank::Project)))));
+
+                if let Some(&id) = target {
+                    self.focus_tab(id);
                 }
                 Task::none()
             }
