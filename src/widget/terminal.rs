@@ -316,44 +316,16 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     );
                 }
 
-                if !super::box_char::draw(renderer, cell.c, fg, cell_bounds) {
-                    let font = if cell.flags.contains(Flags::BOLD) {
-                        Font {
-                            weight: iced::font::Weight::Bold,
-                            ..base_font
-                        }
-                    } else {
-                        base_font
-                    };
-
-                    // Widen clip bounds for non-ASCII so emoji-style fallback
-                    // glyphs aren't clipped to half a cell.
-                    let text_clip = if !cell.c.is_ascii() && !cell.c.is_whitespace() {
-                        Rectangle::new(
-                            Point::new(x, y),
-                            Size::new(cell_width * 2.0, row_height),
-                        )
-                    } else {
-                        cell_bounds
-                    };
-
-                    renderer.fill_text(
-                        Text {
-                            content: cell.c.to_string(),
-                            bounds: Size::new(cell_width * 2.0, row_height),
-                            size: self.config.font_size.into(),
-                            line_height: text::LineHeight::Relative(self.config.line_height),
-                            font,
-                            align_x: iced::alignment::Horizontal::Left.into(),
-                            align_y: iced::alignment::Vertical::Top.into(),
-                            shaping: text::Shaping::Advanced,
-                            wrapping: text::Wrapping::None,
-                        },
-                        Point::new(x, y),
-                        fg,
-                        text_clip,
-                    );
-                }
+                super::cell::draw(
+                    renderer,
+                    cell.c,
+                    cell.flags,
+                    fg,
+                    cell_bounds,
+                    base_font,
+                    self.config.font_size,
+                    self.config.line_height,
+                );
 
                 col += cell_cols;
             }
