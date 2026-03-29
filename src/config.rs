@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use fontdb::Database;
 use iced::keyboard;
 use serde::Deserialize;
 
@@ -89,59 +90,28 @@ fn parse_modifiers(prefix: &str) -> keyboard::Modifiers {
 
 static CHAR_WIDTH: OnceLock<f32> = OnceLock::new();
 
-/// Query the advance width of '0' from the font file via ttf-parser.
+/// Query the advance width of '0' from the system font via fontdb.
 fn query_char_width(font_name: &str, font_size: f32) -> f32 {
-    resolve_font_path(font_name)
-        .and_then(|path| {
-            let data = fs::read(&path).ok()?;
-            let face = ttf_parser::Face::parse(&data, 0).ok()?;
-            let scale = font_size / face.units_per_em() as f32;
-            let glyph = face.glyph_index('0')?;
-            let advance = face.glyph_hor_advance(glyph)? as f32;
-            Some(advance * scale)
+    let mut db = Database::new();
+    db.load_system_fonts();
+
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(font_name)],
+        ..fontdb::Query::default()
+    };
+
+    db.query(&query)
+        .and_then(|id| {
+            db.with_face_data(id, |data, face_index| {
+                let face = ttf_parser::Face::parse(data, face_index).ok()?;
+                let scale = font_size / face.units_per_em() as f32;
+                let glyph = face.glyph_index('0')?;
+                let advance = face.glyph_hor_advance(glyph)? as f32;
+                Some(advance * scale)
+            })
         })
+        .flatten()
         .unwrap_or(font_size * 0.6)
-}
-
-/// Use fontconfig (Linux) or font directories (macOS) to find the font file.
-fn resolve_font_path(font_name: &str) -> Option<PathBuf> {
-    if let Ok(output) = std::process::Command::new("fc-match")
-        .arg(font_name)
-        .arg("-f")
-        .arg("%{file}")
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(PathBuf::from(path));
-            }
-        }
-    }
-
-    find_font_bytes(font_name).and_then(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let dirs = [
-            format!("{home}/Library/Fonts"),
-            "/Library/Fonts".into(),
-            "/System/Library/Fonts".into(),
-            "/System/Library/Fonts/Supplemental".into(),
-            "/usr/share/fonts".into(),
-        ];
-        let lower = font_name.to_lowercase();
-        for dir in &dirs {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if stem.to_lowercase() == lower {
-                        return Some(path);
-                    }
-                }
-            }
-        }
-        None
-    })
 }
 
 impl Config {
@@ -207,30 +177,21 @@ fn config_path() -> PathBuf {
     PathBuf::from(home).join(".mandelbot").join("config.json")
 }
 
-/// Search macOS font directories for a font file matching the given name.
+/// Find font bytes by family name using fontdb.
 pub fn find_font_bytes(name: &str) -> Option<Vec<u8>> {
     if name == "monospace" {
         return None;
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dirs = [
-        format!("{home}/Library/Fonts"),
-        "/Library/Fonts".into(),
-        "/System/Library/Fonts".into(),
-        "/System/Library/Fonts/Supplemental".into(),
-    ];
-    let lower = name.to_lowercase();
-    for dir in &dirs {
-        let Ok(entries) = fs::read_dir(dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            if stem.to_lowercase() == lower {
-                if let Ok(bytes) = fs::read(&path) {
-                    return Some(bytes);
-                }
-            }
-        }
-    }
-    None
+
+    let mut db = Database::new();
+    db.load_system_fonts();
+
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(name)],
+        ..fontdb::Query::default()
+    };
+
+    db.query(&query).and_then(|id| {
+        db.with_face_data(id, |data, _| data.to_vec())
+    })
 }

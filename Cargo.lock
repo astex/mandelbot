@@ -1685,6 +1685,7 @@ name = "mandelbot"
 version = "0.1.4"
 dependencies = [
  "alacritty_terminal",
+ "fontdb",
  "iced",
  "open",
  "portable-pty",
