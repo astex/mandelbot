@@ -86,8 +86,7 @@ impl App {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
 
-        let parent_socket_dir =
-            std::env::temp_dir().join(format!("mandelbot-{}", std::process::id()));
+        let parent_socket_dir = crate::terminal::runtime_dir();
         std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
         let parent_socket_path = parent_socket_dir.join("parent.sock");
 
@@ -145,13 +144,22 @@ impl App {
             AgentRank::Project => Some(id),
             AgentRank::Task => parent.and_then(|p| p.project_id),
         };
-        let (tab, task) = TerminalTab::spawn(
+        let (tab, pty_task) = TerminalTab::spawn(
             id, rows, cols, is_claude, rank, project_dir, parent_id,
             depth, project_id,
             &self.config.shell, &self.parent_socket_path, prompt,
         );
         self.tabs.push(tab);
-        (id, task)
+        if is_claude {
+            let fifo_path = crate::terminal::runtime_dir().join(format!("{id}.fifo"));
+            let fifo_task = Task::run(
+                crate::terminal::fifo_stream(id, fifo_path),
+                |msg| msg,
+            );
+            (id, Task::batch([pty_task, fifo_task]))
+        } else {
+            (id, pty_task)
+        }
     }
 
     fn active_rank(&self) -> Option<AgentRank> {
@@ -695,9 +703,6 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.parent_socket_dir);
-        let mcp_config_dir =
-            std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(mcp_config_dir);
     }
 }
 

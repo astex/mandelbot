@@ -1687,6 +1687,7 @@ dependencies = [
  "alacritty_terminal",
  "fontdb",
  "iced",
+ "libc",
  "open",
  "portable-pty",
  "regex",
