@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -149,9 +149,12 @@ impl TerminalTab {
 
             wrapped_cmd = format!("exec {claude_args}");
             args_vec = vec!["-l", "-i", "-c", &wrapped_cmd];
+            let fifo_path = runtime_dir().join(format!("{id}.fifo"));
+            create_fifo(&fifo_path);
             env = HashMap::from([
                 ("MANDELBOT_TAB_ID".to_string(), id.to_string()),
                 ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
+                ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
             ]);
             cwd = project_dir.as_deref();
         } else {
@@ -378,6 +381,18 @@ impl LogicalLine {
     }
 }
 
+/// Return the runtime directory for this process, using `$XDG_RUNTIME_DIR`
+/// when available and falling back to `~/.mandelbot/run/`.
+pub fn runtime_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        PathBuf::from(xdg)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".mandelbot").join("run")
+    }
+    .join(format!("mandelbot-{}", std::process::id()))
+}
+
 /// Return the current executable path, stripping the " (deleted)" suffix that
 /// Linux appends to `/proc/self/exe` when the binary has been replaced on disk
 /// (e.g. after a rebuild while the app is still running).
@@ -389,12 +404,23 @@ fn current_exe_path() -> String {
         .to_owned()
 }
 
+fn create_fifo(path: &Path) {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    if ret != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::AlreadyExists {
+            panic!("mkfifo({}) failed: {err}", path.display());
+        }
+    }
+}
+
 /// Write config files to a temp directory for Claude. Returns the directory
 /// path. The MCP config and hooks settings are static — tab ID and parent
 /// socket path are passed via environment variables so that every tab sees
 /// the same commands and Claude only prompts for approval once.
 fn write_mcp_config() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("mandelbot-mcp-{}", std::process::id()));
+    let dir = runtime_dir().join("mcp");
     let config_path = dir.join("mcp-config.json");
 
     if config_path.exists() {
@@ -423,12 +449,10 @@ fn write_mcp_config() -> PathBuf {
 fn write_hooks_settings(dir: &Path) -> PathBuf {
     let path = dir.join("hooks-settings.json");
 
-    let exe = current_exe_path();
-
     let set_status = |status: &str| -> serde_json::Value {
         serde_json::json!({
             "type": "command",
-            "command": format!("{exe} --set-status {status}"),
+            "command": format!("echo {status} > $MANDELBOT_FIFO"),
         })
     };
 
@@ -440,7 +464,7 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
         serde_json::json!({
             "type": "command",
             "command": format!(
-                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || {exe} --set-status {status}"#,
+                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || echo {status} > $MANDELBOT_FIFO"#,
             ),
         })
     };
@@ -522,7 +546,7 @@ PROMPT_COMMAND="_mandelbot_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 
 /// Write shell integration scripts and return env vars to source them.
 fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
-    let dir = std::env::temp_dir().join(format!("mandelbot-shell-{}", std::process::id()));
+    let dir = runtime_dir().join("shell");
     std::fs::create_dir_all(&dir).expect("failed to create shell integration dir");
 
     let mut env = HashMap::new();
@@ -620,6 +644,43 @@ fn write_plugin_dir(dir: &Path) -> PathBuf {
     }
 
     plugin_dir
+}
+
+/// Read status updates from a FIFO and emit `SetStatus` messages.
+/// Opens the FIFO with O_RDWR to avoid EOF when writers close.
+pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(
+        16,
+        move |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let (exit_sender, exit_receiver) = iced::futures::channel::oneshot::channel::<()>();
+
+            std::thread::spawn(move || {
+                // Open O_RDWR so the read side stays open even when no writers
+                // are connected (avoids repeated EOF).
+                let file = match std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&fifo_path)
+                {
+                    Ok(f) => f,
+                    Err(_) => return,
+                };
+                let reader = std::io::BufReader::new(file);
+                for line in reader.lines() {
+                    let Ok(line) = line else { break };
+                    let status = line.trim().to_string();
+                    if let Some(s) = AgentStatus::from_str(&status) {
+                        if sender.try_send(Message::SetStatus(tab_id, s)).is_err() {
+                            break;
+                        }
+                    }
+                }
+                let _ = exit_sender.send(());
+            });
+
+            let _ = exit_receiver.await;
+        },
+    )
 }
 
 fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
