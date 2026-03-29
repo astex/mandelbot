@@ -60,11 +60,22 @@ fn main() -> iced::Result {
     let cfg = config::Config::load();
     let window_size = ui::initial_window_size(&cfg);
 
+    let icon = iced::window::icon::from_rgba(
+        include_bytes!("../assets/icons/logo-32x32.rgba").to_vec(),
+        32,
+        32,
+    )
+    .ok();
+
     let mut app = iced::application(ui::App::boot, ui::App::update, ui::App::view)
         .title("Mandelbot")
         .subscription(ui::App::subscription)
         .theme(ui::App::theme)
-        .window_size(window_size);
+        .window(iced::window::Settings {
+            size: window_size,
+            icon,
+            ..Default::default()
+        });
 
     if let Some(font_bytes) = config::find_font_bytes(&cfg.font) {
         app = app.font(font_bytes);
