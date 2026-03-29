@@ -378,6 +378,17 @@ impl LogicalLine {
     }
 }
 
+/// Return the current executable path, stripping the " (deleted)" suffix that
+/// Linux appends to `/proc/self/exe` when the binary has been replaced on disk
+/// (e.g. after a rebuild while the app is still running).
+fn current_exe_path() -> String {
+    std::env::current_exe()
+        .expect("failed to get current exe")
+        .to_string_lossy()
+        .trim_end_matches(" (deleted)")
+        .to_owned()
+}
+
 /// Write config files to a temp directory for Claude. Returns the directory
 /// path. The MCP config and hooks settings are static — tab ID and parent
 /// socket path are passed via environment variables so that every tab sees
@@ -392,10 +403,7 @@ fn write_mcp_config() -> PathBuf {
 
     std::fs::create_dir_all(&dir).expect("failed to create mcp config dir");
 
-    let exe = std::env::current_exe()
-        .expect("failed to get current exe")
-        .to_string_lossy()
-        .into_owned();
+    let exe = current_exe_path();
 
     let config = serde_json::json!({
         "mcpServers": {
@@ -415,10 +423,7 @@ fn write_mcp_config() -> PathBuf {
 fn write_hooks_settings(dir: &Path) -> PathBuf {
     let path = dir.join("hooks-settings.json");
 
-    let exe = std::env::current_exe()
-        .expect("failed to get current exe")
-        .to_string_lossy()
-        .into_owned();
+    let exe = current_exe_path();
 
     let set_status = |status: &str| -> serde_json::Value {
         serde_json::json!({
