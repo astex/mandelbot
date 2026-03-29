@@ -666,6 +666,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                             shell.capture_event();
                             return;
                         }
+                        keyboard::Key::Character(c) if c.as_ref() == "-" => {
+                            shell.publish(Message::FocusPreviousTab);
+                            shell.capture_event();
+                            return;
+                        }
                         keyboard::Key::Character(c) => {
                             if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (0..=9).contains(&d)) {
                                 shell.publish(Message::SelectTabByIndex(digit));

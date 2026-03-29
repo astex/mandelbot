@@ -52,6 +52,7 @@ pub enum Message {
     SelectTabByIndex(usize),
     NavigateSibling(i32),
     NavigateRank(i32),
+    FocusPreviousTab,
     NextIdle,
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>),
@@ -74,6 +75,7 @@ pub struct App {
     config: Config,
     tabs: Vec<TerminalTab>,
     active_tab_id: usize,
+    prev_active_tab_id: Option<usize>,
     next_tab_id: usize,
     terminal_theme: TerminalTheme,
     window_size: Option<Size>,
@@ -105,6 +107,7 @@ impl App {
             config,
             tabs: Vec::new(),
             active_tab_id: 0,
+            prev_active_tab_id: None,
             next_tab_id: 0,
             terminal_theme,
             window_size: None,
@@ -122,6 +125,13 @@ impl App {
 
     fn active_tab_mut(&mut self) -> Option<&mut TerminalTab> {
         self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
+    }
+
+    fn focus_tab(&mut self, id: usize) {
+        if id != self.active_tab_id {
+            self.prev_active_tab_id = Some(self.active_tab_id);
+        }
+        self.active_tab_id = id;
     }
 
     fn spawn_tab(
@@ -248,13 +258,17 @@ impl App {
 
         self.tabs.remove(idx);
 
+        if self.prev_active_tab_id == Some(tab_id) {
+            self.prev_active_tab_id = None;
+        }
+
         if self.tabs.is_empty() {
             return iced::exit();
         }
 
         if self.active_tab_id == tab_id {
             let new_idx = idx.min(self.tabs.len() - 1);
-            self.active_tab_id = self.tabs[new_idx].id;
+            self.focus_tab(self.tabs[new_idx].id);
         }
 
         Task::none()
@@ -268,7 +282,7 @@ impl App {
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("."));
                 let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, None);
-                self.active_tab_id = id;
+                self.focus_tab(id);
                 if let Some(tab) = self.active_tab_mut() {
                     tab.title = Some("home".into());
                 }
@@ -330,7 +344,7 @@ impl App {
                             let canonical = std::fs::canonicalize(&wd).unwrap_or(wd);
                             if let Some(existing) = self.find_project_for_dir(&canonical) {
                                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": existing}));
-                                self.active_tab_id = existing;
+                                self.focus_tab(existing);
                                 return Task::none();
                             }
                             (AgentRank::Project, Some(canonical), Some(requesting_tab_id))
@@ -390,7 +404,7 @@ impl App {
             }
             Message::NewTab => {
                 let (id, task) = self.spawn_tab(false, AgentRank::Home, None, None, None);
-                self.active_tab_id = id;
+                self.focus_tab(id);
                 task
             }
             Message::SpawnAgent => {
@@ -406,7 +420,7 @@ impl App {
                         self.next_tab_id += 1;
                         let tab = TerminalTab::new_pending(id, rows, cols, home_id);
                         self.tabs.push(tab);
-                        self.active_tab_id = id;
+                        self.focus_tab(id);
                         Task::none()
                     }
                     Some(AgentRank::Project | AgentRank::Task) => {
@@ -415,7 +429,7 @@ impl App {
                         let project_dir = self.project_dir_for_tab(self.active_tab_id);
                         if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
                             let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None);
-                            self.active_tab_id = id;
+                            self.focus_tab(id);
                             task
                         } else {
                             Task::none()
@@ -437,13 +451,13 @@ impl App {
                         self.next_tab_id += 1;
                         let tab = TerminalTab::new_pending(id, rows, cols, home_id);
                         self.tabs.push(tab);
-                        self.active_tab_id = id;
+                        self.focus_tab(id);
                         Task::none()
                     }
                     Some(AgentRank::Project | AgentRank::Task) => {
                         if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
                             let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None);
-                            self.active_tab_id = id;
+                            self.focus_tab(id);
                             task
                         } else {
                             Task::none()
@@ -457,7 +471,7 @@ impl App {
                 if let Some(idx) = order.iter().position(|&id| id == self.active_tab_id) {
                     let new_idx = (idx as i32 + delta)
                         .rem_euclid(order.len() as i32) as usize;
-                    self.active_tab_id = order[new_idx];
+                    self.focus_tab(order[new_idx]);
                 }
                 Task::none()
             }
@@ -465,14 +479,22 @@ impl App {
                 if delta > 0 {
                     // Go to first child.
                     if let Some(child) = self.first_child(self.active_tab_id) {
-                        self.active_tab_id = child;
+                        self.focus_tab(child);
                     }
                 } else {
                     // Go to parent.
                     if let Some(tab) = self.active_tab() {
                         if let Some(pid) = tab.parent_id {
-                            self.active_tab_id = pid;
+                            self.focus_tab(pid);
                         }
+                    }
+                }
+                Task::none()
+            }
+            Message::FocusPreviousTab => {
+                if let Some(prev) = self.prev_active_tab_id {
+                    if self.tabs.iter().any(|t| t.id == prev) {
+                        self.focus_tab(prev);
                     }
                 }
                 Task::none()
@@ -500,7 +522,7 @@ impl App {
                     .or_else(|| candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::Idle, AgentRank::Project)))));
 
                 if let Some(&id) = target {
-                    self.active_tab_id = id;
+                    self.focus_tab(id);
                 }
                 Task::none()
             }
@@ -536,7 +558,7 @@ impl App {
 
                         // Check if project already exists for this dir.
                         if let Some(existing) = self.find_project_for_dir(&canonical) {
-                            self.active_tab_id = existing;
+                            self.focus_tab(existing);
                             return self.close_tab(tab_id);
                         }
 
@@ -554,7 +576,7 @@ impl App {
                             parent_id,
                             None,
                         );
-                        self.active_tab_id = id;
+                        self.focus_tab(id);
                         task
                     }
                 }
@@ -562,14 +584,14 @@ impl App {
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::SelectTab(tab_id) => {
                 if self.tabs.iter().any(|t| t.id == tab_id) {
-                    self.active_tab_id = tab_id;
+                    self.focus_tab(tab_id);
                 }
                 Task::none()
             }
             Message::SelectTabByIndex(index) => {
                 let display_order = self.tab_display_order();
                 if let Some(&tab_id) = display_order.get(index) {
-                    self.active_tab_id = tab_id;
+                    self.focus_tab(tab_id);
                 }
                 Task::none()
             }
