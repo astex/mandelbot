@@ -2,16 +2,18 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 --binary <path> --version <ver> --output <dir>"
+  echo "Usage: $0 --binary <path> --version <ver> --output <dir> [--sign <identity>] [--notarize]"
   exit 1
 }
 
-BINARY="" VERSION="" OUTPUT=""
+BINARY="" VERSION="" OUTPUT="" SIGN_IDENTITY="" NOTARIZE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --binary)  BINARY="$2";  shift 2 ;;
-    --version) VERSION="$2"; shift 2 ;;
-    --output)  OUTPUT="$2";  shift 2 ;;
+    --binary)   BINARY="$2";        shift 2 ;;
+    --version)  VERSION="$2";       shift 2 ;;
+    --output)   OUTPUT="$2";        shift 2 ;;
+    --sign)     SIGN_IDENTITY="$2"; shift 2 ;;
+    --notarize) NOTARIZE=true;      shift ;;
     *) usage ;;
   esac
 done
@@ -53,6 +55,34 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  echo "Signing with identity: $SIGN_IDENTITY"
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" \
+    "$APP/Contents/MacOS/mandelbot"
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" \
+    "$APP"
+  codesign --verify --verbose "$APP"
+fi
+
 cd "$OUTPUT"
 zip -r Mandelbot.app.zip Mandelbot.app
+
+if [[ "$NOTARIZE" == true ]]; then
+  echo "Submitting for notarization..."
+  xcrun notarytool submit Mandelbot.app.zip \
+    --apple-id "$APPLE_ID" \
+    --password "$APPLE_ID_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" \
+    --wait
+
+  echo "Stapling notarization ticket..."
+  xcrun stapler staple "$APP"
+
+  # Re-zip after stapling
+  rm Mandelbot.app.zip
+  zip -r Mandelbot.app.zip Mandelbot.app
+fi
+
 echo "Created $OUTPUT/Mandelbot.app.zip"
