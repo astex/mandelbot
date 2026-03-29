@@ -1685,6 +1685,7 @@ name = "mandelbot"
 version = "0.1.4"
 dependencies = [
  "alacritty_terminal",
+ "fontdb",
  "iced",
  "open",
  "portable-pty",
@@ -1692,6 +1693,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "ttf-parser",
 ]
 
 [[package]]

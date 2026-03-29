@@ -26,6 +26,7 @@ use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
+
 const SCROLLBAR_MIN_THUMB: f32 = 12.0;
 
 struct TrackGeometry {
@@ -232,7 +233,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     content: label,
                     bounds: Size::new(bounds.width, self.char_height()),
                     size: self.config.font_size.into(),
-                    line_height: text::LineHeight::Absolute(self.char_height().into()),
+                    line_height: text::LineHeight::Relative(self.config.line_height),
                     font: Font::MONOSPACE,
                     align_x: iced::alignment::Horizontal::Left.into(),
                     align_y: iced::alignment::Vertical::Top.into(),
@@ -264,21 +265,24 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }
         };
 
+        let origin_x = bounds.x.round();
+        let origin_y = bounds.y.round();
+        let cw = self.char_width();
+        let ch = self.char_height();
+
         for row in 0..grid.screen_lines() {
             let row_idx = Line(row as i32) - display_offset;
-            let y = bounds.y + row as f32 * self.char_height();
-            let next_y = bounds.y + (row + 1) as f32 * self.char_height();
-            let row_height = next_y - y;
+            let y = origin_y + row as f32 * ch;
+            let row_height = ch;
 
             let mut col = 0;
             while col < grid.columns() {
                 let cell = &grid[row_idx][Column(col)];
-                let x = bounds.x + col as f32 * self.char_width();
+                let x = origin_x + col as f32 * cw;
 
                 let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
                 let cell_cols = if is_wide { 2 } else { 1 };
-                let next_x = bounds.x + (col + cell_cols) as f32 * self.char_width();
-                let cell_width = next_x - x;
+                let cell_width = cell_cols as f32 * cw;
 
                 let is_cursor = show_cursor
                     && display_offset == 0
@@ -312,41 +316,15 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     );
                 }
 
-                let font = if cell.flags.contains(Flags::BOLD) {
-                    Font {
-                        weight: iced::font::Weight::Bold,
-                        ..base_font
-                    }
-                } else {
-                    base_font
-                };
-
-                // Widen clip bounds for non-ASCII so emoji-style fallback
-                // glyphs aren't clipped to half a cell.
-                let text_clip = if !cell.c.is_ascii() && !cell.c.is_whitespace() {
-                    Rectangle::new(
-                        Point::new(x, y),
-                        Size::new(cell_width * 2.0, row_height),
-                    )
-                } else {
-                    cell_bounds
-                };
-
-                renderer.fill_text(
-                    Text {
-                        content: cell.c.to_string(),
-                        bounds: Size::new(cell_width * 2.0, row_height),
-                        size: self.config.font_size.into(),
-                        line_height: text::LineHeight::Absolute(row_height.into()),
-                        font,
-                        align_x: iced::alignment::Horizontal::Left.into(),
-                        align_y: iced::alignment::Vertical::Top.into(),
-                        shaping: text::Shaping::Advanced,
-                        wrapping: text::Wrapping::None,
-                    },
-                    Point::new(x, y),
+                super::cell::draw(
+                    renderer,
+                    cell.c,
+                    cell.flags,
                     fg,
-                    text_clip,
+                    cell_bounds,
+                    base_font,
+                    self.config.font_size,
+                    self.config.line_height,
                 );
 
                 col += cell_cols;
@@ -363,10 +341,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 if screen_row < 0 || screen_row >= grid.screen_lines() as i32 {
                     continue;
                 }
-                let y = bounds.y + screen_row as f32 * self.char_height()
-                    + self.char_height() - underline_thickness;
-                let x = bounds.x + start_col as f32 * self.char_width();
-                let width = (end_col - start_col) as f32 * self.char_width();
+                let y = origin_y + screen_row as f32 * ch + ch - underline_thickness;
+                let x = origin_x + start_col as f32 * cw;
+                let width = (end_col - start_col) as f32 * cw;
                 renderer.fill_quad(
                     Quad {
                         bounds: Rectangle::new(

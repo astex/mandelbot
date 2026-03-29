@@ -391,9 +391,7 @@ impl App {
                         let Some(size) = self.window_size else {
                             return Task::none();
                         };
-                        let (rows, cols) = terminal_size(
-                            size, self.config.char_width(), self.config.char_height(),
-                        );
+                        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
                         let home_id = self.active_tab_id;
                         let id = self.next_tab_id;
                         self.next_tab_id += 1;
@@ -424,9 +422,7 @@ impl App {
                         let Some(size) = self.window_size else {
                             return Task::none();
                         };
-                        let (rows, cols) = terminal_size(
-                            size, self.config.char_width(), self.config.char_height(),
-                        );
+                        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
                         let home_id = self.active_tab_id;
                         let id = self.next_tab_id;
                         self.next_tab_id += 1;

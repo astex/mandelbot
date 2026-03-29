@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
+use fontdb::Database;
 use iced::keyboard;
 use serde::Deserialize;
 
@@ -26,6 +28,10 @@ fn default_movement_prefix() -> String {
     "alt+shift".to_string()
 }
 
+fn default_line_height() -> f32 {
+    1.3
+}
+
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
 }
@@ -40,6 +46,9 @@ pub struct Config {
 
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+
+    #[serde(default = "default_line_height")]
+    pub line_height: f32,
 
     #[serde(default = "default_control_prefix")]
     pub control_prefix: String,
@@ -57,6 +66,7 @@ impl Default for Config {
             theme: default_theme(),
             font: default_font(),
             font_size: default_font_size(),
+            line_height: default_line_height(),
             control_prefix: default_control_prefix(),
             movement_prefix: default_movement_prefix(),
             shell: default_shell(),
@@ -78,15 +88,47 @@ fn parse_modifiers(prefix: &str) -> keyboard::Modifiers {
     mods
 }
 
-const LINE_HEIGHT: f32 = 1.3;
+static CHAR_WIDTH: OnceLock<f32> = OnceLock::new();
+
+/// Query the advance width of '0' from the system font via fontdb.
+fn query_char_width(font_name: &str, font_size: f32) -> f32 {
+    let mut db = Database::new();
+    db.load_system_fonts();
+
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(font_name)],
+        ..fontdb::Query::default()
+    };
+
+    db.query(&query)
+        .and_then(|id| {
+            db.with_face_data(id, |data, face_index| {
+                let face = ttf_parser::Face::parse(data, face_index).ok()?;
+                let scale = font_size / face.units_per_em() as f32;
+                let glyph = face.glyph_index('0')?;
+                let advance = face.glyph_hor_advance(glyph)? as f32;
+                Some(advance * scale)
+            })
+        })
+        .flatten()
+        .unwrap_or(font_size * 0.6)
+}
 
 impl Config {
     pub fn char_width(&self) -> f32 {
-        self.font_size * 0.6
+        *CHAR_WIDTH.get_or_init(|| {
+            // Round to the nearest even integer so half-cell splits in block
+            // characters land on whole pixels.
+            let raw = query_char_width(&self.font, self.font_size);
+            (raw / 2.0).round() * 2.0
+        })
     }
 
     pub fn char_height(&self) -> f32 {
-        self.font_size * LINE_HEIGHT
+        // Round to the nearest even integer so half-cell splits in block
+        // characters land on whole pixels.
+        let raw = self.font_size * self.line_height;
+        (raw / 2.0).round() * 2.0
     }
 
     pub fn terminal_theme(&self) -> TerminalTheme {
@@ -135,30 +177,21 @@ fn config_path() -> PathBuf {
     PathBuf::from(home).join(".mandelbot").join("config.json")
 }
 
-/// Search macOS font directories for a font file matching the given name.
+/// Find font bytes by family name using fontdb.
 pub fn find_font_bytes(name: &str) -> Option<Vec<u8>> {
     if name == "monospace" {
         return None;
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dirs = [
-        format!("{home}/Library/Fonts"),
-        "/Library/Fonts".into(),
-        "/System/Library/Fonts".into(),
-        "/System/Library/Fonts/Supplemental".into(),
-    ];
-    let lower = name.to_lowercase();
-    for dir in &dirs {
-        let Ok(entries) = fs::read_dir(dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            if stem.to_lowercase() == lower {
-                if let Ok(bytes) = fs::read(&path) {
-                    return Some(bytes);
-                }
-            }
-        }
-    }
-    None
+
+    let mut db = Database::new();
+    db.load_system_fonts();
+
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(name)],
+        ..fontdb::Query::default()
+    };
+
+    db.query(&query).and_then(|id| {
+        db.with_face_data(id, |data, _| data.to_vec())
+    })
 }
