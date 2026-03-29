@@ -257,6 +257,10 @@ impl App {
 
         self.tabs.remove(idx);
 
+        if self.prev_active_tab_id == Some(tab_id) {
+            self.prev_active_tab_id = None;
+        }
+
         if self.tabs.is_empty() {
             return iced::exit();
         }
