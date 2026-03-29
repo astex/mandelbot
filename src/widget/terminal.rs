@@ -641,6 +641,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 // Tree navigation.
                 if self.config.matches_movement(*modifiers) {
                     match &key {
+                        keyboard::Key::Named(Named::Space) => {
+                            shell.publish(Message::NextIdle);
+                            shell.capture_event();
+                            return;
+                        }
                         keyboard::Key::Named(Named::ArrowDown) => {
                             shell.publish(Message::NavigateSibling(1));
                             shell.capture_event();
