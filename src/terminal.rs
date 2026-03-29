@@ -518,6 +518,8 @@ const SKILL_DELEGATE_TEMPLATE: &str = include_str!("agents/skills/mandelbot-dele
 const SKILL_DELEGATE_WATCH: &str = include_str!("agents/skills/mandelbot-delegate/watch.sh");
 const SKILL_WORK_AS_SUBTASK: &str = include_str!("agents/skills/mandelbot-work-as-subtask/SKILL.md");
 const SKILL_MANDELBOT_CONFIG: &str = include_str!("agents/skills/mandelbot-config/SKILL.md");
+const SKILL_MANDELBOT_KEYBINDINGS: &str =
+    include_str!("agents/skills/mandelbot-keybindings/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to the running command.
@@ -622,6 +624,10 @@ fn write_plugin_dir(dir: &Path) -> PathBuf {
     let config_dir = plugin_dir.join("skills").join("mandelbot-config");
     std::fs::create_dir_all(&config_dir).expect("failed to create mandelbot-config skill dir");
 
+    let keybindings_dir = plugin_dir.join("skills").join("mandelbot-keybindings");
+    std::fs::create_dir_all(&keybindings_dir)
+        .expect("failed to create mandelbot-keybindings skill dir");
+
     let skill_path = delegate_dir.join("SKILL.md");
     if !skill_path.exists() {
         std::fs::write(&skill_path, SKILL_DELEGATE).expect("failed to write delegate skill");
@@ -641,6 +647,12 @@ fn write_plugin_dir(dir: &Path) -> PathBuf {
     if !skill_path.exists() {
         std::fs::write(&skill_path, SKILL_MANDELBOT_CONFIG)
             .expect("failed to write mandelbot-config skill");
+    }
+
+    let skill_path = keybindings_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        std::fs::write(&skill_path, SKILL_MANDELBOT_KEYBINDINGS)
+            .expect("failed to write mandelbot-keybindings skill");
     }
 
     plugin_dir
