@@ -74,7 +74,7 @@ pub struct App {
     config: Config,
     tabs: Vec<TerminalTab>,
     active_tab_id: usize,
-    previous_tab_id: Option<usize>,
+    prev_active_tab_id: Option<usize>,
     next_tab_id: usize,
     terminal_theme: TerminalTheme,
     window_size: Option<Size>,
@@ -106,7 +106,7 @@ impl App {
             config,
             tabs: Vec::new(),
             active_tab_id: 0,
-            previous_tab_id: None,
+            prev_active_tab_id: None,
             next_tab_id: 0,
             terminal_theme,
             window_size: None,
@@ -128,7 +128,7 @@ impl App {
 
     fn focus_tab(&mut self, id: usize) {
         if id != self.active_tab_id {
-            self.previous_tab_id = Some(self.active_tab_id);
+            self.prev_active_tab_id = Some(self.active_tab_id);
         }
         self.active_tab_id = id;
     }
@@ -487,7 +487,7 @@ impl App {
                 Task::none()
             }
             Message::FocusPreviousTab => {
-                if let Some(prev) = self.previous_tab_id {
+                if let Some(prev) = self.prev_active_tab_id {
                     if self.tabs.iter().any(|t| t.id == prev) {
                         self.focus_tab(prev);
                     }
