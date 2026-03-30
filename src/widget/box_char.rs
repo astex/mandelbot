@@ -19,6 +19,7 @@
 
 use iced::advanced::renderer::Quad;
 use iced::advanced::Renderer as _;
+use iced::widget::canvas::{self, LineCap, Stroke, Style};
 use iced::{Border, Color, Point, Rectangle, Size};
 
 /// Draw a block element or box-drawing character as geometric quads.
@@ -268,6 +269,12 @@ fn draw_box_drawing(
         '╉' => (S::Heavy, S::Light, S::Heavy, S::Heavy),
         '╊' => (S::Light, S::Heavy, S::Heavy, S::Heavy),
 
+        // Arc corners (rounded): drawn with quarter-circle arcs.
+        '╭' | '╮' | '╰' | '╯' => {
+            draw_arc_corner(renderer, c, fg, cell);
+            return;
+        }
+
         // Double lines and double/single combinations (U+2550–U+256C)
         // These have more complex geometry; fall back to font for now.
         _ => return,
@@ -291,4 +298,75 @@ fn draw_box_drawing(
     if down != S::None {
         v_stroke(renderer, cy - t(down) / 2.0, y + h, t(down));
     }
+}
+
+/// Draw arc corner characters (╭ ╮ ╰ ╯) as quarter-circle arcs with
+/// straight extensions to the cell edges.
+fn draw_arc_corner(
+    renderer: &mut iced::Renderer,
+    c: char,
+    fg: Color,
+    cell: Rectangle,
+) {
+    use iced::advanced::graphics::geometry::Renderer as _;
+
+    let x = cell.x;
+    let y = cell.y;
+    let w = cell.width;
+    let h = cell.height;
+    let hw = w / 2.0;
+    let hh = h / 2.0;
+
+    let thickness = (w / 8.0).max(1.0);
+    let r = hw.min(hh);
+
+    // Match the pixel-rounding used by draw_box_drawing's h_stroke/v_stroke
+    // so the arc endpoints align exactly with adjacent straight lines.
+    let cx = (x + hw - thickness / 2.0).round() + thickness / 2.0;
+    let cy = (y + hh - thickness / 2.0).round() + thickness / 2.0;
+
+    // Absolute coordinates — the frame doesn't remap to local space.
+    // Each arc corner: straight extension from edge to arc start, circular
+    // arc_to through the center, straight extension from arc end to edge.
+    let path = canvas::Path::new(|b| {
+        match c {
+            '╭' => {
+                b.move_to(Point::new(x + w, cy));
+                b.line_to(Point::new(cx + r, cy));
+                b.arc_to(Point::new(cx, cy), Point::new(cx, cy + r), r);
+                b.line_to(Point::new(cx, y + h));
+            }
+            '╮' => {
+                b.move_to(Point::new(x, cy));
+                b.line_to(Point::new(cx - r, cy));
+                b.arc_to(Point::new(cx, cy), Point::new(cx, cy + r), r);
+                b.line_to(Point::new(cx, y + h));
+            }
+            '╰' => {
+                b.move_to(Point::new(x + w, cy));
+                b.line_to(Point::new(cx + r, cy));
+                b.arc_to(Point::new(cx, cy), Point::new(cx, cy - r), r);
+                b.line_to(Point::new(cx, y));
+            }
+            '╯' => {
+                b.move_to(Point::new(x, cy));
+                b.line_to(Point::new(cx - r, cy));
+                b.arc_to(Point::new(cx, cy), Point::new(cx, cy - r), r);
+                b.line_to(Point::new(cx, y));
+            }
+            _ => unreachable!(),
+        }
+    });
+
+    let mut frame = canvas::Frame::with_bounds(renderer, cell);
+    frame.stroke(
+        &path,
+        Stroke {
+            style: Style::Solid(fg),
+            width: thickness,
+            line_cap: LineCap::Butt,
+            ..Stroke::default()
+        },
+    );
+    renderer.draw_geometry(frame.into_geometry());
 }
