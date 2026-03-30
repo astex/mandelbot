@@ -656,17 +656,21 @@ impl App {
                 .font(Font::MONOSPACE)
                 .color(fg);
 
-            let mut content = row![].align_y(Alignment::Center);
-            content = content.push(label).push(Space::new().width(Fill));
+            let label = container(label).width(Fill).clip(true);
+
+            let mut suffix = row![].align_y(Alignment::Center);
             if tab.is_claude {
                 let dot_size = self.config.font_size * 0.6;
                 let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
                 let dot_color = status_dot_color(tab.status, fg);
-                content = content
+                suffix = suffix
                     .push(text(dot_char).size(dot_size).color(dot_color))
                     .push(Space::new().width(4));
             }
-            let content = content.push(number);
+            let suffix = suffix.push(number);
+
+            let content = row![Space::new().width(PADDING), label, suffix, Space::new().width(PADDING)]
+                .align_y(Alignment::Center);
 
             let btn = button(content)
                 .on_press(Message::SelectTab(tab_id))
