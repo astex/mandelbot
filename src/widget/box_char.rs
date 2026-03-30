@@ -269,14 +269,43 @@ fn draw_box_drawing(
         '╉' => (S::Heavy, S::Light, S::Heavy, S::Heavy),
         '╊' => (S::Light, S::Heavy, S::Heavy, S::Heavy),
 
+        // Half lines: light (single direction only)
+        '\u{2574}' => (S::Light, S::None, S::None, S::None),  // ╴ left
+        '\u{2575}' => (S::None, S::None, S::Light, S::None),  // ╵ up
+        '\u{2576}' => (S::None, S::Light, S::None, S::None),  // ╶ right
+        '\u{2577}' => (S::None, S::None, S::None, S::Light),  // ╷ down
+
+        // Half lines: heavy
+        '\u{2578}' => (S::Heavy, S::None, S::None, S::None),  // ╸ left
+        '\u{2579}' => (S::None, S::None, S::Heavy, S::None),  // ╹ up
+        '\u{257A}' => (S::None, S::Heavy, S::None, S::None),  // ╺ right
+        '\u{257B}' => (S::None, S::None, S::None, S::Heavy),  // ╻ down
+
+        // Half lines: mixed
+        '\u{257C}' => (S::Light, S::Heavy, S::None, S::None),  // ╼ light left, heavy right
+        '\u{257D}' => (S::None, S::None, S::Light, S::Heavy),  // ╽ light up, heavy down
+        '\u{257E}' => (S::Heavy, S::Light, S::None, S::None),  // ╾ heavy left, light right
+        '\u{257F}' => (S::None, S::None, S::Heavy, S::Light),  // ╿ heavy up, light down
+
         // Arc corners (rounded): drawn with quarter-circle arcs.
         '╭' | '╮' | '╰' | '╯' => {
             draw_arc_corner(renderer, c, fg, cell);
             return;
         }
 
-        // Double lines and double/single combinations (U+2550–U+256C)
-        // These have more complex geometry; fall back to font for now.
+        // Diagonal lines (U+2571–U+2573): drawn as stroked paths.
+        '\u{2571}' | '\u{2572}' | '\u{2573}' => {
+            draw_diagonal(renderer, c, fg, cell);
+            return;
+        }
+
+        // Double lines and double/single combinations (U+2550–U+256C):
+        // drawn as parallel strokes.
+        '\u{2550}'..='\u{256C}' => {
+            draw_double(renderer, c, fg, cell);
+            return;
+        }
+
         _ => return,
     };
 
@@ -369,4 +398,292 @@ fn draw_arc_corner(
         },
     );
     renderer.draw_geometry(frame.into_geometry());
+}
+
+/// Draw diagonal line characters (U+2571–U+2573) as stroked paths.
+fn draw_diagonal(
+    renderer: &mut iced::Renderer,
+    c: char,
+    fg: Color,
+    cell: Rectangle,
+) {
+    use iced::advanced::graphics::geometry::Renderer as _;
+
+    let x = cell.x;
+    let y = cell.y;
+    let w = cell.width;
+    let h = cell.height;
+    let thickness = (w / 8.0).max(1.0);
+
+    let path = canvas::Path::new(|b| {
+        match c {
+            '\u{2571}' => {
+                // ╱ forward slash: bottom-left to top-right
+                b.move_to(Point::new(x, y + h));
+                b.line_to(Point::new(x + w, y));
+            }
+            '\u{2572}' => {
+                // ╲ backslash: top-left to bottom-right
+                b.move_to(Point::new(x, y));
+                b.line_to(Point::new(x + w, y + h));
+            }
+            '\u{2573}' => {
+                // ╳ X: both diagonals
+                b.move_to(Point::new(x, y + h));
+                b.line_to(Point::new(x + w, y));
+                b.move_to(Point::new(x, y));
+                b.line_to(Point::new(x + w, y + h));
+            }
+            _ => unreachable!(),
+        }
+    });
+
+    let mut frame = canvas::Frame::with_bounds(renderer, cell);
+    frame.stroke(
+        &path,
+        Stroke {
+            style: Style::Solid(fg),
+            width: thickness,
+            line_cap: LineCap::Butt,
+            ..Stroke::default()
+        },
+    );
+    renderer.draw_geometry(frame.into_geometry());
+}
+
+/// Draw double-line box-drawing characters (U+2550–U+256C) as parallel strokes.
+fn draw_double(
+    renderer: &mut iced::Renderer,
+    c: char,
+    fg: Color,
+    cell: Rectangle,
+) {
+    let x = cell.x;
+    let y = cell.y;
+    let w = cell.width;
+    let h = cell.height;
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+
+    let light = (w / 8.0).max(1.0);
+    // Gap between the two parallel lines, and the offset from center.
+    let gap = (w / 4.0).max(2.0);
+    let off = gap / 2.0;
+
+    let quad = |renderer: &mut iced::Renderer, bounds: Rectangle| {
+        renderer.fill_quad(
+            Quad {
+                bounds,
+                border: Border::default(),
+                ..Quad::default()
+            },
+            fg,
+        );
+    };
+
+    // Horizontal double stroke: two lines offset above/below cy.
+    let hd = |renderer: &mut iced::Renderer, x0: f32, x1: f32| {
+        quad(renderer, Rectangle::new(
+            Point::new(x0, (cy - off - light / 2.0).round()),
+            Size::new(x1 - x0, light),
+        ));
+        quad(renderer, Rectangle::new(
+            Point::new(x0, (cy + off - light / 2.0).round()),
+            Size::new(x1 - x0, light),
+        ));
+    };
+
+    // Vertical double stroke: two lines offset left/right of cx.
+    let vd = |renderer: &mut iced::Renderer, y0: f32, y1: f32| {
+        quad(renderer, Rectangle::new(
+            Point::new((cx - off - light / 2.0).round(), y0),
+            Size::new(light, y1 - y0),
+        ));
+        quad(renderer, Rectangle::new(
+            Point::new((cx + off - light / 2.0).round(), y0),
+            Size::new(light, y1 - y0),
+        ));
+    };
+
+    // Single horizontal stroke (for double/single combos).
+    let hs = |renderer: &mut iced::Renderer, x0: f32, x1: f32| {
+        quad(renderer, Rectangle::new(
+            Point::new(x0, (cy - light / 2.0).round()),
+            Size::new(x1 - x0, light),
+        ));
+    };
+
+    // Single vertical stroke (for double/single combos).
+    let vs = |renderer: &mut iced::Renderer, y0: f32, y1: f32| {
+        quad(renderer, Rectangle::new(
+            Point::new((cx - light / 2.0).round(), y0),
+            Size::new(light, y1 - y0),
+        ));
+    };
+
+    // Outer edges of the double strokes, for connecting perpendicular lines.
+    let lo = (cx - off - light / 2.0).round();
+    let ro = (cx + off - light / 2.0).round() + light;
+    let to = (cy - off - light / 2.0).round();
+    let bo = (cy + off - light / 2.0).round() + light;
+
+    match c {
+        // Straight lines
+        '\u{2550}' => hd(renderer, x, x + w),          // ═
+        '\u{2551}' => vd(renderer, y, y + h),           // ║
+
+        // Double corners
+        '\u{2554}' => {                                  // ╔
+            hd(renderer, cx, x + w);
+            // Left line: from top of lower h-stroke to bottom
+            quad(renderer, Rectangle::new(Point::new(lo, bo), Size::new(light, y + h - bo)));
+            // Right line: from top of upper h-stroke to bottom
+            quad(renderer, Rectangle::new(Point::new(ro - light, to), Size::new(light, y + h - to)));
+        }
+        '\u{2557}' => {                                  // ╗
+            hd(renderer, x, cx);
+            quad(renderer, Rectangle::new(Point::new(lo, to), Size::new(light, y + h - to)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, bo), Size::new(light, y + h - bo)));
+        }
+        '\u{255A}' => {                                  // ╚
+            hd(renderer, cx, x + w);
+            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, bo - y)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, to + light - y)));
+        }
+        '\u{255D}' => {                                  // ╝
+            hd(renderer, x, cx);
+            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, to + light - y)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, bo - y)));
+        }
+
+        // Double/single corners: single horizontal, double vertical
+        '\u{2553}' => {                                  // ╓
+            hs(renderer, cx, x + w);
+            vd(renderer, cy, y + h);
+        }
+        '\u{2556}' => {                                  // ╖
+            hs(renderer, x, cx);
+            vd(renderer, cy, y + h);
+        }
+        '\u{2559}' => {                                  // ╙
+            hs(renderer, cx, x + w);
+            vd(renderer, y, cy);
+        }
+        '\u{255C}' => {                                  // ╜
+            hs(renderer, x, cx);
+            vd(renderer, y, cy);
+        }
+
+        // Double/single corners: double horizontal, single vertical
+        '\u{2552}' => {                                  // ╒
+            hd(renderer, cx, x + w);
+            vs(renderer, cy, y + h);
+        }
+        '\u{2555}' => {                                  // ╕
+            hd(renderer, x, cx);
+            vs(renderer, cy, y + h);
+        }
+        '\u{2558}' => {                                  // ╘
+            hd(renderer, cx, x + w);
+            vs(renderer, y, cy);
+        }
+        '\u{255B}' => {                                  // ╛
+            hd(renderer, x, cx);
+            vs(renderer, y, cy);
+        }
+
+        // Double T-pieces
+        '\u{2560}' => {                                  // ╠
+            hd(renderer, cx, x + w);
+            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, to + light - y)));
+            quad(renderer, Rectangle::new(Point::new(lo, bo), Size::new(light, y + h - bo)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, y + h - y)));
+        }
+        '\u{2563}' => {                                  // ╣
+            hd(renderer, x, cx);
+            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, y + h - y)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, to + light - y)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, bo), Size::new(light, y + h - bo)));
+        }
+        '\u{2566}' => {                                  // ╦
+            // Vertical double: from center down
+            vd(renderer, cy, y + h);
+            // Top h-line: spans full width
+            quad(renderer, Rectangle::new(Point::new(x, to), Size::new(w, light)));
+            // Bottom h-line: left segment and right segment (broken by vertical)
+            quad(renderer, Rectangle::new(Point::new(x, bo - light), Size::new(lo + light - x, light)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, bo - light), Size::new(x + w - ro + light, light)));
+        }
+        '\u{2569}' => {                                  // ╩
+            // Vertical double: from top to center
+            vd(renderer, y, cy);
+            // Top h-line: left segment and right segment (broken by vertical)
+            quad(renderer, Rectangle::new(Point::new(x, to), Size::new(lo + light - x, light)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, to), Size::new(x + w - ro + light, light)));
+            // Bottom h-line: spans full width
+            quad(renderer, Rectangle::new(Point::new(x, bo - light), Size::new(w, light)));
+        }
+
+        // Double/single T-pieces: single horizontal, double vertical
+        '\u{255F}' => {                                  // ╟
+            hs(renderer, cx, x + w);
+            vd(renderer, y, y + h);
+        }
+        '\u{2562}' => {                                  // ╢
+            hs(renderer, x, cx);
+            vd(renderer, y, y + h);
+        }
+        '\u{2565}' => {                                  // ╥
+            vs(renderer, cy, y + h);
+            hd(renderer, x, x + w);
+        }
+        '\u{2568}' => {                                  // ╨
+            vs(renderer, y, cy);
+            hd(renderer, x, x + w);
+        }
+
+        // Double/single T-pieces: double horizontal, single vertical
+        '\u{255E}' => {                                  // ╞
+            hd(renderer, cx, x + w);
+            vs(renderer, y, y + h);
+        }
+        '\u{2561}' => {                                  // ╡
+            hd(renderer, x, cx);
+            vs(renderer, y, y + h);
+        }
+        '\u{2564}' => {                                  // ╤
+            vs(renderer, cy, y + h);
+            hd(renderer, x, x + w);
+        }
+        '\u{2567}' => {                                  // ╧
+            vs(renderer, y, cy);
+            hd(renderer, x, x + w);
+        }
+
+        // Double cross
+        '\u{256C}' => {                                  // ╬
+            // Four horizontal segments (two double lines broken by the vertical)
+            quad(renderer, Rectangle::new(Point::new(x, to), Size::new(lo + light - x, light)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, to), Size::new(x + w - ro + light, light)));
+            quad(renderer, Rectangle::new(Point::new(x, bo - light), Size::new(lo + light - x, light)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, bo - light), Size::new(x + w - ro + light, light)));
+            // Four vertical segments (two double lines broken by the horizontal)
+            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, to + light - y)));
+            quad(renderer, Rectangle::new(Point::new(lo, bo - light), Size::new(light, y + h - bo + light)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, to + light - y)));
+            quad(renderer, Rectangle::new(Point::new(ro - light, bo - light), Size::new(light, y + h - bo + light)));
+        }
+
+        // Double/single crosses
+        '\u{256A}' => {                                  // ╪ double horizontal, single vertical
+            hd(renderer, x, x + w);
+            vs(renderer, y, y + h);
+        }
+        '\u{256B}' => {                                  // ╫ single horizontal, double vertical
+            hs(renderer, x, x + w);
+            vd(renderer, y, y + h);
+        }
+
+        _ => {}
+    }
 }
