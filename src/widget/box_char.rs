@@ -316,16 +316,16 @@ fn draw_box_drawing(
     };
 
     if left != S::None {
-        h_stroke(renderer, x, cx + t(left) / 2.0, t(left));
+        h_stroke(renderer, x, cx, t(left));
     }
     if right != S::None {
-        h_stroke(renderer, cx - t(right) / 2.0, x + w, t(right));
+        h_stroke(renderer, cx, x + w, t(right));
     }
     if up != S::None {
-        v_stroke(renderer, y, cy + t(up) / 2.0, t(up));
+        v_stroke(renderer, y, cy, t(up));
     }
     if down != S::None {
-        v_stroke(renderer, cy - t(down) / 2.0, y + h, t(down));
+        v_stroke(renderer, cy, y + h, t(down));
     }
 }
 
@@ -527,151 +527,167 @@ fn draw_double(
     let to = (cy - off - light / 2.0).round();
     let bo = (cy + off - light / 2.0).round() + light;
 
+    // Individual line helpers for when the two double lines need different extents.
+    let h_upper = |renderer: &mut iced::Renderer, x0: f32, x1: f32| {
+        quad(renderer, Rectangle::new(Point::new(x0, to), Size::new(x1 - x0, light)));
+    };
+    let h_lower = |renderer: &mut iced::Renderer, x0: f32, x1: f32| {
+        quad(renderer, Rectangle::new(Point::new(x0, bo - light), Size::new(x1 - x0, light)));
+    };
+    let v_left = |renderer: &mut iced::Renderer, y0: f32, y1: f32| {
+        quad(renderer, Rectangle::new(Point::new(lo, y0), Size::new(light, y1 - y0)));
+    };
+    let v_right = |renderer: &mut iced::Renderer, y0: f32, y1: f32| {
+        quad(renderer, Rectangle::new(Point::new(ro - light, y0), Size::new(light, y1 - y0)));
+    };
+
     match c {
         // Straight lines
         '\u{2550}' => hd(renderer, x, x + w),          // ═
         '\u{2551}' => vd(renderer, y, y + h),           // ║
 
-        // Double corners
-        '\u{2554}' => {                                  // ╔
-            hd(renderer, cx, x + w);
-            // Left line: from top of lower h-stroke to bottom
-            quad(renderer, Rectangle::new(Point::new(lo, bo), Size::new(light, y + h - bo)));
-            // Right line: from top of upper h-stroke to bottom
-            quad(renderer, Rectangle::new(Point::new(ro - light, to), Size::new(light, y + h - to)));
+        // Double corners — each is two nested L-shapes.
+        '\u{2554}' => {                                  // ╔ right + down
+            h_upper(renderer, lo, x + w);                // outer: h from left-v to right edge
+            v_left(renderer, to, y + h);                 // outer: v from upper-h to bottom edge
+            h_lower(renderer, ro - light, x + w);        // inner: h from right-v to right edge
+            v_right(renderer, bo, y + h);                // inner: v from lower-h to bottom edge
         }
-        '\u{2557}' => {                                  // ╗
-            hd(renderer, x, cx);
-            quad(renderer, Rectangle::new(Point::new(lo, to), Size::new(light, y + h - to)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, bo), Size::new(light, y + h - bo)));
+        '\u{2557}' => {                                  // ╗ left + down
+            h_upper(renderer, x, ro);                    // outer: h from left edge to right-v
+            v_right(renderer, to, y + h);                // outer: v from upper-h to bottom edge
+            h_lower(renderer, x, lo + light);            // inner: h from left edge to left-v
+            v_left(renderer, bo, y + h);                 // inner: v from lower-h to bottom edge
         }
-        '\u{255A}' => {                                  // ╚
-            hd(renderer, cx, x + w);
-            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, bo - y)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, to + light - y)));
+        '\u{255A}' => {                                  // ╚ right + up
+            h_lower(renderer, lo, x + w);                // outer: h from left-v to right edge
+            v_left(renderer, y, bo - light);             // outer: v from top edge to lower-h
+            h_upper(renderer, ro - light, x + w);        // inner: h from right-v to right edge
+            v_right(renderer, y, to + light);            // inner: v from top edge to upper-h
         }
-        '\u{255D}' => {                                  // ╝
-            hd(renderer, x, cx);
-            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, to + light - y)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, bo - y)));
+        '\u{255D}' => {                                  // ╝ left + up
+            h_lower(renderer, x, ro);                    // outer: h from left edge to right-v
+            v_right(renderer, y, bo - light);            // outer: v from top edge to lower-h
+            h_upper(renderer, x, lo + light);            // inner: h from left edge to left-v
+            v_left(renderer, y, to + light);             // inner: v from top edge to upper-h
         }
 
         // Double/single corners: single horizontal, double vertical
-        '\u{2553}' => {                                  // ╓
+        '\u{2553}' => {                                  // ╓ right(s) + down(d)
             hs(renderer, cx, x + w);
             vd(renderer, cy, y + h);
         }
-        '\u{2556}' => {                                  // ╖
+        '\u{2556}' => {                                  // ╖ left(s) + down(d)
             hs(renderer, x, cx);
             vd(renderer, cy, y + h);
         }
-        '\u{2559}' => {                                  // ╙
+        '\u{2559}' => {                                  // ╙ right(s) + up(d)
             hs(renderer, cx, x + w);
             vd(renderer, y, cy);
         }
-        '\u{255C}' => {                                  // ╜
+        '\u{255C}' => {                                  // ╜ left(s) + up(d)
             hs(renderer, x, cx);
             vd(renderer, y, cy);
         }
 
         // Double/single corners: double horizontal, single vertical
-        '\u{2552}' => {                                  // ╒
+        '\u{2552}' => {                                  // ╒ right(d) + down(s)
             hd(renderer, cx, x + w);
             vs(renderer, cy, y + h);
         }
-        '\u{2555}' => {                                  // ╕
+        '\u{2555}' => {                                  // ╕ left(d) + down(s)
             hd(renderer, x, cx);
             vs(renderer, cy, y + h);
         }
-        '\u{2558}' => {                                  // ╘
+        '\u{2558}' => {                                  // ╘ right(d) + up(s)
             hd(renderer, cx, x + w);
             vs(renderer, y, cy);
         }
-        '\u{255B}' => {                                  // ╛
+        '\u{255B}' => {                                  // ╛ left(d) + up(s)
             hd(renderer, x, cx);
             vs(renderer, y, cy);
         }
 
-        // Double T-pieces
-        '\u{2560}' => {                                  // ╠
-            hd(renderer, cx, x + w);
-            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, to + light - y)));
-            quad(renderer, Rectangle::new(Point::new(lo, bo), Size::new(light, y + h - bo)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, y + h - y)));
+        // Double T-pieces — continuous line on one axis, two stubs on the other.
+        '\u{2560}' => {                                  // ╠ right + up/down
+            h_upper(renderer, ro - light, x + w);        // upper h from right-v
+            h_lower(renderer, ro - light, x + w);        // lower h from right-v
+            v_left(renderer, y, y + h);                  // left v continuous
+            v_right(renderer, y, to + light);            // right v: top segment
+            v_right(renderer, bo - light, y + h);        // right v: bottom segment
         }
-        '\u{2563}' => {                                  // ╣
-            hd(renderer, x, cx);
-            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, y + h - y)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, to + light - y)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, bo), Size::new(light, y + h - bo)));
+        '\u{2563}' => {                                  // ╣ left + up/down
+            h_upper(renderer, x, lo + light);            // upper h to left-v
+            h_lower(renderer, x, lo + light);            // lower h to left-v
+            v_right(renderer, y, y + h);                 // right v continuous
+            v_left(renderer, y, to + light);             // left v: top segment
+            v_left(renderer, bo - light, y + h);         // left v: bottom segment
         }
-        '\u{2566}' => {                                  // ╦
-            // Vertical double: from center down
-            vd(renderer, cy, y + h);
-            // Top h-line: spans full width
-            quad(renderer, Rectangle::new(Point::new(x, to), Size::new(w, light)));
-            // Bottom h-line: left segment and right segment (broken by vertical)
-            quad(renderer, Rectangle::new(Point::new(x, bo - light), Size::new(lo + light - x, light)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, bo - light), Size::new(x + w - ro + light, light)));
+        '\u{2566}' => {                                  // ╦ left/right + down
+            h_upper(renderer, x, x + w);                 // upper h continuous
+            h_lower(renderer, x, lo + light);            // lower h: left segment
+            h_lower(renderer, ro - light, x + w);        // lower h: right segment
+            v_left(renderer, bo - light, y + h);         // left v from lower-h
+            v_right(renderer, bo - light, y + h);        // right v from lower-h
         }
-        '\u{2569}' => {                                  // ╩
-            // Vertical double: from top to center
-            vd(renderer, y, cy);
-            // Top h-line: left segment and right segment (broken by vertical)
-            quad(renderer, Rectangle::new(Point::new(x, to), Size::new(lo + light - x, light)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, to), Size::new(x + w - ro + light, light)));
-            // Bottom h-line: spans full width
-            quad(renderer, Rectangle::new(Point::new(x, bo - light), Size::new(w, light)));
+        '\u{2569}' => {                                  // ╩ left/right + up
+            h_lower(renderer, x, x + w);                 // lower h continuous
+            h_upper(renderer, x, lo + light);            // upper h: left segment
+            h_upper(renderer, ro - light, x + w);        // upper h: right segment
+            v_left(renderer, y, to + light);             // left v to upper-h
+            v_right(renderer, y, to + light);            // right v to upper-h
         }
 
         // Double/single T-pieces: single horizontal, double vertical
-        '\u{255F}' => {                                  // ╟
+        '\u{255F}' => {                                  // ╟ right(s) + up/down(d)
             hs(renderer, cx, x + w);
             vd(renderer, y, y + h);
         }
-        '\u{2562}' => {                                  // ╢
+        '\u{2562}' => {                                  // ╢ left(s) + up/down(d)
             hs(renderer, x, cx);
             vd(renderer, y, y + h);
         }
-        '\u{2565}' => {                                  // ╥
-            vs(renderer, cy, y + h);
-            hd(renderer, x, x + w);
+        '\u{2565}' => {                                  // ╥ left/right(s) + down(d)
+            hs(renderer, x, x + w);
+            vd(renderer, cy, y + h);
         }
-        '\u{2568}' => {                                  // ╨
-            vs(renderer, y, cy);
-            hd(renderer, x, x + w);
+        '\u{2568}' => {                                  // ╨ left/right(s) + up(d)
+            hs(renderer, x, x + w);
+            vd(renderer, y, cy);
         }
 
         // Double/single T-pieces: double horizontal, single vertical
-        '\u{255E}' => {                                  // ╞
+        '\u{255E}' => {                                  // ╞ right(d) + up/down(s)
             hd(renderer, cx, x + w);
             vs(renderer, y, y + h);
         }
-        '\u{2561}' => {                                  // ╡
+        '\u{2561}' => {                                  // ╡ left(d) + up/down(s)
             hd(renderer, x, cx);
             vs(renderer, y, y + h);
         }
-        '\u{2564}' => {                                  // ╤
+        '\u{2564}' => {                                  // ╤ left/right(d) + down(s)
+            hd(renderer, x, x + w);
             vs(renderer, cy, y + h);
-            hd(renderer, x, x + w);
         }
-        '\u{2567}' => {                                  // ╧
-            vs(renderer, y, cy);
+        '\u{2567}' => {                                  // ╧ left/right(d) + up(s)
             hd(renderer, x, x + w);
+            vs(renderer, y, cy);
         }
 
         // Double cross
         '\u{256C}' => {                                  // ╬
-            // Four horizontal segments (two double lines broken by the vertical)
-            quad(renderer, Rectangle::new(Point::new(x, to), Size::new(lo + light - x, light)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, to), Size::new(x + w - ro + light, light)));
-            quad(renderer, Rectangle::new(Point::new(x, bo - light), Size::new(lo + light - x, light)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, bo - light), Size::new(x + w - ro + light, light)));
-            // Four vertical segments (two double lines broken by the horizontal)
-            quad(renderer, Rectangle::new(Point::new(lo, y), Size::new(light, to + light - y)));
-            quad(renderer, Rectangle::new(Point::new(lo, bo - light), Size::new(light, y + h - bo + light)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, y), Size::new(light, to + light - y)));
-            quad(renderer, Rectangle::new(Point::new(ro - light, bo - light), Size::new(light, y + h - bo + light)));
+            // Upper h-line: left and right segments
+            h_upper(renderer, x, lo + light);
+            h_upper(renderer, ro - light, x + w);
+            // Lower h-line: left and right segments
+            h_lower(renderer, x, lo + light);
+            h_lower(renderer, ro - light, x + w);
+            // Left v-line: top and bottom segments
+            v_left(renderer, y, to + light);
+            v_left(renderer, bo - light, y + h);
+            // Right v-line: top and bottom segments
+            v_right(renderer, y, to + light);
+            v_right(renderer, bo - light, y + h);
         }
 
         // Double/single crosses
