@@ -14,6 +14,8 @@ use alacritty_terminal::vte::ansi;
 use alacritty_terminal::{Grid, Term};
 use portable_pty::{MasterPty, PtySize};
 
+use futures::SinkExt;
+
 use crate::pty;
 use crate::ui::Message;
 
@@ -682,7 +684,7 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
                     let Ok(line) = line else { break };
                     let status = line.trim().to_string();
                     if let Some(s) = AgentStatus::from_str(&status) {
-                        if sender.try_send(Message::SetStatus(tab_id, s)).is_err() {
+                        if futures::executor::block_on(sender.send(Message::SetStatus(tab_id, s))).is_err() {
                             break;
                         }
                     }
@@ -708,13 +710,13 @@ fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::fut
                         Ok(0) | Err(_) => break,
                         Ok(bytes_read) => {
                             let bytes = read_buffer[..bytes_read].to_vec();
-                            if sender.try_send(Message::TerminalOutput(tab_id, bytes)).is_err() {
+                            if futures::executor::block_on(sender.send(Message::TerminalOutput(tab_id, bytes))).is_err() {
                                 break;
                             }
                         }
                     }
                 }
-                let _ = sender.try_send(Message::ShellExited(tab_id));
+                let _ = futures::executor::block_on(sender.send(Message::ShellExited(tab_id)));
                 let _ = exit_sender.send(());
             });
 
