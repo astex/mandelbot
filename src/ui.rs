@@ -4,6 +4,8 @@ use std::os::unix::net as unix;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use futures::SinkExt;
+
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Task, Theme};
 
@@ -838,7 +840,7 @@ fn parent_socket_stream(
                                 _ => None,
                             };
                             if let Some(message) = message {
-                                if sender.try_send(message).is_err() {
+                                if futures::executor::block_on(sender.send(message)).is_err() {
                                     break;
                                 }
                             }
