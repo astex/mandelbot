@@ -457,7 +457,7 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
     let set_status = |status: &str| -> serde_json::Value {
         serde_json::json!({
             "type": "command",
-            "command": format!("echo {status} > $MANDELBOT_FIFO"),
+            "command": format!("echo status:{status} > $MANDELBOT_FIFO"),
         })
     };
 
@@ -469,7 +469,7 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
         serde_json::json!({
             "type": "command",
             "command": format!(
-                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || echo {status} > $MANDELBOT_FIFO"#,
+                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || echo status:{status} > $MANDELBOT_FIFO"#,
             ),
         })
     };
@@ -711,7 +711,7 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
                                 break;
                             }
                         }
-                    } else if let Some(s) = AgentStatus::from_str(trimmed) {
+                    } else if let Some(s) = trimmed.strip_prefix("status:").and_then(AgentStatus::from_str) {
                         if futures::executor::block_on(sender.send(Message::SetStatus(tab_id, s))).is_err() {
                             break;
                         }
