@@ -80,6 +80,7 @@ pub struct TerminalTab {
     pub project_id: Option<usize>,
     pub title: Option<String>,
     pub status: AgentStatus,
+    pub background_tasks: usize,
     pub pending_input: Option<String>,
     term: Term<TermEventListener>,
     listener: TermEventListener,
@@ -192,6 +193,7 @@ impl TerminalTab {
             project_id,
             title: None,
             status: AgentStatus::default(),
+            background_tasks: 0,
             pending_input: None,
             term,
             listener,
@@ -220,6 +222,7 @@ impl TerminalTab {
             project_id: Some(id),
             title: None,
             status: AgentStatus::default(),
+            background_tasks: 0,
             pending_input: Some(String::new()),
             term,
             listener,
@@ -454,7 +457,7 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
     let set_status = |status: &str| -> serde_json::Value {
         serde_json::json!({
             "type": "command",
-            "command": format!("echo {status} > $MANDELBOT_FIFO"),
+            "command": format!("echo status:{status} > $MANDELBOT_FIFO"),
         })
     };
 
@@ -466,10 +469,23 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
         serde_json::json!({
             "type": "command",
             "command": format!(
-                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || echo {status} > $MANDELBOT_FIFO"#,
+                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || echo status:{status} > $MANDELBOT_FIFO"#,
             ),
         })
     };
+
+    // Count background tasks: children of the claude process minus
+    // infrastructure (MCP server, LSP, caffeinate) and the hook shell itself.
+    let count_bg_tasks = serde_json::json!({
+        "type": "command",
+        "command": concat!(
+            "echo bg_tasks:$(pgrep -P $PPID 2>/dev/null",
+            " | grep -v ^$$\\$",
+            " | xargs -I{} ps -o comm= -p {} 2>/dev/null",
+            " | grep -cv 'mandelbot\\|langserver\\|caffeinate'",
+            ") > $MANDELBOT_FIFO",
+        ),
+    });
 
     let settings = serde_json::json!({
         "hooks": {
@@ -478,7 +494,7 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
             }],
             "PreToolUse": [{
                 "matcher": "",
-                "hooks": [set_status("working")],
+                "hooks": [set_status("working"), count_bg_tasks],
             }],
             "PermissionRequest": [
                 {
@@ -489,15 +505,21 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
                     "hooks": [set_status("needs_review")],
                 },
             ],
-            "PostToolUse": [{
-                "matcher": "",
-                "hooks": [set_status("working")],
-            }],
+            "PostToolUse": [
+                {
+                    "matcher": "",
+                    "hooks": [set_status("working")],
+                },
+                {
+                    "matcher": "Bash",
+                    "hooks": [count_bg_tasks],
+                },
+            ],
             "PostToolUseFailure": [{
                 "hooks": [set_status("working")],
             }],
             "Stop": [{
-                "hooks": [set_status("idle")],
+                "hooks": [set_status("idle"), count_bg_tasks],
             }],
             "StopFailure": [{
                 "hooks": [set_status("error")],
@@ -682,8 +704,14 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
                 let reader = std::io::BufReader::new(file);
                 for line in reader.lines() {
                     let Ok(line) = line else { break };
-                    let status = line.trim().to_string();
-                    if let Some(s) = AgentStatus::from_str(&status) {
+                    let trimmed = line.trim();
+                    if let Some(count_str) = trimmed.strip_prefix("bg_tasks:") {
+                        if let Ok(n) = count_str.parse::<usize>() {
+                            if futures::executor::block_on(sender.send(Message::SetBackgroundTasks(tab_id, n))).is_err() {
+                                break;
+                            }
+                        }
+                    } else if let Some(s) = trimmed.strip_prefix("status:").and_then(AgentStatus::from_str) {
                         if futures::executor::block_on(sender.send(Message::SetStatus(tab_id, s))).is_err() {
                             break;
                         }

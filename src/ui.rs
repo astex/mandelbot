@@ -18,7 +18,7 @@ use crate::theme::TerminalTheme;
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
-const TAB_BAR_WIDTH: f32 = 320.0;
+const TAB_BAR_WIDTH: f32 = 400.0;
 const TAB_GROUP_GAP: f32 = 28.0;
 const INITIAL_ROWS: u16 = 50;
 const INITIAL_COLS: u16 = 120;
@@ -60,6 +60,7 @@ pub enum Message {
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>),
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
+    SetBackgroundTasks(usize, usize),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
 }
@@ -372,6 +373,12 @@ impl App {
                 }
                 Task::none()
             }
+            Message::SetBackgroundTasks(tab_id, count) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.background_tasks = count;
+                }
+                Task::none()
+            }
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -661,6 +668,12 @@ impl App {
             let label = container(label).width(Fill).clip(true);
 
             let mut suffix = row![].align_y(Alignment::Center);
+            if tab.is_claude && tab.background_tasks > 0 {
+                let bg_label = format!("+{}", tab.background_tasks);
+                suffix = suffix
+                    .push(text(bg_label).size(self.config.font_size * 0.75).font(Font::MONOSPACE).color(self.terminal_theme.cyan))
+                    .push(Space::new().width(6));
+            }
             if tab.is_claude {
                 let dot_size = self.config.font_size * 0.6;
                 let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
