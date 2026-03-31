@@ -690,27 +690,53 @@ impl App {
             }
         };
 
+        // Determine whether to show group separator lines.
+        let has_shells = self.tabs.iter().any(|t| !t.is_claude);
+        let has_agents = self.tabs.iter().any(|t| t.is_claude);
+        let project_count = self.tabs.iter().filter(|t| t.rank == AgentRank::Project).count();
+        let show_separators = (has_agents && has_shells) || project_count > 1;
+
+        let separator = || -> Element<'_, Message> {
+            let muted = Color { a: 0.25, ..fg };
+            container(Space::new())
+                .width(TAB_BAR_WIDTH)
+                .height(1)
+                .style(move |_theme: &Theme| container::Style {
+                    background: Some(muted.into()),
+                    ..Default::default()
+                })
+                .into()
+        };
+
         // Agent tree: Home → Projects → Tasks.
         let indent_step = 20.0_f32;
-        let mut has_agents = false;
         for (display_idx, &tab_id) in display_order.iter().enumerate() {
             let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if !tab.is_claude { continue; }
-            has_agents = true;
+            if show_separators && tab.rank == AgentRank::Project {
+                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+                tab_col = tab_col.push(separator());
+                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+            }
             let indent = tab.depth as f32 * indent_step;
             tab_col = tab_col.push(tab_button(tab, display_idx, self.active_tab_id, indent));
         }
 
-        // Gap between agent tree and shell tabs.
-        let has_shells = self.tabs.iter().any(|t| !t.is_claude);
-        if has_agents && has_shells {
-            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
-        }
-
         // Shell tabs (flat).
+        let mut first_shell = true;
         for (display_idx, &tab_id) in display_order.iter().enumerate() {
             let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if tab.is_claude { continue; }
+            if first_shell {
+                first_shell = false;
+                if show_separators {
+                    tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+                    tab_col = tab_col.push(separator());
+                    tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+                } else if has_agents {
+                    tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
+                }
+            }
             tab_col = tab_col.push(tab_button(tab, display_idx, self.active_tab_id, 0.0));
         }
 
