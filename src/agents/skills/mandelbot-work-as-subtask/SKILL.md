@@ -6,7 +6,22 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep]
 
 # Work as a Subtask
 
-You have been spawned as part of a coordinated multi-agent workflow. Your prompt includes a **coordination file path** and a **task number**. Follow this protocol.
+You have been spawned as part of a coordinated multi-agent workflow. Your prompt includes a **coordination file path**, a **task number**, and a **branch name**. Follow this protocol.
+
+## Worktree Isolation
+
+You are running in your own git worktree — an isolated copy of the repository. All repository changes (code, config, etc.) must happen within this worktree. Do not `cd` to the original repository root or make changes to it. You may write to `/tmp` and to `~/.mandelbot` (e.g., the coordination status file).
+
+## Branch Ownership
+
+You own exactly one branch. Before starting any work:
+
+```bash
+git checkout -b <branch-name>            # or, if a base branch was specified:
+git checkout -b <branch-name> <base>
+```
+
+All of your commits go on this branch. When your work is complete, push the branch and create a PR for it unless your prompt explicitly says otherwise.
 
 ## Workflow
 
