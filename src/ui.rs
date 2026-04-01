@@ -285,7 +285,16 @@ impl App {
                 let home = std::env::var("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("."));
-                let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, None);
+                let mandelbot_dir = home.join(".mandelbot");
+                let _ = std::fs::create_dir_all(&mandelbot_dir);
+                let initialized = mandelbot_dir.join(".initialized");
+                let first_run_prompt = if !initialized.exists() {
+                    let _ = std::fs::write(&initialized, "");
+                    Some("/mandelbot-features".to_string())
+                } else {
+                    None
+                };
+                let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, first_run_prompt);
                 self.focus_tab(id);
                 if let Some(tab) = self.active_tab_mut() {
                     tab.title = Some("home".into());
