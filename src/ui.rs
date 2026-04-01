@@ -60,7 +60,8 @@ pub enum Message {
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>),
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
-    SetBackgroundTasks(usize, usize),
+    BgTaskStarted(usize, u32),
+    BgTaskEnded(usize, u32),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
 }
@@ -373,9 +374,15 @@ impl App {
                 }
                 Task::none()
             }
-            Message::SetBackgroundTasks(tab_id, count) => {
+            Message::BgTaskStarted(tab_id, pid) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                    tab.background_tasks = count;
+                    tab.background_tasks += 1;
+                }
+                Task::run(monitor_pid(tab_id, pid), |msg| msg)
+            }
+            Message::BgTaskEnded(tab_id, _pid) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.background_tasks = tab.background_tasks.saturating_sub(1);
                 }
                 Task::none()
             }
@@ -896,4 +903,40 @@ fn parent_socket_stream(
             let _ = exit_receiver.await;
         },
     )
+}
+
+/// Check whether a process is still running (not exited or zombie).
+fn is_process_running(pid: u32) -> bool {
+    let path = format!("/proc/{pid}/stat");
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => {
+            // /proc/PID/stat format: "pid (comm) state ..."
+            // State is the first character after the last ')'.
+            contents
+                .rfind(')')
+                .and_then(|i| contents[i + 1..].trim_start().chars().next())
+                .is_some_and(|state| state != 'Z')
+        }
+        Err(_) => false, // process gone
+    }
+}
+
+fn monitor_pid(tab_id: usize, pid: u32) -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(1, move |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+        let (tx, rx) = iced::futures::channel::oneshot::channel::<()>();
+        std::thread::spawn(move || {
+            use std::time::Duration;
+            loop {
+                if !is_process_running(pid) {
+                    let _ = futures::executor::block_on(
+                        sender.send(Message::BgTaskEnded(tab_id, pid)),
+                    );
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            let _ = tx.send(());
+        });
+        let _ = rx.await;
+    })
 }

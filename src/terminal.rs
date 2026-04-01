@@ -474,16 +474,21 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
         })
     };
 
-    // Count background tasks: children of the claude process minus
-    // infrastructure (MCP server, LSP, caffeinate) and the hook shell itself.
-    let count_bg_tasks = serde_json::json!({
+    // Snapshot children before each Bash tool so we can diff after.
+    let snapshot_children = serde_json::json!({
+        "type": "command",
+        "command": "pgrep -P $PPID 2>/dev/null | sort > ${MANDELBOT_FIFO}.pids",
+    });
+
+    // After a Bash tool with run_in_background, diff against the snapshot to
+    // find newly spawned children and report their PIDs for monitoring.
+    let track_bg_task = serde_json::json!({
         "type": "command",
         "command": concat!(
-            "echo bg_tasks:$(pgrep -P $PPID 2>/dev/null",
-            " | grep -v ^$$\\$",
-            " | xargs -I{} ps -o comm= -p {} 2>/dev/null",
-            " | grep -cv 'mandelbot\\|langserver\\|caffeinate'",
-            ") > $MANDELBOT_FIFO",
+            r#"grep -q '"run_in_background" *: *true' && "#,
+            r#"pgrep -P $PPID 2>/dev/null | grep -xv $$ | sort | "#,
+            r#"comm -13 ${MANDELBOT_FIFO}.pids - | "#,
+            r#"while read pid; do echo bg_task:$pid; done > $MANDELBOT_FIFO"#,
         ),
     });
 
@@ -492,10 +497,16 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
             "UserPromptSubmit": [{
                 "hooks": [set_status("working")],
             }],
-            "PreToolUse": [{
-                "matcher": "",
-                "hooks": [set_status("working"), count_bg_tasks],
-            }],
+            "PreToolUse": [
+                {
+                    "matcher": "",
+                    "hooks": [set_status("working")],
+                },
+                {
+                    "matcher": "Bash",
+                    "hooks": [snapshot_children],
+                },
+            ],
             "PermissionRequest": [
                 {
                     "hooks": [set_status_unless_exit_plan("blocked")],
@@ -512,14 +523,14 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
                 },
                 {
                     "matcher": "Bash",
-                    "hooks": [count_bg_tasks],
+                    "hooks": [track_bg_task],
                 },
             ],
             "PostToolUseFailure": [{
                 "hooks": [set_status("working")],
             }],
             "Stop": [{
-                "hooks": [set_status("idle"), count_bg_tasks],
+                "hooks": [set_status("idle")],
             }],
             "StopFailure": [{
                 "hooks": [set_status("error")],
@@ -705,9 +716,9 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
                 for line in reader.lines() {
                     let Ok(line) = line else { break };
                     let trimmed = line.trim();
-                    if let Some(count_str) = trimmed.strip_prefix("bg_tasks:") {
-                        if let Ok(n) = count_str.parse::<usize>() {
-                            if futures::executor::block_on(sender.send(Message::SetBackgroundTasks(tab_id, n))).is_err() {
+                    if let Some(pid_str) = trimmed.strip_prefix("bg_task:") {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            if futures::executor::block_on(sender.send(Message::BgTaskStarted(tab_id, pid))).is_err() {
                                 break;
                             }
                         }
