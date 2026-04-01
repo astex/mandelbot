@@ -722,6 +722,7 @@ impl App {
         };
 
         // Agent tree: Home → Projects → Tasks.
+        tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
         let indent_step = 20.0_f32;
         for (display_idx, &tab_id) in display_order.iter().enumerate() {
             let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
