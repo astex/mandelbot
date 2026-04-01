@@ -2,6 +2,8 @@
 
 A fractal agent tree for agentic development.
 
+![Screenshot of Mandelbot](assets/screenshot.png)
+
 Mandelbot is a terminal emulator that organizes agents into a hierarchical tree. Each node is a sandboxed virtual terminal with its own context, working directory, and prompting — scoped to a layer of work (system, project, change, sub-task). Agents communicate up and down the tree.
 
 ## Installing
@@ -31,4 +33,4 @@ cargo build
 
 ## Status
 
-Early exploration / hobby project.
+Beta — stable enough for daily use.
