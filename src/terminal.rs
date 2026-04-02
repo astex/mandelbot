@@ -260,6 +260,11 @@ impl TerminalTab {
 
     /// Detect Claude Code's prompt frame and read the background shell count.
     ///
+    /// Claude Code doesn't fire a hook when a background task ends, and
+    /// scanning child processes with pgrep produces false positives (MCP
+    /// servers, zombies, etc.). Instead we read the "· N shells" indicator
+    /// that Claude already renders in its prompt status line.
+    ///
     /// Returns `Some(n)` if the prompt is visible (n=0 means no shells indicator),
     /// or `None` if the prompt isn't detected (interactive mode, etc.).
     fn detect_prompt_shell_count(&self) -> Option<usize> {
