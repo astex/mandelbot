@@ -11,6 +11,7 @@ use super::box_char;
 pub fn draw(
     renderer: &mut iced::Renderer,
     c: char,
+    zerowidth: Option<&[char]>,
     flags: Flags,
     fg: Color,
     cell_bounds: Rectangle,
@@ -47,7 +48,17 @@ pub fn draw(
 
     renderer.fill_text(
         Text {
-            content: c.to_string(),
+            content: match zerowidth {
+                Some(chars) if !chars.is_empty() => {
+                    let mut s = String::with_capacity(c.len_utf8() + chars.len() * 4);
+                    s.push(c);
+                    for &ch in chars {
+                        s.push(ch);
+                    }
+                    s
+                }
+                _ => c.to_string(),
+            },
             bounds: Size::new(cell_width * 2.0, row_height),
             size: font_size.into(),
             line_height: text::LineHeight::Relative(line_height),

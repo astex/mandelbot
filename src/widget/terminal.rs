@@ -356,6 +356,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 super::cell::draw(
                     renderer,
                     cell.c,
+                    cell.zerowidth(),
                     cell.flags,
                     fg,
                     cell_bounds,
