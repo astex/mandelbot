@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
@@ -88,6 +88,8 @@ enum Interaction {
     },
 }
 
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
+
 #[derive(Default)]
 struct TerminalState {
     interaction: Interaction,
@@ -97,6 +99,10 @@ struct TerminalState {
     last_click_time: Option<Instant>,
     last_click_point: Option<Point>,
     modifiers: keyboard::Modifiers,
+    /// When the cursor last toggled visibility for blinking.
+    cursor_blink_last_toggle: Option<Instant>,
+    /// Whether the cursor is currently visible in the blink cycle.
+    cursor_blink_visible: bool,
 }
 
 pub struct TerminalWidget<'a> {
@@ -287,7 +293,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         let grid = self.tab.grid();
         let display_offset = grid.display_offset();
         let cursor_point = grid.cursor.point;
-        let show_cursor = self.tab.mode().contains(TermMode::SHOW_CURSOR);
+        let blink_state = tree.state.downcast_ref::<TerminalState>();
+        let show_cursor = self.tab.mode().contains(TermMode::SHOW_CURSOR)
+            && (!self.tab.cursor_blinking() || blink_state.cursor_blink_visible);
         let selection_range = self.tab.selection_range();
 
         use std::sync::OnceLock;
@@ -693,6 +701,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 if let Some(bytes) = key_to_bytes(&key, text.as_deref(), *modifiers) {
                     shell.publish(Message::SetSelection(None));
                     shell.publish(Message::PtyInput(bytes));
+                    // Reset cursor blink to visible on input.
+                    state.cursor_blink_visible = true;
+                    state.cursor_blink_last_toggle = Some(Instant::now());
                     shell.capture_event();
                 } else if let Some(scroll) = key_to_scroll(&key, *modifiers, self.tab.rows()) {
                     shell.publish(Message::Scroll(scroll));
@@ -729,6 +740,24 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 shell.request_redraw();
             }
             _ => {}
+        }
+
+        // Drive cursor blink timer.
+        if self.tab.cursor_blinking() && self.tab.mode().contains(TermMode::SHOW_CURSOR) {
+            let now = Instant::now();
+            let last = state.cursor_blink_last_toggle.get_or_insert(now);
+            if now.duration_since(*last) >= CURSOR_BLINK_INTERVAL {
+                state.cursor_blink_visible = !state.cursor_blink_visible;
+                state.cursor_blink_last_toggle = Some(now);
+                shell.request_redraw();
+            }
+            // Schedule next toggle.
+            let next = state.cursor_blink_last_toggle.unwrap() + CURSOR_BLINK_INTERVAL;
+            shell.request_redraw_at(next);
+        } else {
+            // Blinking disabled — ensure cursor stays visible.
+            state.cursor_blink_visible = true;
+            state.cursor_blink_last_toggle = None;
         }
     }
 }
