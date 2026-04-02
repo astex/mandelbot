@@ -11,6 +11,9 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
             // www-prefixed
             r"www\.\S+",
         r"|",
+            // GitHub shorthand: org/repo#123
+            r"[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+#[0-9]+",
+        r"|",
             // Bare domains with common TLDs
             r"[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?",
             r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*",
@@ -55,6 +58,12 @@ pub fn find_url_at(text: &str, char_offset: usize) -> Option<UrlMatch> {
                 || matched.starts_with("file:///")
             {
                 matched.to_string()
+            } else if let Some((repo, number)) = matched.split_once('#') {
+                if repo.contains('/') && !repo.contains('.') && number.chars().all(|c| c.is_ascii_digit()) {
+                    format!("https://github.com/{repo}/pull/{number}")
+                } else {
+                    format!("https://{matched}")
+                }
             } else {
                 format!("https://{matched}")
             };
@@ -117,5 +126,21 @@ mod tests {
         let text = "go to therapykit.com/pricing now";
         let m = find_url_at(text, 6).unwrap();
         assert_eq!(m.url, "https://therapykit.com/pricing");
+    }
+
+    #[test]
+    fn github_pr_shorthand() {
+        let text = "see anthropics/claude-code#100 for details";
+        let m = find_url_at(text, 4).unwrap();
+        assert_eq!(m.url, "https://github.com/anthropics/claude-code/pull/100");
+        assert_eq!(m.start, 4);
+        assert_eq!(m.end, 30);
+    }
+
+    #[test]
+    fn github_pr_shorthand_at_end() {
+        let text = "fixed in astex/mandelbot#73.";
+        let m = find_url_at(text, 9).unwrap();
+        assert_eq!(m.url, "https://github.com/astex/mandelbot/pull/73");
     }
 }
