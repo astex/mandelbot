@@ -147,8 +147,8 @@ mod tests {
 
     #[test]
     fn github_pr_shorthand_dotted_repo() {
-        let text = "see astex/therapykit.com#42 for details";
+        let text = "see acme/example.com#42 for details";
         let m = find_url_at(text, 4).unwrap();
-        assert_eq!(m.url, "https://github.com/astex/therapykit.com/pull/42");
+        assert_eq!(m.url, "https://github.com/acme/example.com/pull/42");
     }
 }
