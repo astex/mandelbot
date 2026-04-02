@@ -399,7 +399,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     let underline_y = cell_bounds.y + cell_bounds.height - thickness * 2.0;
 
                     if cell.flags.contains(Flags::UNDERCURL) {
-                        draw_curly_underline(
+                        super::text_decorations::draw_curly_underline(
                             renderer,
                             cell_bounds.x,
                             underline_y,
@@ -408,7 +408,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                             underline_color,
                         );
                     } else if cell.flags.contains(Flags::DOTTED_UNDERLINE) {
-                        draw_dotted_underline(
+                        super::text_decorations::draw_dotted_underline(
                             renderer,
                             cell_bounds.x,
                             underline_y,
@@ -417,7 +417,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                             underline_color,
                         );
                     } else if cell.flags.contains(Flags::DASHED_UNDERLINE) {
-                        draw_dashed_underline(
+                        super::text_decorations::draw_dashed_underline(
                             renderer,
                             cell_bounds.x,
                             underline_y,
@@ -426,7 +426,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                             underline_color,
                         );
                     } else if cell.flags.contains(Flags::DOUBLE_UNDERLINE) {
-                        draw_solid_underline(
+                        super::text_decorations::draw_solid_underline(
                             renderer,
                             cell_bounds.x,
                             underline_y - thickness * 2.0,
@@ -434,7 +434,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                             thickness,
                             underline_color,
                         );
-                        draw_solid_underline(
+                        super::text_decorations::draw_solid_underline(
                             renderer,
                             cell_bounds.x,
                             underline_y,
@@ -444,7 +444,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         );
                     } else {
                         // UNDERLINE (solid)
-                        draw_solid_underline(
+                        super::text_decorations::draw_solid_underline(
                             renderer,
                             cell_bounds.x,
                             underline_y,
@@ -995,106 +995,6 @@ fn ansi_256_to_color(idx: u8, theme: &TerminalTheme) -> Color {
             let gray = 8 + (idx - 232) * 10;
             Color::from_rgb8(gray, gray, gray)
         }
-    }
-}
-
-fn draw_solid_underline(
-    renderer: &mut iced::Renderer,
-    x: f32,
-    y: f32,
-    width: f32,
-    thickness: f32,
-    color: Color,
-) {
-    renderer.fill_quad(
-        Quad {
-            bounds: Rectangle::new(Point::new(x, y), Size::new(width, thickness)),
-            border: Border::default(),
-            ..Quad::default()
-        },
-        color,
-    );
-}
-
-fn draw_dotted_underline(
-    renderer: &mut iced::Renderer,
-    x: f32,
-    y: f32,
-    width: f32,
-    thickness: f32,
-    color: Color,
-) {
-    let dot_width = thickness;
-    let gap = thickness * 2.0;
-    let stride = dot_width + gap;
-    let mut cx = x;
-    while cx < x + width {
-        let w = dot_width.min(x + width - cx);
-        renderer.fill_quad(
-            Quad {
-                bounds: Rectangle::new(Point::new(cx, y), Size::new(w, thickness)),
-                border: Border::default(),
-                ..Quad::default()
-            },
-            color,
-        );
-        cx += stride;
-    }
-}
-
-fn draw_dashed_underline(
-    renderer: &mut iced::Renderer,
-    x: f32,
-    y: f32,
-    width: f32,
-    thickness: f32,
-    color: Color,
-) {
-    let dash_width = width * 0.4;
-    let gap = width * 0.1;
-    let stride = dash_width + gap;
-    let mut cx = x;
-    while cx < x + width {
-        let w = dash_width.min(x + width - cx);
-        renderer.fill_quad(
-            Quad {
-                bounds: Rectangle::new(Point::new(cx, y), Size::new(w, thickness)),
-                border: Border::default(),
-                ..Quad::default()
-            },
-            color,
-        );
-        cx += stride;
-    }
-}
-
-fn draw_curly_underline(
-    renderer: &mut iced::Renderer,
-    x: f32,
-    y: f32,
-    width: f32,
-    thickness: f32,
-    color: Color,
-) {
-    // Approximate a sine wave with small quads.
-    let amplitude = thickness * 2.0;
-    let steps = (width / thickness).ceil().max(4.0) as usize;
-    let step_width = width / steps as f32;
-    for i in 0..steps {
-        let t = i as f32 / steps as f32;
-        let angle = t * std::f32::consts::TAU;
-        let dy = angle.sin() * amplitude;
-        renderer.fill_quad(
-            Quad {
-                bounds: Rectangle::new(
-                    Point::new(x + i as f32 * step_width, y + dy),
-                    Size::new(step_width.ceil(), thickness),
-                ),
-                border: Border::default(),
-                ..Quad::default()
-            },
-            color,
-        );
     }
 }
 
