@@ -69,6 +69,7 @@ if xcrun --find actool &>/dev/null; then
 }
 CJSON
 
+  mkdir -p "$TMPDIR/car-output"
   xcrun actool "$XCASSETS" \
     --compile "$TMPDIR/car-output" \
     --platform macosx \
