@@ -644,7 +644,7 @@ impl App {
             let tab_id = tab.id;
 
             let base_bg = if is_active { active_bg } else { inactive_bg };
-            let bg = self.bell_flashes.tab_bg(tab_id, base_bg, self.terminal_theme.yellow);
+            let bg = self.bell_flashes.blend(tab_id, base_bg, self.terminal_theme.yellow);
 
             let label_text: String = if tab.is_pending() {
                 "new project...".into()
