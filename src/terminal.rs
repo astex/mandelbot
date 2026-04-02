@@ -9,7 +9,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange};
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::{Config, TermMode};
+use alacritty_terminal::term::{ClipboardType, Config, TermMode};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{self, Rgb};
 use alacritty_terminal::{Grid, Term};
@@ -39,6 +39,19 @@ impl Default for TermColors {
     }
 }
 
+/// A clipboard store request captured from the terminal.
+pub struct ClipboardStoreRequest {
+    pub clipboard_type: ClipboardType,
+    pub text: String,
+}
+
+/// A clipboard load request captured from the terminal.
+/// The `formatter` converts clipboard text into the escape sequence to write back.
+pub struct ClipboardLoadRequest {
+    pub clipboard_type: ClipboardType,
+    pub formatter: Arc<dyn Fn(&str) -> String + Sync + Send + 'static>,
+}
+
 #[derive(Clone)]
 struct TermEventListener {
     title: Arc<Mutex<Option<String>>>,
@@ -47,6 +60,8 @@ struct TermEventListener {
     window_size: Arc<Mutex<WindowSize>>,
     /// Responses to write back to the PTY, drained after each `feed()`.
     pty_responses: Arc<Mutex<Vec<String>>>,
+    clipboard_stores: Arc<Mutex<Vec<ClipboardStoreRequest>>>,
+    clipboard_loads: Arc<Mutex<Vec<ClipboardLoadRequest>>>,
 }
 
 impl TermEventListener {
@@ -62,6 +77,8 @@ impl TermEventListener {
                 cell_height: 0,
             })),
             pty_responses: Arc::new(Mutex::new(Vec::new())),
+            clipboard_stores: Arc::new(Mutex::new(Vec::new())),
+            clipboard_loads: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -93,6 +110,18 @@ impl EventListener for TermEventListener {
                 let size = *self.window_size.lock().unwrap();
                 let response = callback(size);
                 self.pty_responses.lock().unwrap().push(response);
+            }
+            Event::ClipboardStore(clipboard_type, text) => {
+                self.clipboard_stores.lock().unwrap().push(ClipboardStoreRequest {
+                    clipboard_type,
+                    text,
+                });
+            }
+            Event::ClipboardLoad(clipboard_type, formatter) => {
+                self.clipboard_loads.lock().unwrap().push(ClipboardLoadRequest {
+                    clipboard_type,
+                    formatter,
+                });
             }
             _ => {}
         }
@@ -433,6 +462,16 @@ impl TerminalTab {
     /// Update the window size used for OSC 18/19 text area size query responses.
     pub fn set_window_size(&self, size: WindowSize) {
         *self.listener.window_size.lock().unwrap() = size;
+    }
+
+    /// Drain any pending clipboard store requests.
+    pub fn take_clipboard_stores(&self) -> Vec<ClipboardStoreRequest> {
+        std::mem::take(&mut *self.listener.clipboard_stores.lock().unwrap())
+    }
+
+    /// Drain any pending clipboard load requests.
+    pub fn take_clipboard_loads(&self) -> Vec<ClipboardLoadRequest> {
+        std::mem::take(&mut *self.listener.clipboard_loads.lock().unwrap())
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {

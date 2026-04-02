@@ -74,6 +74,7 @@ pub enum Message {
     BellTick,
     FoldTab,
     UnfoldTab(usize),
+    ClipboardLoadResult(usize, Option<String>),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -421,6 +422,7 @@ impl App {
                 Task::none()
             }
             Message::TerminalOutput(tab_id, bytes) => {
+                let mut tasks: Vec<Task<Message>> = Vec::new();
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.feed(&bytes);
                     if !tab.is_claude {
@@ -431,8 +433,38 @@ impl App {
                     if tab.take_bell() {
                         return self.bell_flashes.trigger(tab_id);
                     }
+
+                    // Handle clipboard store requests (OSC 52 set).
+                    for store in tab.take_clipboard_stores() {
+                        let task = match store.clipboard_type {
+                            alacritty_terminal::term::ClipboardType::Clipboard => {
+                                iced::clipboard::write(store.text)
+                            }
+                            alacritty_terminal::term::ClipboardType::Selection => {
+                                iced::clipboard::write_primary(store.text)
+                            }
+                        };
+                        tasks.push(task);
+                    }
+
+                    // Handle clipboard load requests (OSC 52 query).
+                    for load in tab.take_clipboard_loads() {
+                        let task = match load.clipboard_type {
+                            alacritty_terminal::term::ClipboardType::Clipboard => {
+                                iced::clipboard::read()
+                            }
+                            alacritty_terminal::term::ClipboardType::Selection => {
+                                iced::clipboard::read_primary()
+                            }
+                        };
+                        let task = task.map(move |content| {
+                            let response = content.map(|text| (load.formatter)(&text));
+                            Message::ClipboardLoadResult(tab_id, response)
+                        });
+                        tasks.push(task);
+                    }
                 }
-                Task::none()
+                Task::batch(tasks)
             }
             Message::ShellExited(tab_id) => self.close_tab(tab_id),
             Message::SetTitle(tab_id, title) => {
@@ -762,6 +794,14 @@ impl App {
             Message::UpdateSelection(point, side) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.update_selection(point, side);
+                }
+                Task::none()
+            }
+            Message::ClipboardLoadResult(tab_id, response) => {
+                if let Some(response) = response {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        tab.write_input(response.as_bytes());
+                    }
                 }
                 Task::none()
             }
