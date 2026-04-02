@@ -74,6 +74,11 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
+      - name: Generate .icns icon
+        run: |
+          brew install librsvg
+          scripts/generate-icns.sh
+
       - name: Bundle .app
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
