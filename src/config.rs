@@ -193,21 +193,41 @@ fn config_path() -> PathBuf {
     PathBuf::from(home).join(".mandelbot").join("config.json")
 }
 
-/// Find font bytes by family name using fontdb.
-pub fn find_font_bytes(name: &str) -> Option<Vec<u8>> {
+/// Find font bytes for all style variants (regular, italic, bold, bold-italic)
+/// of a family name using fontdb.
+pub fn find_font_variants(name: &str) -> Vec<Vec<u8>> {
     if name == "monospace" {
-        return None;
+        return Vec::new();
     }
 
     let mut db = Database::new();
     db.load_system_fonts();
 
-    let query = fontdb::Query {
-        families: &[fontdb::Family::Name(name)],
-        ..fontdb::Query::default()
-    };
+    let families = &[fontdb::Family::Name(name)];
+    let styles = [
+        (fontdb::Weight::NORMAL, fontdb::Style::Normal),
+        (fontdb::Weight::NORMAL, fontdb::Style::Italic),
+        (fontdb::Weight::BOLD, fontdb::Style::Normal),
+        (fontdb::Weight::BOLD, fontdb::Style::Italic),
+    ];
 
-    db.query(&query).and_then(|id| {
-        db.with_face_data(id, |data, _| data.to_vec())
-    })
+    let mut results = Vec::new();
+    let mut seen_ids = Vec::new();
+    for (weight, style) in styles {
+        let query = fontdb::Query {
+            families,
+            weight,
+            style,
+            ..fontdb::Query::default()
+        };
+        if let Some(id) = db.query(&query) {
+            if !seen_ids.contains(&id) {
+                seen_ids.push(id);
+                if let Some(data) = db.with_face_data(id, |data, _| data.to_vec()) {
+                    results.push(data);
+                }
+            }
+        }
+    }
+    results
 }
