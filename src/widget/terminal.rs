@@ -155,6 +155,13 @@ impl<'a> TerminalWidget<'a> {
 
     fn detect_link(&self, bounds: &Rectangle, pos: Point) -> Option<Interaction> {
         let (grid_point, _side) = self.pixel_to_grid(bounds, pos);
+
+        // Try OSC8 hyperlink first — the cell itself carries the URL.
+        if let Some(link) = self.detect_osc8_link(grid_point) {
+            return Some(link);
+        }
+
+        // Fall back to regex-based URL detection.
         let logical = self.tab.logical_line_at(grid_point.line);
         let char_off = logical.char_offset(grid_point.line, grid_point.column.0);
         let url_match = links::find_url_at(&logical.text, char_off)?;
@@ -176,6 +183,36 @@ impl<'a> TerminalWidget<'a> {
         }
 
         Some(Interaction::HoveringLink { url: url_match.url, cells })
+    }
+
+    /// Detect an OSC8 hyperlink at the given grid position and find its full
+    /// extent on the same row.
+    fn detect_osc8_link(&self, point: GridPoint) -> Option<Interaction> {
+        let grid = self.tab.grid();
+        let link = grid[point.line][point.column].hyperlink()?;
+        let url = link.uri().to_string();
+        let cols = grid.columns();
+
+        // Walk left to find the start of this hyperlink on the row.
+        let mut start_col = point.column.0;
+        while start_col > 0 {
+            if grid[point.line][Column(start_col - 1)].hyperlink().as_ref() != Some(&link) {
+                break;
+            }
+            start_col -= 1;
+        }
+
+        // Walk right to find the end.
+        let mut end_col = point.column.0 + 1;
+        while end_col < cols {
+            if grid[point.line][Column(end_col)].hyperlink().as_ref() != Some(&link) {
+                break;
+            }
+            end_col += 1;
+        }
+
+        let cells = vec![(point.line, start_col, end_col)];
+        Some(Interaction::HoveringLink { url, cells })
     }
 
     fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
