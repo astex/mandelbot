@@ -29,6 +29,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/mandelbot"
 chmod +x "$APP/Contents/MacOS/mandelbot"
 cp "$REPO_ROOT/assets/icons/logo.icns" "$APP/Contents/Resources/logo.icns"
+cp "$REPO_ROOT/assets/icons/Assets.car" "$APP/Contents/Resources/Assets.car"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -47,6 +48,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <string>mandelbot</string>
   <key>CFBundleIconFile</key>
   <string>logo</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>NSHighResolutionCapable</key>
