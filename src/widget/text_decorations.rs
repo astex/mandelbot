@@ -1,8 +1,34 @@
+use alacritty_terminal::term::cell::Flags;
+
 use iced::advanced::renderer::Quad;
 use iced::advanced::Renderer as _;
 use iced::{Border, Color, Point, Rectangle, Size};
 
-pub fn draw_solid_underline(
+/// Draw the appropriate underline decoration for the given cell flags.
+pub fn draw_underline(
+    renderer: &mut iced::Renderer,
+    flags: Flags,
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: Color,
+) {
+    if flags.contains(Flags::UNDERCURL) {
+        draw_curly(renderer, x, y, width, thickness, color);
+    } else if flags.contains(Flags::DOTTED_UNDERLINE) {
+        draw_dotted(renderer, x, y, width, thickness, color);
+    } else if flags.contains(Flags::DASHED_UNDERLINE) {
+        draw_dashed(renderer, x, y, width, thickness, color);
+    } else if flags.contains(Flags::DOUBLE_UNDERLINE) {
+        draw_solid(renderer, x, y - thickness * 2.0, width, thickness, color);
+        draw_solid(renderer, x, y, width, thickness, color);
+    } else {
+        draw_solid(renderer, x, y, width, thickness, color);
+    }
+}
+
+fn draw_solid(
     renderer: &mut iced::Renderer,
     x: f32,
     y: f32,
@@ -20,7 +46,7 @@ pub fn draw_solid_underline(
     );
 }
 
-pub fn draw_dotted_underline(
+fn draw_dotted(
     renderer: &mut iced::Renderer,
     x: f32,
     y: f32,
@@ -46,7 +72,7 @@ pub fn draw_dotted_underline(
     }
 }
 
-pub fn draw_dashed_underline(
+fn draw_dashed(
     renderer: &mut iced::Renderer,
     x: f32,
     y: f32,
@@ -72,7 +98,7 @@ pub fn draw_dashed_underline(
     }
 }
 
-pub fn draw_curly_underline(
+fn draw_curly(
     renderer: &mut iced::Renderer,
     x: f32,
     y: f32,

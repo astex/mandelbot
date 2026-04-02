@@ -397,62 +397,15 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         .unwrap_or(fg);
                     let thickness = (self.config.font_size * 0.07).max(1.0);
                     let underline_y = cell_bounds.y + cell_bounds.height - thickness * 2.0;
-
-                    if cell.flags.contains(Flags::UNDERCURL) {
-                        super::text_decorations::draw_curly_underline(
-                            renderer,
-                            cell_bounds.x,
-                            underline_y,
-                            cell_width,
-                            thickness,
-                            underline_color,
-                        );
-                    } else if cell.flags.contains(Flags::DOTTED_UNDERLINE) {
-                        super::text_decorations::draw_dotted_underline(
-                            renderer,
-                            cell_bounds.x,
-                            underline_y,
-                            cell_width,
-                            thickness,
-                            underline_color,
-                        );
-                    } else if cell.flags.contains(Flags::DASHED_UNDERLINE) {
-                        super::text_decorations::draw_dashed_underline(
-                            renderer,
-                            cell_bounds.x,
-                            underline_y,
-                            cell_width,
-                            thickness,
-                            underline_color,
-                        );
-                    } else if cell.flags.contains(Flags::DOUBLE_UNDERLINE) {
-                        super::text_decorations::draw_solid_underline(
-                            renderer,
-                            cell_bounds.x,
-                            underline_y - thickness * 2.0,
-                            cell_width,
-                            thickness,
-                            underline_color,
-                        );
-                        super::text_decorations::draw_solid_underline(
-                            renderer,
-                            cell_bounds.x,
-                            underline_y,
-                            cell_width,
-                            thickness,
-                            underline_color,
-                        );
-                    } else {
-                        // UNDERLINE (solid)
-                        super::text_decorations::draw_solid_underline(
-                            renderer,
-                            cell_bounds.x,
-                            underline_y,
-                            cell_width,
-                            thickness,
-                            underline_color,
-                        );
-                    }
+                    super::text_decorations::draw_underline(
+                        renderer,
+                        cell.flags,
+                        cell_bounds.x,
+                        underline_y,
+                        cell_width,
+                        thickness,
+                        underline_color,
+                    );
                 }
 
                 col += cell_cols;
