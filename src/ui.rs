@@ -3,6 +3,7 @@ use std::io::{BufRead, Write};
 use std::os::unix::net as unix;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use futures::SinkExt;
 
@@ -62,6 +63,8 @@ pub enum Message {
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
+    Bell(usize),
+    BellTick,
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -84,6 +87,7 @@ pub struct App {
     parent_socket_dir: PathBuf,
     parent_socket_path: PathBuf,
     response_writers: ResponseWriters,
+    bell_flashes: HashMap<usize, Instant>,
 }
 
 impl App {
@@ -116,6 +120,7 @@ impl App {
             parent_socket_dir,
             parent_socket_path,
             response_writers,
+            bell_flashes: HashMap::new(),
         };
 
         (app, listen_task)
@@ -315,6 +320,9 @@ impl App {
                             tab.title = Some(title);
                         }
                     }
+                    if tab.take_bell() {
+                        self.bell_flashes.insert(tab_id, Instant::now());
+                    }
                 }
                 Task::none()
             }
@@ -379,6 +387,15 @@ impl App {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.status = status;
                 }
+                Task::none()
+            }
+            Message::Bell(tab_id) => {
+                self.bell_flashes.insert(tab_id, Instant::now());
+                Task::none()
+            }
+            Message::BellTick => {
+                // Remove expired flashes (older than 500ms).
+                self.bell_flashes.retain(|_, started| started.elapsed().as_millis() < 500);
                 Task::none()
             }
             Message::PtyInput(bytes) => {
@@ -631,8 +648,25 @@ impl App {
 
         let tab_button = |tab: &TerminalTab, display_index: usize, active_tab_id: usize, indent: f32| {
             let is_active = tab.id == active_tab_id;
-            let bg = if is_active { active_bg } else { inactive_bg };
             let tab_id = tab.id;
+
+            // Flash the tab background on bell, fading out over 500ms.
+            let bg = if let Some(started) = self.bell_flashes.get(&tab_id) {
+                let elapsed = started.elapsed().as_millis() as f32;
+                let t = (1.0 - elapsed / 500.0).max(0.0);
+                let flash = self.terminal_theme.yellow;
+                let base = if is_active { active_bg } else { inactive_bg };
+                Color {
+                    r: base.r + (flash.r - base.r) * t,
+                    g: base.g + (flash.g - base.g) * t,
+                    b: base.b + (flash.b - base.b) * t,
+                    a: base.a + (flash.a - base.a) * t,
+                }
+            } else if is_active {
+                active_bg
+            } else {
+                inactive_bg
+            };
 
             let label_text: String = if tab.is_pending() {
                 "new project...".into()
@@ -786,7 +820,15 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
+        let resize = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
+        if self.bell_flashes.is_empty() {
+            resize
+        } else {
+            Subscription::batch([
+                resize,
+                bell_tick_subscription(),
+            ])
+        }
     }
 
     pub fn theme(&self) -> Theme {
@@ -802,6 +844,21 @@ impl Drop for App {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.parent_socket_dir);
     }
+}
+
+fn bell_tick_stream() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(1, |mut sender: futures::channel::mpsc::Sender<Message>| async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if sender.send(Message::BellTick).await.is_err() {
+                break;
+            }
+        }
+    })
+}
+
+fn bell_tick_subscription() -> Subscription<Message> {
+    Subscription::run(bell_tick_stream)
 }
 
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
