@@ -321,7 +321,11 @@ impl App {
                         }
                     }
                     if tab.take_bell() {
+                        let was_empty = self.bell_flashes.is_empty();
                         self.bell_flashes.insert(tab_id, Instant::now());
+                        if was_empty {
+                            return schedule_bell_tick();
+                        }
                     }
                 }
                 Task::none()
@@ -390,13 +394,17 @@ impl App {
                 Task::none()
             }
             Message::Bell(tab_id) => {
+                let was_empty = self.bell_flashes.is_empty();
                 self.bell_flashes.insert(tab_id, Instant::now());
-                Task::none()
+                if was_empty { schedule_bell_tick() } else { Task::none() }
             }
             Message::BellTick => {
-                // Remove expired flashes (older than 500ms).
                 self.bell_flashes.retain(|_, started| started.elapsed().as_millis() < 500);
-                Task::none()
+                if self.bell_flashes.is_empty() {
+                    Task::none()
+                } else {
+                    schedule_bell_tick()
+                }
             }
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
@@ -650,12 +658,27 @@ impl App {
             let is_active = tab.id == active_tab_id;
             let tab_id = tab.id;
 
-            // Flash the tab background on bell, fading out over 500ms.
+            // Flash the tab background on bell with a fade-in-out curve over 500ms.
             let bg = if let Some(started) = self.bell_flashes.get(&tab_id) {
                 let elapsed = started.elapsed().as_millis() as f32;
-                let t = (1.0 - elapsed / 500.0).max(0.0);
-                let flash = self.terminal_theme.yellow;
+                let duration = 500.0_f32;
+                let progress = (elapsed / duration).min(1.0);
+                // Fast fade-in (peak at 15%), slow fade-out — like a camera flash.
+                let t = if progress < 0.15 {
+                    progress / 0.15
+                } else {
+                    let fade = (progress - 0.15) / 0.85;
+                    1.0 - fade * fade // ease-out quadratic
+                };
+                // Muted flash: mix theme yellow toward the base at 60% intensity.
+                let y = self.terminal_theme.yellow;
                 let base = if is_active { active_bg } else { inactive_bg };
+                let flash = Color {
+                    r: base.r + (y.r - base.r) * 0.6,
+                    g: base.g + (y.g - base.g) * 0.6,
+                    b: base.b + (y.b - base.b) * 0.6,
+                    a: 1.0,
+                };
                 Color {
                     r: base.r + (flash.r - base.r) * t,
                     g: base.g + (flash.g - base.g) * t,
@@ -820,15 +843,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let resize = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
-        if self.bell_flashes.is_empty() {
-            resize
-        } else {
-            Subscription::batch([
-                resize,
-                bell_tick_subscription(),
-            ])
-        }
+        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
     }
 
     pub fn theme(&self) -> Theme {
@@ -846,19 +861,18 @@ impl Drop for App {
     }
 }
 
-fn bell_tick_stream() -> impl iced::futures::Stream<Item = Message> {
-    iced::stream::channel(1, |mut sender: futures::channel::mpsc::Sender<Message>| async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if sender.send(Message::BellTick).await.is_err() {
-                break;
-            }
-        }
-    })
-}
-
-fn bell_tick_subscription() -> Subscription<Message> {
-    Subscription::run(bell_tick_stream)
+fn schedule_bell_tick() -> Task<Message> {
+    Task::perform(
+        async {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                let _ = tx.send(());
+            });
+            let _ = rx.await;
+        },
+        |_| Message::BellTick,
+    )
 }
 
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
