@@ -12,6 +12,7 @@ use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Ta
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
+use crate::animation::FlashState;
 use crate::config::Config;
 use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
@@ -62,6 +63,8 @@ pub enum Message {
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
+    Bell(usize),
+    BellTick,
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -84,6 +87,7 @@ pub struct App {
     parent_socket_dir: PathBuf,
     parent_socket_path: PathBuf,
     response_writers: ResponseWriters,
+    bell_flashes: FlashState,
 }
 
 impl App {
@@ -116,6 +120,7 @@ impl App {
             parent_socket_dir,
             parent_socket_path,
             response_writers,
+            bell_flashes: FlashState::default(),
         };
 
         (app, listen_task)
@@ -315,6 +320,9 @@ impl App {
                             tab.title = Some(title);
                         }
                     }
+                    if tab.take_bell() {
+                        return self.bell_flashes.trigger(tab_id);
+                    }
                 }
                 Task::none()
             }
@@ -381,6 +389,8 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Bell(tab_id) => self.bell_flashes.trigger(tab_id),
+            Message::BellTick => self.bell_flashes.tick(),
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -631,8 +641,10 @@ impl App {
 
         let tab_button = |tab: &TerminalTab, display_index: usize, active_tab_id: usize, indent: f32| {
             let is_active = tab.id == active_tab_id;
-            let bg = if is_active { active_bg } else { inactive_bg };
             let tab_id = tab.id;
+
+            let base_bg = if is_active { active_bg } else { inactive_bg };
+            let bg = self.bell_flashes.blend(tab_id, base_bg, self.terminal_theme.yellow);
 
             let label_text: String = if tab.is_pending() {
                 "new project...".into()

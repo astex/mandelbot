@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -22,11 +23,15 @@ use crate::ui::Message;
 #[derive(Clone)]
 struct TermEventListener {
     title: Arc<Mutex<Option<String>>>,
+    bell: Arc<AtomicBool>,
 }
 
 impl TermEventListener {
     fn new() -> Self {
-        Self { title: Arc::new(Mutex::new(None)) }
+        Self {
+            title: Arc::new(Mutex::new(None)),
+            bell: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -36,6 +41,8 @@ impl EventListener for TermEventListener {
             *self.title.lock().unwrap() = Some(t);
         } else if let Event::ResetTitle = event {
             *self.title.lock().unwrap() = None;
+        } else if let Event::Bell = event {
+            self.bell.store(true, Ordering::Relaxed);
         }
     }
 }
@@ -320,6 +327,11 @@ impl TerminalTab {
     /// Take the latest title set via OSC escape sequences, if any.
     pub fn take_osc_title(&self) -> Option<String> {
         self.listener.title.lock().unwrap().take()
+    }
+
+    /// Check and clear the bell flag set via BEL escape sequence.
+    pub fn take_bell(&self) -> bool {
+        self.listener.bell.swap(false, Ordering::Relaxed)
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
