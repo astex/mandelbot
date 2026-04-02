@@ -9,4 +9,10 @@ You can spawn agents using the mandelbot MCP spawn_tab tool. Note: spawn_tab cre
 - To create a task agent under an existing project: pass project_tab_id (the tab ID of the project agent).
 
 The tool returns the new tab's ID.
+
+When spawning a tab in response to a user request, use the focus_tab tool afterward to focus the new tab so the user lands there.
+</system-reminder>
+
+<system-reminder>
+You can use the mandelbot MCP get_tab_tree tool to see all tabs (IDs, titles, ranks, statuses, and which is active). It also returns your own tab ID. Use the focus_tab tool to focus a tab by ID — this only works if you are the currently active tab (it no-ops otherwise to prevent stealing focus).
 </system-reminder>

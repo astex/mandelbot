@@ -105,6 +105,28 @@ fn handle_tools_list(id: Value) -> Response {
                         "required": ["status"],
                     },
                 },
+                {
+                    "name": "focus_tab",
+                    "description": "Focus another tab by its ID. Only works if this tab is the currently active tab (no-ops otherwise to prevent background tabs from stealing focus). Returns whether focus actually changed.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "tab_id": {
+                                "type": "integer",
+                                "description": "The ID of the tab to focus.",
+                            },
+                        },
+                        "required": ["tab_id"],
+                    },
+                },
+                {
+                    "name": "get_tab_tree",
+                    "description": "Get the full tab tree. Returns your_tab_id (the caller's tab ID) and a list of all tabs with their id, title, rank (home/project/task), status, parent_id, and is_active flag.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
             ],
         }),
     )
@@ -249,6 +271,63 @@ async fn handle_tools_call(
                 }),
             )
         }
+        "focus_tab" => {
+            let target_tab_id = params
+                .get("arguments")
+                .and_then(|a| a.get("tab_id"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            let msg = serde_json::json!({
+                "type": "focus_tab",
+                "tab_id": tab_id,
+                "target_tab_id": target_tab_id,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let focused = resp
+                        .get("focused")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let text = if focused { "Tab focused" } else { "Focus unchanged (this tab is not active or target not found)" };
+                    Response::ok(
+                        id,
+                        serde_json::json!({
+                            "content": [{ "type": "text", "text": text }],
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
+        "get_tab_tree" => {
+            let msg = serde_json::json!({
+                "type": "get_tab_tree",
+                "tab_id": tab_id,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let text = serde_json::to_string_pretty(&resp).unwrap_or_default();
+                    Response::ok(
+                        id,
+                        serde_json::json!({
+                            "content": [{ "type": "text", "text": text }],
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
 }
@@ -386,6 +465,8 @@ mod tests {
         assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
         assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
         assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
+        assert_eq!(resp["result"]["tools"][3]["name"], "focus_tab");
+        assert_eq!(resp["result"]["tools"][4]["name"], "get_tab_tree");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -447,6 +528,56 @@ mod tests {
         assert_eq!(parent_msg["type"], "set_status");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["status"], "working");
+
+        // -- tools/call focus_tab --
+        let call = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"focus_tab","arguments":{"tab_id":3}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        // Parent receives the focus_tab message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "focus_tab");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["target_tab_id"], 3);
+
+        // Parent responds.
+        parent_writer.write_all(b"{\"focused\":true}\n").unwrap();
+        parent_writer.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Tab focused");
+
+        // -- tools/call get_tab_tree --
+        let call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_tab_tree","arguments":{}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        // Parent receives the get_tab_tree message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "get_tab_tree");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+
+        // Parent responds with a mock tree.
+        let tree_resp = r#"{"your_tab_id":42,"tabs":[{"id":0,"title":"home","rank":"home","status":"idle","parent_id":null,"is_active":false},{"id":42,"title":"my task","rank":"task","status":"working","parent_id":1,"is_active":true}]}"#;
+        parent_writer.write_all(tree_resp.as_bytes()).unwrap();
+        parent_writer.write_all(b"\n").unwrap();
+        parent_writer.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        let tree_text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let tree: serde_json::Value = serde_json::from_str(tree_text).unwrap();
+        assert_eq!(tree["your_tab_id"], 42);
+        assert_eq!(tree["tabs"].as_array().unwrap().len(), 2);
 
         // Close stdin to shut down the server.
         drop(child_stdin);

@@ -58,6 +58,8 @@ pub enum Message {
     NextIdle,
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>),
+    McpFocusTab(usize, usize),
+    McpGetTabTree(usize),
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
     BgTaskStarted(usize, u32),
@@ -367,6 +369,46 @@ impl App {
                 let (new_tab_id, task) = self.spawn_tab(true, rank, project_dir, parent_id, prompt);
                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
                 task
+            }
+            Message::McpFocusTab(requesting_tab_id, target_tab_id) => {
+                let is_active = requesting_tab_id == self.active_tab_id;
+                let target_exists = self.tabs.iter().any(|t| t.id == target_tab_id);
+                if is_active && target_exists {
+                    self.focus_tab(target_tab_id);
+                    self.respond_to_tab(requesting_tab_id, serde_json::json!({"focused": true}));
+                } else {
+                    self.respond_to_tab(requesting_tab_id, serde_json::json!({"focused": false}));
+                }
+                Task::none()
+            }
+            Message::McpGetTabTree(requesting_tab_id) => {
+                let order = self.tab_display_order();
+                let tabs: Vec<serde_json::Value> = order.iter().filter_map(|&id| {
+                    let tab = self.tabs.iter().find(|t| t.id == id)?;
+                    Some(serde_json::json!({
+                        "id": tab.id,
+                        "title": tab.title.as_deref().unwrap_or(""),
+                        "rank": match tab.rank {
+                            AgentRank::Home => "home",
+                            AgentRank::Project => "project",
+                            AgentRank::Task => "task",
+                        },
+                        "status": match tab.status {
+                            AgentStatus::Idle => "idle",
+                            AgentStatus::Working => "working",
+                            AgentStatus::Blocked => "blocked",
+                            AgentStatus::NeedsReview => "needs_review",
+                            AgentStatus::Error => "error",
+                        },
+                        "parent_id": tab.parent_id,
+                        "is_active": tab.id == self.active_tab_id,
+                    }))
+                }).collect();
+                self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                    "your_tab_id": requesting_tab_id,
+                    "tabs": tabs,
+                }));
+                Task::none()
             }
             Message::SetStatus(tab_id, status) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -887,6 +929,25 @@ fn parent_socket_stream(
                                         .and_then(|v| v.as_str())
                                         .and_then(AgentStatus::from_str)
                                         .map(|s| Message::SetStatus(tab_id, s))
+                                }
+                                "focus_tab" => {
+                                    let target = msg
+                                        .get("target_tab_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize)
+                                        .unwrap_or(0);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpFocusTab(tab_id, target))
+                                }
+                                "get_tab_tree" => {
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpGetTabTree(tab_id))
                                 }
                                 _ => None,
                             };
