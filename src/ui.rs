@@ -3,7 +3,6 @@ use std::io::{BufRead, Write};
 use std::os::unix::net as unix;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use futures::SinkExt;
 
@@ -13,6 +12,7 @@ use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Ta
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
+use crate::animation::FlashState;
 use crate::config::Config;
 use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
@@ -87,7 +87,7 @@ pub struct App {
     parent_socket_dir: PathBuf,
     parent_socket_path: PathBuf,
     response_writers: ResponseWriters,
-    bell_flashes: HashMap<usize, Instant>,
+    bell_flashes: FlashState,
 }
 
 impl App {
@@ -120,7 +120,7 @@ impl App {
             parent_socket_dir,
             parent_socket_path,
             response_writers,
-            bell_flashes: HashMap::new(),
+            bell_flashes: FlashState::default(),
         };
 
         (app, listen_task)
@@ -321,11 +321,7 @@ impl App {
                         }
                     }
                     if tab.take_bell() {
-                        let was_empty = self.bell_flashes.is_empty();
-                        self.bell_flashes.insert(tab_id, Instant::now());
-                        if was_empty {
-                            return schedule_bell_tick();
-                        }
+                        return self.bell_flashes.trigger(tab_id);
                     }
                 }
                 Task::none()
@@ -393,19 +389,8 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Bell(tab_id) => {
-                let was_empty = self.bell_flashes.is_empty();
-                self.bell_flashes.insert(tab_id, Instant::now());
-                if was_empty { schedule_bell_tick() } else { Task::none() }
-            }
-            Message::BellTick => {
-                self.bell_flashes.retain(|_, started| started.elapsed().as_millis() < 500);
-                if self.bell_flashes.is_empty() {
-                    Task::none()
-                } else {
-                    schedule_bell_tick()
-                }
-            }
+            Message::Bell(tab_id) => self.bell_flashes.trigger(tab_id),
+            Message::BellTick => self.bell_flashes.tick(),
             Message::PtyInput(bytes) => {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.write_input(&bytes);
@@ -658,38 +643,8 @@ impl App {
             let is_active = tab.id == active_tab_id;
             let tab_id = tab.id;
 
-            // Flash the tab background on bell with a fade-in-out curve over 500ms.
-            let bg = if let Some(started) = self.bell_flashes.get(&tab_id) {
-                let elapsed = started.elapsed().as_millis() as f32;
-                let duration = 500.0_f32;
-                let progress = (elapsed / duration).min(1.0);
-                // Fast fade-in (peak at 15%), slow fade-out — like a camera flash.
-                let t = if progress < 0.15 {
-                    progress / 0.15
-                } else {
-                    let fade = (progress - 0.15) / 0.85;
-                    1.0 - fade * fade // ease-out quadratic
-                };
-                // Muted flash: mix theme yellow toward the base at 60% intensity.
-                let y = self.terminal_theme.yellow;
-                let base = if is_active { active_bg } else { inactive_bg };
-                let flash = Color {
-                    r: base.r + (y.r - base.r) * 0.6,
-                    g: base.g + (y.g - base.g) * 0.6,
-                    b: base.b + (y.b - base.b) * 0.6,
-                    a: 1.0,
-                };
-                Color {
-                    r: base.r + (flash.r - base.r) * t,
-                    g: base.g + (flash.g - base.g) * t,
-                    b: base.b + (flash.b - base.b) * t,
-                    a: base.a + (flash.a - base.a) * t,
-                }
-            } else if is_active {
-                active_bg
-            } else {
-                inactive_bg
-            };
+            let base_bg = if is_active { active_bg } else { inactive_bg };
+            let bg = self.bell_flashes.tab_bg(tab_id, base_bg, self.terminal_theme.yellow);
 
             let label_text: String = if tab.is_pending() {
                 "new project...".into()
@@ -859,20 +814,6 @@ impl Drop for App {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.parent_socket_dir);
     }
-}
-
-fn schedule_bell_tick() -> Task<Message> {
-    Task::perform(
-        async {
-            let (tx, rx) = futures::channel::oneshot::channel();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(16));
-                let _ = tx.send(());
-            });
-            let _ = rx.await;
-        },
-        |_| Message::BellTick,
-    )
 }
 
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
