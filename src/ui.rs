@@ -193,6 +193,22 @@ impl App {
             &self.parent_socket_path, prompt, branch,
         );
         self.tabs.push(tab);
+        // Initialize colors and window size for OSC query responses.
+        if let Some(tab) = self.tabs.last() {
+            tab.set_colors(
+                self.terminal_theme.fg,
+                self.terminal_theme.bg,
+                self.terminal_theme.fg, // cursor color falls back to fg
+            );
+            let cw = self.config.char_width();
+            let ch = self.config.char_height();
+            tab.set_window_size(alacritty_terminal::event::WindowSize {
+                num_lines: rows as u16,
+                num_cols: cols as u16,
+                cell_width: cw as u16,
+                cell_height: ch as u16,
+            });
+        }
         if is_claude {
             let fifo_path = crate::terminal::runtime_dir().join(format!("{id}.fifo"));
             let fifo_task = Task::run(
@@ -390,9 +406,17 @@ impl App {
             }
             Message::WindowResized(size) => {
                 self.window_size = Some(size);
-                let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
+                let cw = self.config.char_width();
+                let ch = self.config.char_height();
+                let (rows, cols) = terminal_size(size, cw, ch);
                 for tab in &mut self.tabs {
                     tab.resize(rows, cols, size.width as u16, size.height as u16);
+                    tab.set_window_size(alacritty_terminal::event::WindowSize {
+                        num_lines: rows as u16,
+                        num_cols: cols as u16,
+                        cell_width: cw as u16,
+                        cell_height: ch as u16,
+                    });
                 }
                 Task::none()
             }
