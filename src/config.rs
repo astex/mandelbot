@@ -196,14 +196,43 @@ fn config_path() -> PathBuf {
 /// Find font bytes for all style variants (regular, italic, bold, bold-italic)
 /// of a family name using fontdb.
 pub fn find_font_variants(name: &str) -> Vec<Vec<u8>> {
-    if name == "monospace" {
-        return Vec::new();
-    }
-
     let mut db = Database::new();
     db.load_system_fonts();
 
-    let families = &[fontdb::Family::Name(name)];
+    let monospace_family;
+    let families: &[fontdb::Family<'_>] = if name == "monospace" {
+        // Resolve the system monospace font so we can load all its variants.
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Monospace],
+            ..fontdb::Query::default()
+        };
+        match db.query(&query) {
+            Some(id) => match db.face(id) {
+                Some(info) => {
+                    for family in &info.families {
+                        if !family.0.is_empty() {
+                            monospace_family = family.0.clone();
+                            return find_font_variants_inner(&db, &monospace_family);
+                        }
+                    }
+                    return Vec::new();
+                }
+                None => return Vec::new(),
+            },
+            None => return Vec::new(),
+        }
+    } else {
+        &[fontdb::Family::Name(name)]
+    };
+
+    find_font_variants_from_families(&db, families)
+}
+
+fn find_font_variants_inner(db: &Database, name: &str) -> Vec<Vec<u8>> {
+    find_font_variants_from_families(db, &[fontdb::Family::Name(name)])
+}
+
+fn find_font_variants_from_families(db: &Database, families: &[fontdb::Family<'_>]) -> Vec<Vec<u8>> {
     let styles = [
         (fontdb::Weight::NORMAL, fontdb::Style::Normal),
         (fontdb::Weight::NORMAL, fontdb::Style::Italic),
