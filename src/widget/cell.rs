@@ -23,13 +23,31 @@ pub fn draw(
         return;
     }
 
-    let font = if flags.contains(Flags::BOLD) {
-        Font {
+    if flags.contains(Flags::HIDDEN) {
+        return;
+    }
+
+    let font = match (flags.contains(Flags::BOLD), flags.contains(Flags::ITALIC)) {
+        (true, true) => Font {
+            weight: iced::font::Weight::Bold,
+            style: iced::font::Style::Italic,
+            ..base_font
+        },
+        (true, false) => Font {
             weight: iced::font::Weight::Bold,
             ..base_font
-        }
+        },
+        (false, true) => Font {
+            style: iced::font::Style::Italic,
+            ..base_font
+        },
+        (false, false) => base_font,
+    };
+
+    let fg = if flags.contains(Flags::DIM) {
+        Color { a: fg.a * 0.5, ..fg }
     } else {
-        base_font
+        fg
     };
 
     let cell_width = cell_bounds.width;

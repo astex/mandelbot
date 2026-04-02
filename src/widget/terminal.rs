@@ -373,6 +373,22 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     self.config.line_height,
                 );
 
+                if cell.flags.contains(Flags::STRIKEOUT) {
+                    let thickness = (self.config.font_size * 0.07).max(1.0);
+                    let strike_y = cell_bounds.y + cell_bounds.height / 2.0;
+                    renderer.fill_quad(
+                        Quad {
+                            bounds: Rectangle::new(
+                                Point::new(cell_bounds.x, strike_y),
+                                Size::new(cell_bounds.width, thickness),
+                            ),
+                            border: Border::default(),
+                            ..Quad::default()
+                        },
+                        fg,
+                    );
+                }
+
                 col += cell_cols;
             }
         }
