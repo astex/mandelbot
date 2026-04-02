@@ -59,7 +59,8 @@ pub fn find_url_at(text: &str, char_offset: usize) -> Option<UrlMatch> {
             {
                 matched.to_string()
             } else if let Some((repo, number)) = matched.split_once('#') {
-                if repo.contains('/') && !repo.contains('.') && number.chars().all(|c| c.is_ascii_digit()) {
+                let org = repo.split('/').next().unwrap_or("");
+                if repo.contains('/') && !org.contains('.') && number.chars().all(|c| c.is_ascii_digit()) {
                     format!("https://github.com/{repo}/pull/{number}")
                 } else {
                     format!("https://{matched}")
@@ -142,5 +143,12 @@ mod tests {
         let text = "fixed in astex/mandelbot#73.";
         let m = find_url_at(text, 9).unwrap();
         assert_eq!(m.url, "https://github.com/astex/mandelbot/pull/73");
+    }
+
+    #[test]
+    fn github_pr_shorthand_dotted_repo() {
+        let text = "see astex/therapykit.com#42 for details";
+        let m = find_url_at(text, 4).unwrap();
+        assert_eq!(m.url, "https://github.com/astex/therapykit.com/pull/42");
     }
 }
