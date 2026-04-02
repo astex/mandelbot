@@ -243,6 +243,73 @@ impl TerminalTab {
         if was_at_bottom {
             self.term.scroll_display(Scroll::Bottom);
         }
+        if self.is_claude {
+            if let Some(count) = self.detect_prompt_shell_count() {
+                self.background_tasks = count;
+            }
+        }
+    }
+
+    /// Extract the text content of a single grid row, right-trimmed.
+    fn row_text(&self, line: Line) -> String {
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        let text: String = (0..cols).map(|col| grid[line][Column(col)].c).collect();
+        text.trim_end().to_string()
+    }
+
+    /// Detect Claude Code's prompt frame and read the background shell count.
+    ///
+    /// Returns `Some(n)` if the prompt is visible (n=0 means no shells indicator),
+    /// or `None` if the prompt isn't detected (interactive mode, etc.).
+    fn detect_prompt_shell_count(&self) -> Option<usize> {
+        let grid = self.term.grid();
+        let screen_lines = grid.screen_lines();
+        // The cursor sits on the ❯ input line. The prompt structure below
+        // the cursor (increasing Line numbers) is:
+        //   cursor:   ❯
+        //   cursor+1: ─────── (bottom border)
+        //   cursor+2: [Opus 4.6] ...
+        //   cursor+3: ⏵⏵ mode on · N shells
+        //   cursor+4: (possible blanks)
+        // And above the cursor:
+        //   cursor-1: ─────── (top border)
+        //
+        // Scan a window around the cursor: a few lines above and below.
+        let cursor_line = grid.cursor.point.line.0;
+        let top = (cursor_line - 2).max(0) as usize;
+        let bot = ((cursor_line + 6) as usize).min(screen_lines - 1);
+        let rows: Vec<String> = (top..=bot)
+            .map(|i| self.row_text(Line(i as i32)))
+            .collect();
+
+        // Find two border rows to confirm this is the prompt frame.
+        let mut first_border = None;
+        let mut second_border = None;
+        for (i, text) in rows.iter().enumerate() {
+            if is_border_row(text) {
+                if first_border.is_none() {
+                    first_border = Some(i);
+                } else {
+                    second_border = Some(i);
+                    break;
+                }
+            }
+        }
+
+        let (Some(_top_border), Some(bot_border)) = (first_border, second_border) else {
+            return None;
+        };
+
+        // Scan the rows after the bottom border for "· N shell".
+        for i in (bot_border + 1)..rows.len() {
+            if let Some(n) = parse_shell_count(&rows[i]) {
+                return Some(n);
+            }
+        }
+
+        // Prompt is present but no shells indicator → 0 background tasks.
+        Some(0)
     }
 
     /// Take the latest title set via OSC escape sequences, if any.
@@ -386,6 +453,25 @@ impl LogicalLine {
     }
 }
 
+/// Check if a row looks like a Claude Code prompt border (10+ '─' characters).
+fn is_border_row(text: &str) -> bool {
+    text.len() >= 10 && text.chars().take(10).all(|c| c == '─')
+}
+
+/// Parse "· N shell(s)" from a line, returning N if found.
+fn parse_shell_count(text: &str) -> Option<usize> {
+    // The middle dot is U+00B7.
+    let idx = text.find("· ")?;
+    let after = &text[idx + "· ".len()..];
+    let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let n: usize = num_str.parse().ok()?;
+    if after[num_str.len()..].trim_start().starts_with("shell") {
+        Some(n)
+    } else {
+        None
+    }
+}
+
 /// Return the runtime directory for this process, using `$XDG_RUNTIME_DIR`
 /// when available and falling back to `~/.mandelbot/run/`.
 pub fn runtime_dir() -> PathBuf {
@@ -474,39 +560,15 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
         })
     };
 
-    // Snapshot children before each Bash tool so we can diff after.
-    let snapshot_children = serde_json::json!({
-        "type": "command",
-        "command": "pgrep -P $PPID 2>/dev/null | sort > ${MANDELBOT_FIFO}.pids",
-    });
-
-    // After a Bash tool with run_in_background, diff against the snapshot to
-    // find newly spawned children and report their PIDs for monitoring.
-    let track_bg_task = serde_json::json!({
-        "type": "command",
-        "command": concat!(
-            r#"grep -q '"run_in_background" *: *true' && "#,
-            r#"pgrep -P $PPID 2>/dev/null | grep -xv $$ | sort | "#,
-            r#"comm -13 ${MANDELBOT_FIFO}.pids - | "#,
-            r#"while read pid; do echo bg_task:$pid; done > $MANDELBOT_FIFO"#,
-        ),
-    });
-
     let settings = serde_json::json!({
         "hooks": {
             "UserPromptSubmit": [{
                 "hooks": [set_status("working")],
             }],
-            "PreToolUse": [
-                {
-                    "matcher": "",
-                    "hooks": [set_status("working")],
-                },
-                {
-                    "matcher": "Bash",
-                    "hooks": [snapshot_children],
-                },
-            ],
+            "PreToolUse": [{
+                "matcher": "",
+                "hooks": [set_status("working")],
+            }],
             "PermissionRequest": [
                 {
                     "hooks": [set_status_unless_exit_plan("blocked")],
@@ -516,16 +578,10 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
                     "hooks": [set_status("needs_review")],
                 },
             ],
-            "PostToolUse": [
-                {
-                    "matcher": "",
-                    "hooks": [set_status("working")],
-                },
-                {
-                    "matcher": "Bash",
-                    "hooks": [track_bg_task],
-                },
-            ],
+            "PostToolUse": [{
+                "matcher": "",
+                "hooks": [set_status("working")],
+            }],
             "PostToolUseFailure": [{
                 "hooks": [set_status("working")],
             }],
@@ -716,13 +772,7 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
                 for line in reader.lines() {
                     let Ok(line) = line else { break };
                     let trimmed = line.trim();
-                    if let Some(pid_str) = trimmed.strip_prefix("bg_task:") {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            if futures::executor::block_on(sender.send(Message::BgTaskStarted(tab_id, pid))).is_err() {
-                                break;
-                            }
-                        }
-                    } else if let Some(s) = trimmed.strip_prefix("status:").and_then(AgentStatus::from_str) {
+                    if let Some(s) = trimmed.strip_prefix("status:").and_then(AgentStatus::from_str) {
                         if futures::executor::block_on(sender.send(Message::SetStatus(tab_id, s))).is_err() {
                             break;
                         }
