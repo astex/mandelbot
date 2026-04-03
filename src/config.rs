@@ -37,7 +37,7 @@ fn default_shell() -> String {
 }
 
 fn default_workflow() -> String {
-    "git".to_string()
+    "detect".to_string()
 }
 
 #[derive(Deserialize)]

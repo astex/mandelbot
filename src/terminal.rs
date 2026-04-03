@@ -117,6 +117,21 @@ impl TerminalTab {
         let listener = TermEventListener::new();
         let term = Term::new(Config::default(), &size, listener.clone());
 
+        let workflow = if workflow == "detect" {
+            let is_git = project_dir.as_ref().is_some_and(|dir| {
+                std::process::Command::new("git")
+                    .args(["rev-parse", "--is-inside-work-tree"])
+                    .current_dir(dir)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            });
+            if is_git { "git" } else { "none" }
+        } else {
+            workflow
+        };
+
         let config_dir = write_mcp_config();
         let mcp_config_flag = config_dir.join("mcp-config.json").to_string_lossy().into_owned();
         let home = std::env::var("HOME").unwrap_or_default();
@@ -752,13 +767,11 @@ fn write_plugin_dir(dir: &Path, workflow: &str) -> PathBuf {
         SKILL_DELEGATE_NOGIT
     };
     let skill_path = delegate_dir.join("SKILL.md");
-    if !skill_path.exists() {
-        std::fs::write(&skill_path, delegate_content).expect("failed to write delegate skill");
-        std::fs::write(delegate_dir.join("template.md"), SKILL_DELEGATE_TEMPLATE)
-            .expect("failed to write delegate template");
-        std::fs::write(delegate_dir.join("watch.sh"), SKILL_DELEGATE_WATCH)
-            .expect("failed to write delegate watch script");
-    }
+    std::fs::write(&skill_path, delegate_content).expect("failed to write delegate skill");
+    std::fs::write(delegate_dir.join("template.md"), SKILL_DELEGATE_TEMPLATE)
+        .expect("failed to write delegate template");
+    std::fs::write(delegate_dir.join("watch.sh"), SKILL_DELEGATE_WATCH)
+        .expect("failed to write delegate watch script");
 
     let subtask_content = if workflow == "git" {
         SKILL_WORK_AS_SUBTASK
@@ -766,10 +779,8 @@ fn write_plugin_dir(dir: &Path, workflow: &str) -> PathBuf {
         SKILL_WORK_AS_SUBTASK_NOGIT
     };
     let skill_path = subtask_dir.join("SKILL.md");
-    if !skill_path.exists() {
-        std::fs::write(&skill_path, subtask_content)
-            .expect("failed to write work-as-subtask skill");
-    }
+    std::fs::write(&skill_path, subtask_content)
+        .expect("failed to write work-as-subtask skill");
 
     let skill_path = config_dir.join("SKILL.md");
     if !skill_path.exists() {
