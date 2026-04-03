@@ -59,12 +59,16 @@ When done, update your row's status to `done`:
 
 If you are blocked (e.g., waiting on another task's output):
 1. Set your status to `blocked` with a note explaining what you're waiting for
-2. Run the watcher script in the background to wait for the coordination file to change, then check if your blocker resolved:
+2. Use the watcher script to wait for changes to the coordination file. The script blocks until the file changes, prints the updated contents, then exits. **Run it in the background** (using `run_in_background`) so you are free to do other work while waiting. You will be notified when the file changes.
+
    ```bash
    # Run with run_in_background: true
    bash <plugin-dir>/skills/mandelbot-delegate/watch.sh <coordination-file>
    ```
-3. Once unblocked, set status back to `in_progress` and continue
+
+   When the watcher completes and you are notified, check its output:
+   - If your blocker is not yet resolved — **run the watcher again** (in the background) to wait for the next update.
+   - If the blocker is resolved — set status back to `in_progress` and continue.
 
 If you cannot complete your task, set status to `failed` with a note explaining why.
 
