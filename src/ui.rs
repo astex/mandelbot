@@ -16,7 +16,8 @@ use crate::animation::FlashState;
 use crate::config::Config;
 use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
-use crate::widget::terminal::{self, FoldPlaceholderWidget, TerminalWidget};
+use crate::widget::fold_placeholder::FoldPlaceholderWidget;
+use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
 const TAB_BAR_WIDTH: f32 = 400.0;
