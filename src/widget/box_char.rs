@@ -118,6 +118,11 @@ pub fn draw(
             draw_box_drawing(renderer, c, fg, cell);
         }
 
+        // === Arrow characters (U+2190–U+2193) ===
+        '\u{2190}'..='\u{2193}' => {
+            draw_arrow(renderer, c, fg, cell);
+        }
+
         _ => return false,
     }
     true
@@ -702,4 +707,115 @@ fn draw_double(
 
         _ => {}
     }
+}
+
+/// Draw arrow characters (U+2190–U+2193) as a line shaft with a filled arrowhead.
+/// The shaft matches box-drawing light line thickness so arrows connect seamlessly
+/// with ─ and │ characters.
+fn draw_arrow(
+    renderer: &mut iced::Renderer,
+    c: char,
+    fg: Color,
+    cell: Rectangle,
+) {
+    use iced::advanced::graphics::geometry::Renderer as _;
+
+    let x = cell.x;
+    let y = cell.y;
+    let w = cell.width;
+    let h = cell.height;
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+    let thickness = (w / 8.0).max(1.0);
+
+    let quad = |renderer: &mut iced::Renderer, bounds: Rectangle| {
+        renderer.fill_quad(
+            Quad {
+                bounds,
+                border: Border::default(),
+                ..Quad::default()
+            },
+            fg,
+        );
+    };
+
+    // Arrowhead dimensions proportional to cell size.
+    let h_arrow_len = w * 0.35;   // length along shaft for horizontal arrows
+    let h_arrow_half = h * 0.3;   // half-width perpendicular for horizontal arrows
+    let v_arrow_len = h * 0.35;   // length along shaft for vertical arrows
+    let v_arrow_half = w * 0.4;   // half-width perpendicular for vertical arrows
+
+    // Match box-drawing centering: round the shaft position the same way.
+    let shaft_y = (cy - thickness / 2.0).round();
+    let shaft_cy = shaft_y + thickness / 2.0; // true visual center of the shaft
+    let shaft_x = (cx - thickness / 2.0).round();
+    let shaft_cx = shaft_x + thickness / 2.0;
+
+    let mut frame = canvas::Frame::with_bounds(renderer, cell);
+
+    match c {
+        '\u{2190}' => {
+            // ← leftward: shaft from right edge to arrowhead base, head at left
+            let base = x + h_arrow_len;
+            quad(renderer, Rectangle::new(
+                Point::new(base, shaft_y),
+                Size::new(x + w - base, thickness),
+            ));
+            let head = canvas::Path::new(|b| {
+                b.move_to(Point::new(x, shaft_cy));
+                b.line_to(Point::new(base, shaft_cy - h_arrow_half));
+                b.line_to(Point::new(base, shaft_cy + h_arrow_half));
+                b.close();
+            });
+            frame.fill(&head, fg);
+        }
+        '\u{2191}' => {
+            // ↑ upward: shaft from bottom edge to arrowhead base, head at top
+            let base = y + v_arrow_len;
+            quad(renderer, Rectangle::new(
+                Point::new(shaft_x, base),
+                Size::new(thickness, y + h - base),
+            ));
+            let head = canvas::Path::new(|b| {
+                b.move_to(Point::new(shaft_cx, y));
+                b.line_to(Point::new(shaft_cx - v_arrow_half, base));
+                b.line_to(Point::new(shaft_cx + v_arrow_half, base));
+                b.close();
+            });
+            frame.fill(&head, fg);
+        }
+        '\u{2192}' => {
+            // → rightward: shaft from left edge to arrowhead base, head at right
+            let base = x + w - h_arrow_len;
+            quad(renderer, Rectangle::new(
+                Point::new(x, shaft_y),
+                Size::new(base - x, thickness),
+            ));
+            let head = canvas::Path::new(|b| {
+                b.move_to(Point::new(x + w, shaft_cy));
+                b.line_to(Point::new(base, shaft_cy - h_arrow_half));
+                b.line_to(Point::new(base, shaft_cy + h_arrow_half));
+                b.close();
+            });
+            frame.fill(&head, fg);
+        }
+        '\u{2193}' => {
+            // ↓ downward: shaft from top edge to arrowhead base, head at bottom
+            let base = y + h - v_arrow_len;
+            quad(renderer, Rectangle::new(
+                Point::new(shaft_x, y),
+                Size::new(thickness, base - y),
+            ));
+            let head = canvas::Path::new(|b| {
+                b.move_to(Point::new(shaft_cx, y + h));
+                b.line_to(Point::new(shaft_cx - v_arrow_half, base));
+                b.line_to(Point::new(shaft_cx + v_arrow_half, base));
+                b.close();
+            });
+            frame.fill(&head, fg);
+        }
+        _ => unreachable!(),
+    }
+
+    renderer.draw_geometry(frame.into_geometry());
 }
