@@ -28,9 +28,13 @@ Mandelbot organizes work into a hierarchical tree of agents. The home agent (thi
 
 The default modifier prefixes are `ctrl+shift` (control) and `alt+shift` (movement). These can be changed in `~/.mandelbot/config.json`.
 
+## Git worktree management
+
+In git projects, task agents automatically get their own worktree — an isolated copy of the repo where they can make changes without interfering with each other or the main working tree. Worktrees are created when a task spawns and cleaned up when the tab closes. The location is configurable via `worktree_location` in `~/.mandelbot/config.json` (default: `.mandelbot/worktrees` relative to the project root).
+
 ## Delegating work
 
-When a task is large enough to parallelize, agents can use the `/mandelbot-delegate` skill to break work into subtasks and coordinate child agents via a shared status file.
+When a task is large enough to parallelize, agents can use the `/mandelbot-delegate` skill to break work into subtasks and coordinate child agents via a shared status file. Each subtask gets its own worktree and branch.
 
 ## Configuration
 
