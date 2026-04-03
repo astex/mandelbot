@@ -87,6 +87,10 @@ fn handle_tools_list(id: Value) -> Response {
                                 "type": "string",
                                 "description": "Initial prompt to send to the spawned agent.",
                             },
+                            "branch": {
+                                "type": "string",
+                                "description": "Git branch name for the task agent's worktree. Used as the worktree directory name and the branch to create.",
+                            },
                         },
                     },
                 },
@@ -190,6 +194,9 @@ async fn handle_tools_call(
             let prompt = args
                 .and_then(|a| a.get("prompt"))
                 .and_then(|v| v.as_str());
+            let branch = args
+                .and_then(|a| a.get("branch"))
+                .and_then(|v| v.as_str());
 
             let mut msg = serde_json::json!({
                 "type": "spawn_tab",
@@ -203,6 +210,9 @@ async fn handle_tools_call(
             }
             if let Some(p) = prompt {
                 msg["prompt"] = Value::String(p.to_string());
+            }
+            if let Some(b) = branch {
+                msg["branch"] = Value::String(b.to_string());
             }
 
             if let Err(e) = send_to_parent(parent_writer, msg).await {

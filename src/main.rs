@@ -6,6 +6,7 @@ mod mcp;
 mod pty;
 mod terminal;
 mod theme;
+mod worktree;
 mod ui;
 mod widget;
 

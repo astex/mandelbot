@@ -19,6 +19,7 @@ use futures::SinkExt;
 
 use crate::pty;
 use crate::ui::Message;
+use crate::worktree;
 
 #[derive(Clone)]
 struct TermEventListener {
@@ -82,6 +83,7 @@ pub struct TerminalTab {
     pub is_claude: bool,
     pub rank: AgentRank,
     pub project_dir: Option<PathBuf>,
+    pub worktree_path: Option<PathBuf>,
     pub parent_id: Option<usize>,
     pub depth: usize,
     pub project_id: Option<usize>,
@@ -110,8 +112,10 @@ impl TerminalTab {
         project_id: Option<usize>,
         shell: &str,
         workflow: &str,
+        worktree_location: &str,
         parent_socket: &Path,
         prompt: Option<String>,
+        branch: Option<String>,
     ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let listener = TermEventListener::new();
@@ -144,6 +148,7 @@ impl TerminalTab {
         let prompt_flag = prompt.unwrap_or_default();
         let (command, args_vec, env, cwd);
         let wrapped_cmd; // holds the shell -c argument for Claude tabs
+        let worktree_dir; // holds the worktree path for task agents
         if is_claude {
             // Spawn Claude inside a login shell so that shell profiles and
             // direnv are evaluated before the process starts.
@@ -156,9 +161,15 @@ impl TerminalTab {
                 pty::shell_quote(&system_prompt_flag),
                 pty::shell_quote(&hooks_settings_flag),
             );
-            if rank == AgentRank::Task && workflow == "git" {
-                claude_args.push_str(" -w");
-            }
+            // For task agents in git workflow, create a worktree and run
+            // claude inside it instead of passing `-w`.
+            worktree_dir = if rank == AgentRank::Task && workflow == "git" {
+                project_dir.as_ref().and_then(|dir| {
+                    worktree::create(dir, worktree_location, branch.as_deref())
+                })
+            } else {
+                None
+            };
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
                 " --plugin-dir {}",
@@ -182,8 +193,9 @@ impl TerminalTab {
                 ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
                 ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
             ]);
-            cwd = project_dir.as_deref();
+            cwd = worktree_dir.as_deref().or(project_dir.as_deref());
         } else {
+            worktree_dir = None;
             let parts: Vec<&str> = shell.split_whitespace().collect();
             let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
             command = cmd;
@@ -211,6 +223,7 @@ impl TerminalTab {
             is_claude,
             rank,
             project_dir,
+            worktree_path: worktree_dir.clone(),
             parent_id,
             depth,
             project_id,
@@ -240,6 +253,7 @@ impl TerminalTab {
             is_claude: true,
             rank: AgentRank::Project,
             project_dir: None,
+            worktree_path: None,
             parent_id: Some(parent_id),
             depth: 1,
             project_id: Some(id),
