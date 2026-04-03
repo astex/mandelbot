@@ -28,6 +28,10 @@ Mandelbot organizes work into a hierarchical tree of agents. The home agent (thi
 
 The default modifier prefixes are `ctrl+shift` (control) and `alt+shift` (movement). These can be changed in `~/.mandelbot/config.json`.
 
+## Tab folding
+
+When a parent tab accumulates many children, use `control+f` to fold them into a single compact placeholder. This collapses the entire subtree so the tab bar stays manageable. Pressing any key while the fold placeholder is focused will unfold the tabs again.
+
 ## Git worktree management
 
 In git projects, task agents automatically get their own worktree — an isolated copy of the repo where they can make changes without interfering with each other or the main working tree. Worktrees are created when a task spawns and cleaned up when the tab closes. The location is configurable via `worktree_location` in `~/.mandelbot/config.json` (default: `.mandelbot/worktrees` relative to the project root).
