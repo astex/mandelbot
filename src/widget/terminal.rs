@@ -635,89 +635,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 use keyboard::key::Named;
 
                 // Global bindings (work for both normal and pending tabs).
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("t".into())
-                {
-                    shell.publish(Message::NewTab);
+                let ctx = super::keybindings::KeyContext { active_tab_id: self.tab.id };
+                if let Some(msg) = super::keybindings::keybinding_message(self.config, &key, *modifiers, &ctx) {
+                    shell.publish(msg);
                     shell.capture_event();
                     return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(Named::Space)
-                {
-                    shell.publish(Message::SpawnAgent);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(Named::ArrowDown)
-                {
-                    shell.publish(Message::SpawnAgent);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(Named::ArrowRight)
-                {
-                    shell.publish(Message::SpawnChild);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("w".into())
-                {
-                    shell.publish(Message::CloseTab(self.tab.id));
-                    shell.capture_event();
-                    return;
-                }
-
-                // Tree navigation.
-                if self.config.matches_movement(*modifiers) {
-                    match &key {
-                        keyboard::Key::Named(Named::Space) => {
-                            shell.publish(Message::NextIdle);
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowDown) => {
-                            shell.publish(Message::NavigateSibling(1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowUp) => {
-                            shell.publish(Message::NavigateSibling(-1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowRight) => {
-                            shell.publish(Message::NavigateRank(1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowLeft) => {
-                            shell.publish(Message::NavigateRank(-1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Character(c) if c.as_ref() == "-" => {
-                            shell.publish(Message::FocusPreviousTab);
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Character(c) => {
-                            if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (0..=9).contains(&d)) {
-                                shell.publish(Message::SelectTabByIndex(digit));
-                                shell.capture_event();
-                                return;
-                            }
-                        }
-                        _ => {}
-                    }
                 }
 
                 // Pending tab: route input to PendingInput messages.
