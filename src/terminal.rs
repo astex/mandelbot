@@ -608,13 +608,6 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
     };
 
     let settings = serde_json::json!({
-        "permissions": {
-            "allow": [
-                "mcp__mandelbot__set_title",
-                "mcp__mandelbot__set_status",
-                "mcp__mandelbot__spawn_tab",
-            ],
-        },
         "hooks": {
             "UserPromptSubmit": [{
                 "hooks": [set_status("working")],
