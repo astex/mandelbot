@@ -416,6 +416,10 @@ impl TerminalTab {
         *self.term.mode()
     }
 
+    pub fn cursor_blinking(&self) -> bool {
+        self.term.cursor_style().blinking
+    }
+
     pub fn set_selection(&mut self, selection: Option<Selection>) {
         self.term.selection = selection;
     }
