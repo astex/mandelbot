@@ -109,6 +109,7 @@ impl TerminalTab {
         depth: usize,
         project_id: Option<usize>,
         shell: &str,
+        workflow: &str,
         parent_socket: &Path,
         prompt: Option<String>,
     ) -> (Self, iced::Task<Message>) {
@@ -140,10 +141,10 @@ impl TerminalTab {
                 pty::shell_quote(&system_prompt_flag),
                 pty::shell_quote(&hooks_settings_flag),
             );
-            if rank == AgentRank::Task {
+            if rank == AgentRank::Task && workflow == "git" {
                 claude_args.push_str(" -w");
             }
-            let plugin_dir = write_plugin_dir(&config_dir);
+            let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
                 " --plugin-dir {}",
                 pty::shell_quote(&plugin_dir.to_string_lossy()),
@@ -622,9 +623,12 @@ const HOME_PROMPT: &str = include_str!("agents/HOME_PROMPT.md");
 const PROJECT_PROMPT: &str = include_str!("agents/PROJECT_PROMPT.md");
 
 const SKILL_DELEGATE: &str = include_str!("agents/skills/mandelbot-delegate/SKILL.md");
+const SKILL_DELEGATE_NOGIT: &str = include_str!("agents/skills/mandelbot-delegate/SKILL.nogit.md");
 const SKILL_DELEGATE_TEMPLATE: &str = include_str!("agents/skills/mandelbot-delegate/template.md");
 const SKILL_DELEGATE_WATCH: &str = include_str!("agents/skills/mandelbot-delegate/watch.sh");
 const SKILL_WORK_AS_SUBTASK: &str = include_str!("agents/skills/mandelbot-work-as-subtask/SKILL.md");
+const SKILL_WORK_AS_SUBTASK_NOGIT: &str =
+    include_str!("agents/skills/mandelbot-work-as-subtask/SKILL.nogit.md");
 const SKILL_MANDELBOT_CONFIG: &str = include_str!("agents/skills/mandelbot-config/SKILL.md");
 const SKILL_MANDELBOT_KEYBINDINGS: &str =
     include_str!("agents/skills/mandelbot-keybindings/SKILL.md");
@@ -722,7 +726,7 @@ fn write_system_prompt(dir: &Path, rank: AgentRank) -> PathBuf {
     path
 }
 
-fn write_plugin_dir(dir: &Path) -> PathBuf {
+fn write_plugin_dir(dir: &Path, workflow: &str) -> PathBuf {
     let plugin_dir = dir.join("plugins");
 
     let delegate_dir = plugin_dir.join("skills").join("mandelbot-delegate");
@@ -742,18 +746,28 @@ fn write_plugin_dir(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(&features_dir)
         .expect("failed to create mandelbot-features skill dir");
 
+    let delegate_content = if workflow == "git" {
+        SKILL_DELEGATE
+    } else {
+        SKILL_DELEGATE_NOGIT
+    };
     let skill_path = delegate_dir.join("SKILL.md");
     if !skill_path.exists() {
-        std::fs::write(&skill_path, SKILL_DELEGATE).expect("failed to write delegate skill");
+        std::fs::write(&skill_path, delegate_content).expect("failed to write delegate skill");
         std::fs::write(delegate_dir.join("template.md"), SKILL_DELEGATE_TEMPLATE)
             .expect("failed to write delegate template");
         std::fs::write(delegate_dir.join("watch.sh"), SKILL_DELEGATE_WATCH)
             .expect("failed to write delegate watch script");
     }
 
+    let subtask_content = if workflow == "git" {
+        SKILL_WORK_AS_SUBTASK
+    } else {
+        SKILL_WORK_AS_SUBTASK_NOGIT
+    };
     let skill_path = subtask_dir.join("SKILL.md");
     if !skill_path.exists() {
-        std::fs::write(&skill_path, SKILL_WORK_AS_SUBTASK)
+        std::fs::write(&skill_path, subtask_content)
             .expect("failed to write work-as-subtask skill");
     }
 

@@ -165,7 +165,7 @@ impl App {
         let (tab, pty_task) = TerminalTab::spawn(
             id, rows, cols, is_claude, rank, project_dir, parent_id,
             depth, project_id,
-            &self.config.shell, &self.parent_socket_path, prompt,
+            &self.config.shell, &self.config.workflow, &self.parent_socket_path, prompt,
         );
         self.tabs.push(tab);
         if is_claude {
