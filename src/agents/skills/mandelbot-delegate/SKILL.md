@@ -27,16 +27,15 @@ Create a status file at `~/.mandelbot/coordination/<descriptive-name>.md` using 
 
 ### 3. Spawn child agents
 
-For each task, call the `spawn_tab` MCP tool with a prompt like:
+For each task, call the `spawn_tab` MCP tool with a **`branch`** parameter (the branch name for this subtask's worktree) and a **`prompt`** like:
 
-> Start by running `/mandelbot-work-as-subtask` to load the subtask protocol. You are working on task <N> from the coordination file at `~/.mandelbot/coordination/<name>.md`. Your branch name is `<branch-name>`. Read the coordination file and the referenced plan file to understand your assignment. Update your row in the coordination file as you work.
+> Start by running `/mandelbot-work-as-subtask` to load the subtask protocol. You are working on task <N> from the coordination file at `~/.mandelbot/coordination/<name>.md`. Read the coordination file and the referenced plan file to understand your assignment. Update your row in the coordination file as you work.
 
 Include:
 - Instruction to run `/mandelbot-work-as-subtask` **first**
 - The **absolute path** to the coordination file
 - The **task number** they are responsible for
-- The **branch name** the subtask should create and work on
-- A **base branch** if it should branch from something other than the current HEAD
+- The **branch name** via the `branch` parameter (also used as the git worktree name)
 - Instruction to read both the coordination file and the plan
 
 ### 4. Monitor progress

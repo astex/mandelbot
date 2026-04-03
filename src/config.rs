@@ -40,6 +40,10 @@ fn default_workflow() -> String {
     "detect".to_string()
 }
 
+fn default_worktree_location() -> String {
+    ".mandelbot/worktrees".to_string()
+}
+
 #[derive(Deserialize)]
 pub struct Config {
     #[serde(default = "default_theme")]
@@ -65,6 +69,9 @@ pub struct Config {
 
     #[serde(default = "default_workflow")]
     pub workflow: String,
+
+    #[serde(default = "default_worktree_location")]
+    pub worktree_location: String,
 }
 
 impl Default for Config {
@@ -78,6 +85,7 @@ impl Default for Config {
             movement_prefix: default_movement_prefix(),
             shell: default_shell(),
             workflow: default_workflow(),
+            worktree_location: default_worktree_location(),
         }
     }
 }

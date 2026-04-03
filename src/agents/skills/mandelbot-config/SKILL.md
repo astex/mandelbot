@@ -19,6 +19,7 @@ Use this skill when the user asks to change mandelbot settings. Configuration li
 | `movement_prefix` | string | `"alt+shift"` | Modifier combo |
 | `shell` | string | `$SHELL` | Path to a shell (e.g. `"/bin/zsh"`) |
 | `workflow` | string | `"detect"` | `"detect"`, `"git"`, `"none"` |
+| `worktree_location` | string | `"~/.mandelbot/worktrees"` | Path for git worktrees (absolute or relative to project root) |
 
 Valid modifier names: `ctrl`, `shift`, `alt`, `super` (also `cmd`, `meta`, `logo`).
 

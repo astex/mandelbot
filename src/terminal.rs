@@ -82,6 +82,7 @@ pub struct TerminalTab {
     pub is_claude: bool,
     pub rank: AgentRank,
     pub project_dir: Option<PathBuf>,
+    pub worktree_path: Option<PathBuf>,
     pub parent_id: Option<usize>,
     pub depth: usize,
     pub project_id: Option<usize>,
@@ -110,8 +111,10 @@ impl TerminalTab {
         project_id: Option<usize>,
         shell: &str,
         workflow: &str,
+        worktree_location: &str,
         parent_socket: &Path,
         prompt: Option<String>,
+        branch: Option<String>,
     ) -> (Self, iced::Task<Message>) {
         let size = TermSize::new(cols, rows);
         let listener = TermEventListener::new();
@@ -144,6 +147,7 @@ impl TerminalTab {
         let prompt_flag = prompt.unwrap_or_default();
         let (command, args_vec, env, cwd);
         let wrapped_cmd; // holds the shell -c argument for Claude tabs
+        let worktree_dir; // holds the worktree path for task agents
         if is_claude {
             // Spawn Claude inside a login shell so that shell profiles and
             // direnv are evaluated before the process starts.
@@ -156,9 +160,15 @@ impl TerminalTab {
                 pty::shell_quote(&system_prompt_flag),
                 pty::shell_quote(&hooks_settings_flag),
             );
-            if rank == AgentRank::Task && workflow == "git" {
-                claude_args.push_str(" -w");
-            }
+            // For task agents in git workflow, create a worktree and run
+            // claude inside it instead of passing `-w`.
+            worktree_dir = if rank == AgentRank::Task && workflow == "git" {
+                project_dir.as_ref().and_then(|dir| {
+                    create_git_worktree(dir, worktree_location, branch.as_deref())
+                })
+            } else {
+                None
+            };
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
                 " --plugin-dir {}",
@@ -182,8 +192,9 @@ impl TerminalTab {
                 ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
                 ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
             ]);
-            cwd = project_dir.as_deref();
+            cwd = worktree_dir.as_deref().or(project_dir.as_deref());
         } else {
+            worktree_dir = None;
             let parts: Vec<&str> = shell.split_whitespace().collect();
             let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
             command = cmd;
@@ -211,6 +222,7 @@ impl TerminalTab {
             is_claude,
             rank,
             project_dir,
+            worktree_path: worktree_dir.clone(),
             parent_id,
             depth,
             project_id,
@@ -240,6 +252,7 @@ impl TerminalTab {
             is_claude: true,
             rank: AgentRank::Project,
             project_dir: None,
+            worktree_path: None,
             parent_id: Some(parent_id),
             depth: 1,
             project_id: Some(id),
@@ -594,6 +607,13 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
     };
 
     let settings = serde_json::json!({
+        "permissions": {
+            "allow": [
+                "mcp__mandelbot__set_title",
+                "mcp__mandelbot__set_status",
+                "mcp__mandelbot__spawn_tab",
+            ],
+        },
         "hooks": {
             "UserPromptSubmit": [{
                 "hooks": [set_status("working")],
@@ -726,6 +746,90 @@ fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
     }
 
     env
+}
+
+const WORKTREE_ADJECTIVES: &[&str] = &[
+    "bold", "bright", "calm", "cool", "dark", "deep", "fair", "fast",
+    "fine", "free", "glad", "gold", "keen", "kind", "late", "lean",
+    "long", "loud", "mild", "neat", "pure", "rare", "rich", "safe",
+    "slim", "soft", "tall", "true", "vast", "warm", "wide", "wild",
+];
+
+const WORKTREE_NOUNS: &[&str] = &[
+    "birch", "brook", "cliff", "cloud", "coral", "crane", "creek",
+    "dawn", "dune", "ember", "fern", "fjord", "flame", "flint",
+    "forge", "frost", "glade", "grove", "haven", "heath", "heron",
+    "larch", "lark", "marsh", "oak", "pearl", "pine", "pond",
+    "ridge", "river", "sage", "shore", "slate", "spark", "stone",
+    "swift", "thorn", "tide", "vale", "wren",
+];
+
+fn generate_worktree_name() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::SystemTime;
+
+    let mut hasher = DefaultHasher::new();
+    SystemTime::now().hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let adj = WORKTREE_ADJECTIVES[(hash as usize) % WORKTREE_ADJECTIVES.len()];
+    let noun = WORKTREE_NOUNS[((hash >> 16) as usize) % WORKTREE_NOUNS.len()];
+    let suffix = (hash >> 32) % 1000;
+    format!("{adj}-{noun}-{suffix}")
+}
+
+/// Create a git worktree under `project_dir/worktree_location/` and return
+/// the absolute path to the new worktree directory. When `branch` is
+/// provided it is used as both the directory name and the new branch name;
+/// otherwise a random name is generated with a detached HEAD.
+fn create_git_worktree(
+    project_dir: &Path,
+    worktree_location: &str,
+    branch: Option<&str>,
+) -> Option<PathBuf> {
+    let name = match branch {
+        Some(b) if !b.is_empty() => b.to_string(),
+        _ => generate_worktree_name(),
+    };
+    let base = PathBuf::from(worktree_location);
+    let base = if base.is_absolute() { base } else { project_dir.join(base) };
+    let worktree_path = base.join(&name);
+    let path_str = worktree_path.to_string_lossy().into_owned();
+
+    let status = if branch.is_some_and(|b| !b.is_empty()) {
+        // Create a new branch with the given name.
+        std::process::Command::new("git")
+            .args(["worktree", "add", "-b", &name, &path_str])
+            .current_dir(project_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+    } else {
+        // Detached HEAD.
+        std::process::Command::new("git")
+            .args(["worktree", "add", "-d", &path_str])
+            .current_dir(project_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+    };
+
+    match status {
+        Ok(s) if s.success() => {
+            // Copy the project's .claude/settings.local.json into the
+            // worktree so that MCP server trust carries over.
+            let src = project_dir.join(".claude").join("settings.local.json");
+            if src.exists() {
+                let dst_dir = worktree_path.join(".claude");
+                let _ = std::fs::create_dir_all(&dst_dir);
+                let _ = std::fs::copy(&src, dst_dir.join("settings.local.json"));
+            }
+            Some(worktree_path)
+        }
+        _ => None,
+    }
 }
 
 fn write_system_prompt(dir: &Path, rank: AgentRank) -> PathBuf {
