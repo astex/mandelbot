@@ -676,47 +676,20 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     return;
                 }
 
+                if self.config.matches_control(*modifiers)
+                    && key == keyboard::Key::Character("f".into())
+                {
+                    shell.publish(Message::FoldTab);
+                    shell.capture_event();
+                    return;
+                }
+
                 // Tree navigation.
                 if self.config.matches_movement(*modifiers) {
-                    match &key {
-                        keyboard::Key::Named(Named::Space) => {
-                            shell.publish(Message::NextIdle);
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowDown) => {
-                            shell.publish(Message::NavigateSibling(1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowUp) => {
-                            shell.publish(Message::NavigateSibling(-1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowRight) => {
-                            shell.publish(Message::NavigateRank(1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Named(Named::ArrowLeft) => {
-                            shell.publish(Message::NavigateRank(-1));
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Character(c) if c.as_ref() == "-" => {
-                            shell.publish(Message::FocusPreviousTab);
-                            shell.capture_event();
-                            return;
-                        }
-                        keyboard::Key::Character(c) => {
-                            if let Some(digit) = c.as_ref().parse::<usize>().ok().filter(|&d| (0..=9).contains(&d)) {
-                                shell.publish(Message::SelectTabByIndex(digit));
-                                shell.capture_event();
-                                return;
-                            }
-                        }
-                        _ => {}
+                    if let Some(msg) = movement_key_message(&key) {
+                        shell.publish(msg);
+                        shell.capture_event();
+                        return;
                     }
                 }
 
@@ -808,6 +781,25 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }
             _ => {}
         }
+    }
+}
+
+/// Try to map a movement-prefix key press to a navigation message.
+fn movement_key_message(key: &keyboard::Key) -> Option<Message> {
+    use keyboard::key::Named;
+    match key {
+        keyboard::Key::Named(Named::Space) => Some(Message::NextIdle),
+        keyboard::Key::Named(Named::ArrowDown) => Some(Message::NavigateSibling(1)),
+        keyboard::Key::Named(Named::ArrowUp) => Some(Message::NavigateSibling(-1)),
+        keyboard::Key::Named(Named::ArrowRight) => Some(Message::NavigateRank(1)),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(Message::NavigateRank(-1)),
+        keyboard::Key::Character(c) if c.as_ref() == "-" => Some(Message::FocusPreviousTab),
+        keyboard::Key::Character(c) => {
+            c.as_ref().parse::<usize>().ok()
+                .filter(|&d| (0..=9).contains(&d))
+                .map(Message::SelectTabByIndex)
+        }
+        _ => None,
     }
 }
 
@@ -967,6 +959,117 @@ fn ansi_256_to_color(idx: u8, theme: &TerminalTheme) -> Color {
 
 impl<'a> From<TerminalWidget<'a>> for Element<'a, Message, iced::Theme, iced::Renderer> {
     fn from(widget: TerminalWidget<'a>) -> Self {
+        Self::new(widget)
+    }
+}
+
+// --- Fold placeholder widget ---
+
+pub struct FoldPlaceholderWidget<'a> {
+    fold_parent_id: usize,
+    fold_count: usize,
+    config: &'a Config,
+}
+
+impl<'a> FoldPlaceholderWidget<'a> {
+    pub fn new(fold_parent_id: usize, fold_count: usize, config: &'a Config) -> Self {
+        Self { fold_parent_id, fold_count, config }
+    }
+}
+
+impl<'a> Widget<Message, iced::Theme, iced::Renderer> for FoldPlaceholderWidget<'a> {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::atomic(limits, Length::Fill, Length::Fill)
+    }
+
+    fn draw(
+        &self,
+        _tree: &widget::Tree,
+        renderer: &mut iced::Renderer,
+        _theme: &iced::Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        let count = self.fold_count;
+        let label = format!("press any key to open {} tabs", count);
+
+        let text_width = label.len() as f32 * self.config.char_width();
+        let text_x = bounds.x + (bounds.width - text_width) / 2.0;
+        let text_y = bounds.y + (bounds.height - self.config.char_height()) / 2.0;
+        renderer.fill_text(
+            Text {
+                content: label,
+                bounds: Size::new(text_width, self.config.char_height()),
+                size: self.config.font_size.into(),
+                line_height: text::LineHeight::Relative(self.config.line_height),
+                font: Font::MONOSPACE,
+                align_x: iced::alignment::Horizontal::Left.into(),
+                align_y: iced::alignment::Vertical::Top.into(),
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::None,
+            },
+            Point::new(text_x, text_y),
+            Color { a: 0.5, ..self.config.terminal_theme().fg },
+            bounds,
+        );
+    }
+
+    fn update(
+        &mut self,
+        _tree: &mut Tree,
+        event: &Event,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _renderer: &iced::Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        if let Event::Keyboard(keyboard::Event::KeyPressed {
+            key,
+            modifiers,
+            text: _key_text,
+            ..
+        }) = event
+        {
+            use keyboard::key::Named;
+
+            if self.config.matches_movement(*modifiers) {
+                if let Some(msg) = movement_key_message(key) {
+                    shell.publish(msg);
+                    shell.capture_event();
+                    return;
+                }
+            }
+
+            // Ignore bare modifier key presses.
+            if matches!(key, keyboard::Key::Named(
+                Named::Shift | Named::Control | Named::Alt | Named::Super
+            )) {
+                return;
+            }
+
+            // Any other key: unfold.
+            shell.publish(Message::UnfoldTab(self.fold_parent_id));
+            shell.capture_event();
+        }
+    }
+}
+
+impl<'a> From<FoldPlaceholderWidget<'a>> for Element<'a, Message, iced::Theme, iced::Renderer> {
+    fn from(widget: FoldPlaceholderWidget<'a>) -> Self {
         Self::new(widget)
     }
 }
