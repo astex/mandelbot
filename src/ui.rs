@@ -245,14 +245,8 @@ impl App {
 
         // Clean up git worktree if this tab created one.
         if let Some(wt) = self.tabs[idx].worktree_path.take() {
-            let project_dir = self.tabs[idx].project_dir.clone();
-            if let Some(dir) = project_dir {
-                let _ = std::process::Command::new("git")
-                    .args(["worktree", "remove", "--force", &wt.to_string_lossy()])
-                    .current_dir(dir)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
+            if let Some(dir) = self.tabs[idx].project_dir.as_deref() {
+                crate::worktree::remove(dir, &wt);
             }
         }
 
