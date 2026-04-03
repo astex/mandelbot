@@ -1,5 +1,6 @@
 mod animation;
 mod config;
+mod keybindings;
 mod keys;
 mod links;
 mod mcp;

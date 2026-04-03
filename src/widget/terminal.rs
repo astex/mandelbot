@@ -635,62 +635,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 use keyboard::key::Named;
 
                 // Global bindings (work for both normal and pending tabs).
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("t".into())
-                {
-                    shell.publish(Message::NewTab);
+                let ctx = crate::keybindings::KeyContext { active_tab_id: self.tab.id };
+                if let Some(msg) = crate::keybindings::keybinding_message(self.config, &key, *modifiers, &ctx) {
+                    shell.publish(msg);
                     shell.capture_event();
                     return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(Named::Space)
-                {
-                    shell.publish(Message::SpawnAgent);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(Named::ArrowDown)
-                {
-                    shell.publish(Message::SpawnAgent);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Named(Named::ArrowRight)
-                {
-                    shell.publish(Message::SpawnChild);
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("w".into())
-                {
-                    shell.publish(Message::CloseTab(self.tab.id));
-                    shell.capture_event();
-                    return;
-                }
-
-                if self.config.matches_control(*modifiers)
-                    && key == keyboard::Key::Character("f".into())
-                {
-                    shell.publish(Message::FoldTab);
-                    shell.capture_event();
-                    return;
-                }
-
-                // Tree navigation.
-                if self.config.matches_movement(*modifiers) {
-                    if let Some(msg) = movement_key_message(&key) {
-                        shell.publish(msg);
-                        shell.capture_event();
-                        return;
-                    }
                 }
 
                 // Pending tab: route input to PendingInput messages.
@@ -781,25 +730,6 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }
             _ => {}
         }
-    }
-}
-
-/// Try to map a movement-prefix key press to a navigation message.
-fn movement_key_message(key: &keyboard::Key) -> Option<Message> {
-    use keyboard::key::Named;
-    match key {
-        keyboard::Key::Named(Named::Space) => Some(Message::NextIdle),
-        keyboard::Key::Named(Named::ArrowDown) => Some(Message::NavigateSibling(1)),
-        keyboard::Key::Named(Named::ArrowUp) => Some(Message::NavigateSibling(-1)),
-        keyboard::Key::Named(Named::ArrowRight) => Some(Message::NavigateRank(1)),
-        keyboard::Key::Named(Named::ArrowLeft) => Some(Message::NavigateRank(-1)),
-        keyboard::Key::Character(c) if c.as_ref() == "-" => Some(Message::FocusPreviousTab),
-        keyboard::Key::Character(c) => {
-            c.as_ref().parse::<usize>().ok()
-                .filter(|&d| (0..=9).contains(&d))
-                .map(Message::SelectTabByIndex)
-        }
-        _ => None,
     }
 }
 
@@ -1040,18 +970,16 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for FoldPlaceholderWidget<
         if let Event::Keyboard(keyboard::Event::KeyPressed {
             key,
             modifiers,
-            text: _key_text,
             ..
         }) = event
         {
             use keyboard::key::Named;
 
-            if self.config.matches_movement(*modifiers) {
-                if let Some(msg) = movement_key_message(key) {
-                    shell.publish(msg);
-                    shell.capture_event();
-                    return;
-                }
+            let ctx = crate::keybindings::KeyContext { active_tab_id: self.fold_parent_id };
+            if let Some(msg) = crate::keybindings::keybinding_message(self.config, key, *modifiers, &ctx) {
+                shell.publish(msg);
+                shell.capture_event();
+                return;
             }
 
             // Ignore bare modifier key presses.
