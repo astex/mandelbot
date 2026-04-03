@@ -6,22 +6,15 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep]
 
 # Work as a Subtask
 
-You have been spawned as part of a coordinated multi-agent workflow. Your prompt includes a **coordination file path**, a **task number**, and a **branch name**. Follow this protocol.
+You have been spawned as part of a coordinated multi-agent workflow. Your prompt includes a **coordination file path** and a **task number**. Follow this protocol.
 
-## Worktree Isolation
+## Shared Working Directory
 
-You are running in your own git worktree — an isolated copy of the repository. All repository changes (code, config, etc.) must happen within this worktree. Do not `cd` to the original repository root or make changes to it. You may write to `/tmp` and to `~/.mandelbot` (e.g., the coordination status file).
+**You share the working directory with other agents.** There is no VCS isolation — changes you make to files are immediately visible to (and can conflict with) other agents running in parallel.
 
-## Branch Ownership
-
-You own exactly one branch. Before starting any work:
-
-```bash
-git checkout -b <branch-name>            # or, if a base branch was specified:
-git checkout -b <branch-name> <base>
-```
-
-All of your commits go on this branch. When your work is complete, push the branch and create a PR for it unless your prompt explicitly says otherwise.
+- Only modify files that your task owns. If your assignment doesn't make file ownership clear, read the plan carefully and stick to the files implied by your task.
+- Do not modify files outside your task's scope, even to "fix" something you notice.
+- If you need to modify a file that another task might also touch, note this in your coordination file row and set your status to `blocked`.
 
 ## Workflow
 
@@ -57,7 +50,7 @@ When done, update your row's status to `done`:
 
 ### 5. Handle blockers
 
-If you are blocked (e.g., waiting on another task's output):
+If you are blocked (e.g., waiting on another task's output, or a file conflict):
 1. Set your status to `blocked` with a note explaining what you're waiting for
 2. Use the watcher script to wait for changes to the coordination file. The script blocks until the file changes, prints the updated contents, then exits. **Run it in the background** (using `run_in_background`) so you are free to do other work while waiting. You will be notified when the file changes.
 
