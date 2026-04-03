@@ -635,8 +635,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 use keyboard::key::Named;
 
                 // Global bindings (work for both normal and pending tabs).
-                let ctx = crate::keybindings::KeyContext { active_tab_id: self.tab.id };
-                if let Some(msg) = crate::keybindings::keybinding_message(self.config, &key, *modifiers, &ctx) {
+                let ctx = super::keybindings::KeyContext { active_tab_id: self.tab.id };
+                if let Some(msg) = super::keybindings::keybinding_message(self.config, &key, *modifiers, &ctx) {
                     shell.publish(msg);
                     shell.capture_event();
                     return;
@@ -975,8 +975,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for FoldPlaceholderWidget<
         {
             use keyboard::key::Named;
 
-            let ctx = crate::keybindings::KeyContext { active_tab_id: self.fold_parent_id };
-            if let Some(msg) = crate::keybindings::keybinding_message(self.config, key, *modifiers, &ctx) {
+            let ctx = super::keybindings::KeyContext { active_tab_id: self.fold_parent_id };
+            if let Some(msg) = super::keybindings::keybinding_message(self.config, key, *modifiers, &ctx) {
                 shell.publish(msg);
                 shell.capture_event();
                 return;
