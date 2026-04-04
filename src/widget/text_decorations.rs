@@ -55,15 +55,13 @@ fn draw_dotted(
     color: Color,
 ) {
     let dot = thickness;
-    let stride = dot * 3.0;
+    let stride = dot * 4.0;
     let count = (width / stride).floor().max(1.0) as usize;
-    let total = count as f32 * stride - (stride - dot);
-    let offset = (width - total) / 2.0;
     for i in 0..count {
         renderer.fill_quad(
             Quad {
                 bounds: Rectangle::new(
-                    Point::new(x + offset + i as f32 * stride, y),
+                    Point::new(x + i as f32 * stride, y),
                     Size::new(dot, thickness),
                 ),
                 border: Border::default(),
