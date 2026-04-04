@@ -54,7 +54,7 @@ fn main() -> iced::Result {
             ..Default::default()
         });
 
-    if let Some(font_bytes) = config::find_font_bytes(&cfg.font) {
+    for font_bytes in config::find_font_variants(&cfg.font) {
         app = app.font(font_bytes);
     }
 
