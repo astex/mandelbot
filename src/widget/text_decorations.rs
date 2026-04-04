@@ -54,21 +54,23 @@ fn draw_dotted(
     thickness: f32,
     color: Color,
 ) {
-    let dot_width = thickness;
-    let gap = thickness * 2.0;
-    let stride = dot_width + gap;
-    let mut cx = x;
-    while cx < x + width {
-        let w = dot_width.min(x + width - cx);
+    let dot = thickness;
+    let stride = dot * 3.0;
+    let count = (width / stride).floor().max(1.0) as usize;
+    let total = count as f32 * stride - (stride - dot);
+    let offset = (width - total) / 2.0;
+    for i in 0..count {
         renderer.fill_quad(
             Quad {
-                bounds: Rectangle::new(Point::new(cx, y), Size::new(w, thickness)),
+                bounds: Rectangle::new(
+                    Point::new(x + offset + i as f32 * stride, y),
+                    Size::new(dot, thickness),
+                ),
                 border: Border::default(),
                 ..Quad::default()
             },
             color,
         );
-        cx += stride;
     }
 }
 
@@ -106,19 +108,26 @@ fn draw_curly(
     thickness: f32,
     color: Color,
 ) {
-    // Approximate a sine wave with small quads.
+    // Trace connected semicircles: up then down, each spanning half the cell.
     let amplitude = thickness * 2.0;
-    let steps = (width / thickness).ceil().max(4.0) as usize;
-    let step_width = width / steps as f32;
+    let steps = 16_usize;
+    let step_w = width / steps as f32;
+
     for i in 0..steps {
         let t = i as f32 / steps as f32;
-        let angle = t * std::f32::consts::TAU;
-        let dy = angle.sin() * amplitude;
+        // First half: upward semicircle. Second half: downward semicircle.
+        let dy = if t < 0.5 {
+            let a = t * 2.0 * std::f32::consts::PI;
+            -a.sin() * amplitude
+        } else {
+            let a = (t - 0.5) * 2.0 * std::f32::consts::PI;
+            a.sin() * amplitude
+        };
         renderer.fill_quad(
             Quad {
                 bounds: Rectangle::new(
-                    Point::new(x + i as f32 * step_width, y + dy),
-                    Size::new(step_width.ceil(), thickness),
+                    Point::new(x + i as f32 * step_w, y + dy),
+                    Size::new(step_w.ceil(), thickness),
                 ),
                 border: Border::default(),
                 ..Quad::default()
