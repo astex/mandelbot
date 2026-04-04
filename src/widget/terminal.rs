@@ -389,6 +389,25 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     );
                 }
 
+                // Draw underline decorations.
+                if cell.flags.intersects(Flags::ALL_UNDERLINES) {
+                    let underline_color = cell
+                        .underline_color()
+                        .map(|c| ansi_to_color(c, &self.theme))
+                        .unwrap_or(fg);
+                    let thickness = (self.config.font_size * 0.07).max(1.0);
+                    let underline_y = cell_bounds.y + cell_bounds.height - thickness * 2.0;
+                    super::text_decorations::draw_underline(
+                        renderer,
+                        cell.flags,
+                        cell_bounds.x,
+                        underline_y,
+                        cell_width,
+                        thickness,
+                        underline_color,
+                    );
+                }
+
                 col += cell_cols;
             }
         }
