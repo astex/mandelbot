@@ -44,6 +44,40 @@ fn default_worktree_location() -> String {
     ".mandelbot/worktrees".to_string()
 }
 
+fn default_home_model() -> String {
+    "haiku".to_string()
+}
+
+fn default_project_model() -> String {
+    "sonnet".to_string()
+}
+
+fn default_task_model() -> String {
+    "opus".to_string()
+}
+
+#[derive(Deserialize)]
+pub struct Models {
+    #[serde(default = "default_home_model")]
+    pub home: String,
+
+    #[serde(default = "default_project_model")]
+    pub project: String,
+
+    #[serde(default = "default_task_model")]
+    pub task: String,
+}
+
+impl Default for Models {
+    fn default() -> Self {
+        Self {
+            home: default_home_model(),
+            project: default_project_model(),
+            task: default_task_model(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Config {
     #[serde(default = "default_theme")]
@@ -72,6 +106,9 @@ pub struct Config {
 
     #[serde(default = "default_worktree_location")]
     pub worktree_location: String,
+
+    #[serde(default)]
+    pub models: Models,
 }
 
 impl Default for Config {
@@ -86,6 +123,7 @@ impl Default for Config {
             shell: default_shell(),
             workflow: default_workflow(),
             worktree_location: default_worktree_location(),
+            models: Models::default(),
         }
     }
 }

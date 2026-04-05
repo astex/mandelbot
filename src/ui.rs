@@ -187,11 +187,16 @@ impl App {
             AgentRank::Project => Some(id),
             AgentRank::Task => parent.and_then(|p| p.project_id),
         };
+        let model = match rank {
+            AgentRank::Home => &self.config.models.home,
+            AgentRank::Project => &self.config.models.project,
+            AgentRank::Task => &self.config.models.task,
+        };
         let (tab, pty_task) = TerminalTab::spawn(
             id, rows, cols, is_claude, rank, project_dir, parent_id,
             depth, project_id,
             &self.config.shell, &self.config.workflow, &self.config.worktree_location,
-            &self.parent_socket_path, prompt, branch,
+            model, &self.parent_socket_path, prompt, branch,
         );
         self.tabs.push(tab);
         // Initialize colors and window size for OSC query responses.
