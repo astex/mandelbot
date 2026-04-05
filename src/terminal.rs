@@ -193,6 +193,7 @@ impl TerminalTab {
         shell: &str,
         workflow: &str,
         worktree_location: &str,
+        model: &str,
         parent_socket: &Path,
         prompt: Option<String>,
         branch: Option<String>,
@@ -236,7 +237,8 @@ impl TerminalTab {
             command = shell_parts[0];
 
             let mut claude_args = format!(
-                "claude --mcp-config {} --append-system-prompt-file {} --settings {}",
+                "claude --model {} --mcp-config {} --append-system-prompt-file {} --settings {}",
+                pty::shell_quote(model),
                 pty::shell_quote(&mcp_config_flag),
                 pty::shell_quote(&system_prompt_flag),
                 pty::shell_quote(&hooks_settings_flag),

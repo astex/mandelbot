@@ -20,6 +20,9 @@ Use this skill when the user asks to change mandelbot settings. Configuration li
 | `shell` | string | `$SHELL` | Path to a shell (e.g. `"/bin/zsh"`) |
 | `workflow` | string | `"detect"` | `"detect"`, `"git"`, `"none"` |
 | `worktree_location` | string | `"~/.mandelbot/worktrees"` | Path for git worktrees (absolute or relative to project root) |
+| `models.home` | string | `"haiku"` | Model for home tab (e.g. `"haiku"`, `"sonnet"`, `"opus"`, or a full model ID) |
+| `models.project` | string | `"sonnet"` | Model for project tabs |
+| `models.task` | string | `"opus"` | Model for task tabs |
 
 Valid modifier names: `ctrl`, `shift`, `alt`, `super` (also `cmd`, `meta`, `logo`).
 
