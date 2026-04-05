@@ -2,3 +2,4 @@
 .qmlls.ini
 assets/icons/logo.icns
 assets/icons/Assets.car
+.claude/settings.local.json
