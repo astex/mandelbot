@@ -229,7 +229,7 @@ impl TerminalTab {
         let prompt_flag = prompt.unwrap_or_default();
         let (command, args_vec, env, cwd);
         let wrapped_cmd; // holds the shell -c argument for Claude tabs
-        let worktree_dir; // holds the worktree path for task agents
+        let mut worktree_dir; // holds the worktree path for task agents
         if is_claude {
             // Spawn Claude inside a login shell so that shell profiles and
             // direnv are evaluated before the process starts.
@@ -245,19 +245,20 @@ impl TerminalTab {
             );
             // For task agents in git workflow, build a setup script that
             // creates the worktree inside the PTY so the user sees git output.
-            let (setup_script, worktree_dir_computed) = project_dir
-                .as_ref()
-                .filter(|_| rank == AgentRank::Task && workflow == "git")
-                .map(|dir| {
-                    let (script, path) = worktree::setup_script(
-                        dir,
-                        worktree_location,
-                        branch.as_deref(),
-                    );
-                    (script, Some(path))
-                })
-                .unwrap_or_default();
-            worktree_dir = worktree_dir_computed;
+            let mut setup_script = String::new();
+            worktree_dir = None;
+            if rank == AgentRank::Task
+                && workflow == "git"
+                && let Some(dir) = project_dir.as_ref()
+            {
+                let (script, path) = worktree::setup_script(
+                    dir,
+                    worktree_location,
+                    branch.as_deref(),
+                );
+                setup_script = script;
+                worktree_dir = Some(path);
+            }
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
                 " --plugin-dir {}",
