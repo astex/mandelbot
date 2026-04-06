@@ -32,6 +32,23 @@ fn generate_name() -> String {
     format!("{adj}-{noun}-{suffix}")
 }
 
+/// Return the worktree directory name: the branch name when provided,
+/// otherwise a randomly generated name.
+pub fn worktree_name(branch: Option<&str>) -> String {
+    match branch {
+        Some(b) if !b.is_empty() => b.to_string(),
+        _ => generate_name(),
+    }
+}
+
+/// Compute the absolute path for a worktree given the project directory,
+/// the configured worktree location, and the worktree name.
+pub fn worktree_path(project_dir: &Path, worktree_location: &str, name: &str) -> PathBuf {
+    let base = PathBuf::from(worktree_location);
+    let base = if base.is_absolute() { base } else { project_dir.join(base) };
+    base.join(name)
+}
+
 /// Create a git worktree under `worktree_location/` (relative to
 /// `project_dir` if not absolute) and return the absolute path to the new
 /// worktree directory. When `branch` is provided it is used as both the
@@ -42,13 +59,8 @@ pub fn create(
     worktree_location: &str,
     branch: Option<&str>,
 ) -> Option<PathBuf> {
-    let name = match branch {
-        Some(b) if !b.is_empty() => b.to_string(),
-        _ => generate_name(),
-    };
-    let base = PathBuf::from(worktree_location);
-    let base = if base.is_absolute() { base } else { project_dir.join(base) };
-    let worktree_path = base.join(&name);
+    let name = worktree_name(branch);
+    let worktree_path = self::worktree_path(project_dir, worktree_location, &name);
     let path_str = worktree_path.to_string_lossy().into_owned();
 
     let status = if branch.is_some_and(|b| !b.is_empty()) {
