@@ -48,7 +48,7 @@ Include:
 - The **branch name** via the `branch` parameter (also used as the git worktree name)
 - Instruction to read both the coordination file and the plan
 
-### 5. Next steps
+### 5. Monitor progress
 
 What happens next depends on the workflow.
 
@@ -69,19 +69,32 @@ bash <plugin-dir>/skills/delegate/watch.sh ~/.mandelbot/coordination/<name>.md
 
 When the watcher completes and you are notified, check its output:
 - If any tasks are still `pending`, `in_progress`, or `blocked` — **run the watcher again** (in the background) to wait for the next update.
-- If all tasks are `done` or `failed` — proceed to finalize.
+- If all tasks are `done` or `failed` — proceed to step 6.
 
 **Important:**
 - The watcher script is your **only** monitoring mechanism. Do **not** also read the coordination file manually — that duplicates work and wastes context.
 - **Be patient.** Child agents take time to spin up. After spawning, the first watcher run may take a while before any agent updates. This is normal.
 
+### 6. Finalize
+
 When all tasks show `done` or `failed`:
 
 1. Handle any failed tasks (retry, reassign, or escalate to the user).
 2. Fill in the **Summary** section of the coordination file.
+
+Then, depending on the workflow:
+
+#### single-pr
+
 3. Create a new integration branch off the base branch.
 4. Merge each child's branch into it (e.g., `git merge --no-ff <child-branch>`). Resolve any conflicts.
 5. Push the integration branch and open a PR that covers all the work.
+
+#### multi-pr
+
+3. Verify each child has opened its PR (check the Notes column for PR links).
+4. If any child failed to open a PR, open it on their behalf from their branch.
+5. Report the list of PRs to the user.
 
 ## Status Values
 
