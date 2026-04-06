@@ -979,7 +979,11 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
     )
 }
 
-fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>, mut child: Box<dyn portable_pty::Child + Send + Sync>) -> impl iced::futures::Stream<Item = Message> {
+fn pty_stream(
+    tab_id: usize,
+    mut reader: Box<dyn Read + Send>,
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
         move |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
