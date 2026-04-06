@@ -295,7 +295,7 @@ impl TerminalTab {
             cols: cols as u16,
         };
 
-        let (master, _child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
+        let (master, child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
 
         let reader = master.try_clone_reader().expect("failed to clone reader");
         let writer = master.take_writer().expect("failed to take writer");
@@ -321,7 +321,7 @@ impl TerminalTab {
             pty_cols: cols,
         };
 
-        let task = iced::Task::run(pty_stream(id, reader), |msg| msg);
+        let task = iced::Task::run(pty_stream(id, reader, child), |msg| msg);
         (tab, task)
     }
 
@@ -979,7 +979,11 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
     )
 }
 
-fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::futures::Stream<Item = Message> {
+fn pty_stream(
+    tab_id: usize,
+    mut reader: Box<dyn Read + Send>,
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
         move |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
@@ -998,7 +1002,8 @@ fn pty_stream(tab_id: usize, mut reader: Box<dyn Read + Send>) -> impl iced::fut
                         }
                     }
                 }
-                let _ = futures::executor::block_on(sender.send(Message::ShellExited(tab_id)));
+                let exit_code = child.wait().ok().map(|status| status.exit_code());
+                let _ = futures::executor::block_on(sender.send(Message::ShellExited(tab_id, exit_code)));
                 let _ = exit_sender.send(());
             });
 

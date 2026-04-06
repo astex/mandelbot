@@ -49,7 +49,7 @@ pub enum DisplayEntry {
 #[derive(Debug, Clone)]
 pub enum Message {
     TerminalOutput(usize, Vec<u8>),
-    ShellExited(usize),
+    ShellExited(usize, Option<u32>),
     PtyInput(Vec<u8>),
     Scroll(i32),
     ScrollTo(usize),
@@ -471,7 +471,25 @@ impl App {
                 }
                 Task::batch(tasks)
             }
-            Message::ShellExited(tab_id) => self.close_tab(tab_id),
+            Message::ShellExited(tab_id, exit_code) => match exit_code {
+                Some(0) | None => {
+                    // TODO: None means child.wait() failed, which
+                    // shouldn't happen since we own the Child. Log
+                    // this once we have proper error monitoring.
+                    self.close_tab(tab_id)
+                }
+                Some(code) => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        let hint = format!(
+                            "\r\n[process exited with code {}; {} + w to close tab]\r\n",
+                            code, self.config.control_prefix,
+                        );
+                        tab.feed(hint.as_bytes());
+                        tab.status = AgentStatus::Error;
+                    }
+                    Task::none()
+                }
+            }
             Message::SetTitle(tab_id, title) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.title = Some(title);
