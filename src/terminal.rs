@@ -248,12 +248,12 @@ impl TerminalTab {
             let (setup_script, wt_path) =
                 if rank == AgentRank::Task && workflow == "git" {
                     if let Some(dir) = project_dir.as_ref() {
-                        let (s, p) = worktree::setup_script(
+                        let (script, path) = worktree::setup_script(
                             dir,
                             worktree_location,
                             branch.as_deref(),
                         );
-                        (s, Some(p))
+                        (script, Some(path))
                     } else {
                         (String::new(), None)
                     }
