@@ -245,22 +245,19 @@ impl TerminalTab {
             );
             // For task agents in git workflow, build a setup script that
             // creates the worktree inside the PTY so the user sees git output.
-            let (setup_script, wt_path) =
-                if rank == AgentRank::Task && workflow == "git" {
-                    if let Some(dir) = project_dir.as_ref() {
-                        let (script, path) = worktree::setup_script(
-                            dir,
-                            worktree_location,
-                            branch.as_deref(),
-                        );
-                        (script, Some(path))
-                    } else {
-                        (String::new(), None)
-                    }
-                } else {
-                    (String::new(), None)
-                };
-            worktree_dir = wt_path;
+            let (setup_script, worktree_dir_computed) = project_dir
+                .as_ref()
+                .filter(|_| rank == AgentRank::Task && workflow == "git")
+                .map(|dir| {
+                    let (script, path) = worktree::setup_script(
+                        dir,
+                        worktree_location,
+                        branch.as_deref(),
+                    );
+                    (script, Some(path))
+                })
+                .unwrap_or_default();
+            worktree_dir = worktree_dir_computed;
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
                 " --plugin-dir {}",
