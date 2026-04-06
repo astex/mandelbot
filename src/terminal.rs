@@ -243,14 +243,21 @@ impl TerminalTab {
                 pty::shell_quote(&system_prompt_flag),
                 pty::shell_quote(&hooks_settings_flag),
             );
-            // For task agents in git workflow, create a worktree and run
-            // claude inside it instead of passing `-w`.
-            worktree_dir = if rank == AgentRank::Task && workflow == "git" {
-                project_dir.as_ref().and_then(|dir| {
-                    worktree::create(dir, worktree_location, branch.as_deref())
-                })
+            // For task agents in git workflow, build a setup script that
+            // creates the worktree inside the PTY so the user sees git output.
+            let setup_script;
+            (setup_script, worktree_dir) = if rank == AgentRank::Task
+                && workflow == "git"
+                && let Some(dir) = project_dir.as_ref()
+            {
+                let (script, path) = worktree::setup_script(
+                    dir,
+                    worktree_location,
+                    branch.as_deref(),
+                );
+                (script, Some(path))
             } else {
-                None
+                (String::new(), None)
             };
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
@@ -266,7 +273,11 @@ impl TerminalTab {
                 claude_args.push_str(&pty::shell_quote(&prompt_flag));
             }
 
-            wrapped_cmd = format!("exec {claude_args}");
+            wrapped_cmd = if setup_script.is_empty() {
+                format!("exec {claude_args}")
+            } else {
+                format!("{setup_script} && exec {claude_args}")
+            };
             args_vec = vec!["-l", "-i", "-c", &wrapped_cmd];
             let fifo_path = runtime_dir().join(format!("{id}.fifo"));
             create_fifo(&fifo_path);
@@ -275,7 +286,14 @@ impl TerminalTab {
                 ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
                 ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
             ]);
-            cwd = worktree_dir.as_deref().or(project_dir.as_deref());
+            // When a setup script is used, start in the project dir (the
+            // script handles cd into the worktree). Otherwise fall back to
+            // the worktree or project dir directly.
+            cwd = if !setup_script.is_empty() {
+                project_dir.as_deref()
+            } else {
+                worktree_dir.as_deref().or(project_dir.as_deref())
+            };
         } else {
             worktree_dir = None;
             let parts: Vec<&str> = shell.split_whitespace().collect();
