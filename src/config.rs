@@ -41,7 +41,12 @@ fn default_workflow() -> String {
 }
 
 fn default_worktree_location() -> String {
-    ".mandelbot/worktrees".to_string()
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".mandelbot")
+        .join("worktrees")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn default_home_model() -> String {
