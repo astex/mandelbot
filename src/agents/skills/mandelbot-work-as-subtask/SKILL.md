@@ -21,7 +21,7 @@ git checkout -b <branch-name>            # or, if a base branch was specified:
 git checkout -b <branch-name> <base>
 ```
 
-All of your commits go on this branch. When your work is complete, push the branch and create a PR for it unless your prompt explicitly says otherwise.
+All of your commits go on this branch.
 
 ## Workflow
 
@@ -49,7 +49,13 @@ Implement your assigned task. As you make meaningful progress, update the **Note
 
 ### 4. Report completion
 
-When done, update your row's status to `done`:
+When done:
+
+1. Push your branch.
+2. Check the **Workflow** field in the coordination file:
+   - **`multi-pr`** — Create a PR for your branch. Include the PR link in your Notes column.
+   - **`single-pr`** — Do **not** create a PR. The parent will merge your branch.
+3. Update your row's status to `done`:
 
 ```
 | <N> | <label> | done | <brief summary of what was done> |
