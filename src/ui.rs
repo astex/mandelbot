@@ -471,21 +471,19 @@ impl App {
                 }
                 Task::batch(tasks)
             }
-            Message::ShellExited(tab_id, exit_code) => {
-                if exit_code == Some(0) {
+            Message::ShellExited(tab_id, exit_code) => match exit_code {
+                Some(0) | None => {
+                    // TODO: None means child.wait() failed, which
+                    // shouldn't happen since we own the Child. Log
+                    // this once we have proper error monitoring.
                     self.close_tab(tab_id)
-                } else {
+                }
+                Some(code) => {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                        let hint = match exit_code {
-                            Some(code) => format!(
-                                "\r\n[process exited with code {}; {} + w to close tab]\r\n",
-                                code, self.config.control_prefix
-                            ),
-                            None => format!(
-                                "\r\n[process exited; {} + w to close tab]\r\n",
-                                self.config.control_prefix
-                            ),
-                        };
+                        let hint = format!(
+                            "\r\n[process exited with code {}; {} + w to close tab]\r\n",
+                            code, self.config.control_prefix,
+                        );
                         tab.feed(hint.as_bytes());
                         tab.status = AgentStatus::Error;
                     }
