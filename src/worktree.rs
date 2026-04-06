@@ -32,6 +32,10 @@ fn generate_name() -> String {
     format!("{adj}-{noun}-{suffix}")
 }
 
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// Return the worktree directory name: the branch name when provided,
 /// otherwise a randomly generated name.
 pub fn worktree_name(branch: Option<&str>) -> String {
@@ -49,52 +53,41 @@ pub fn worktree_path(project_dir: &Path, worktree_location: &str, name: &str) ->
     base.join(name)
 }
 
-/// Create a git worktree under `worktree_location/` (relative to
-/// `project_dir` if not absolute) and return the absolute path to the new
-/// worktree directory. When `branch` is provided it is used as both the
-/// directory name and the new branch name; otherwise a random name is
-/// generated with a detached HEAD.
-pub fn create(
+/// Build a shell script that creates a git worktree, copies
+/// `.claude/settings.local.json`, and `cd`s into it. Returns the script
+/// and the worktree path.
+pub fn setup_script(
     project_dir: &Path,
     worktree_location: &str,
     branch: Option<&str>,
-) -> Option<PathBuf> {
+) -> (String, PathBuf) {
     let name = worktree_name(branch);
-    let worktree_path = self::worktree_path(project_dir, worktree_location, &name);
-    let path_str = worktree_path.to_string_lossy().into_owned();
+    let wt_path = self::worktree_path(project_dir, worktree_location, &name);
+    let wt_str = wt_path.to_string_lossy();
+    let dir_str = project_dir.to_string_lossy();
 
-    let status = if branch.is_some_and(|b| !b.is_empty()) {
-        // Create a new branch with the given name.
-        std::process::Command::new("git")
-            .args(["worktree", "add", "-b", &name, &path_str])
-            .current_dir(project_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()
+    let git_add = if branch.is_some_and(|b| !b.is_empty()) {
+        format!(
+            "git worktree add -b {} {}",
+            shell_quote(&name),
+            shell_quote(&wt_str),
+        )
     } else {
-        // Detached HEAD.
-        std::process::Command::new("git")
-            .args(["worktree", "add", "-d", &path_str])
-            .current_dir(project_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()
+        format!("git worktree add -d {}", shell_quote(&wt_str))
     };
 
-    match status {
-        Ok(s) if s.success() => {
-            // Copy the project's .claude/settings.local.json into the
-            // worktree so that MCP server trust carries over.
-            let src = project_dir.join(".claude").join("settings.local.json");
-            if src.exists() {
-                let dst_dir = worktree_path.join(".claude");
-                let _ = std::fs::create_dir_all(&dst_dir);
-                let _ = std::fs::copy(&src, dst_dir.join("settings.local.json"));
-            }
-            Some(worktree_path)
-        }
-        _ => None,
-    }
+    let copy_settings = format!(
+        "if [ -f {src} ]; then mkdir -p {dst_dir} && cp {src} {dst}; fi",
+        src = shell_quote(&format!("{dir_str}/.claude/settings.local.json")),
+        dst_dir = shell_quote(&format!("{wt_str}/.claude")),
+        dst = shell_quote(&format!("{wt_str}/.claude/settings.local.json")),
+    );
+
+    let script = format!(
+        "{git_add} && {copy_settings} && cd {}",
+        shell_quote(&wt_str),
+    );
+    (script, wt_path)
 }
 
 /// Remove a git worktree previously created by [`create`].

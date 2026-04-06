@@ -245,53 +245,22 @@ impl TerminalTab {
             );
             // For task agents in git workflow, build a setup script that
             // creates the worktree inside the PTY so the user sees git output.
-            let (setup_script, wt_path_computed) =
+            let (setup_script, wt_path) =
                 if rank == AgentRank::Task && workflow == "git" {
                     if let Some(dir) = project_dir.as_ref() {
-                        let name = worktree::worktree_name(branch.as_deref());
-                        let wt_path =
-                            worktree::worktree_path(dir, worktree_location, &name);
-                        let wt_str = wt_path.to_string_lossy();
-                        let dir_str = dir.to_string_lossy();
-
-                        let git_add =
-                            if branch.as_deref().is_some_and(|b| !b.is_empty()) {
-                                format!(
-                                    "git worktree add -b {} {}",
-                                    pty::shell_quote(&name),
-                                    pty::shell_quote(&wt_str),
-                                )
-                            } else {
-                                format!(
-                                    "git worktree add -d {}",
-                                    pty::shell_quote(&wt_str),
-                                )
-                            };
-
-                        let copy_settings = format!(
-                            "if [ -f {src} ]; then mkdir -p {dst_dir} && cp {src} {dst}; fi",
-                            src = pty::shell_quote(&format!(
-                                "{dir_str}/.claude/settings.local.json"
-                            )),
-                            dst_dir =
-                                pty::shell_quote(&format!("{wt_str}/.claude")),
-                            dst = pty::shell_quote(&format!(
-                                "{wt_str}/.claude/settings.local.json"
-                            )),
+                        let (s, p) = worktree::setup_script(
+                            dir,
+                            worktree_location,
+                            branch.as_deref(),
                         );
-
-                        let script = format!(
-                            "{git_add} && {copy_settings} && cd {}",
-                            pty::shell_quote(&wt_str),
-                        );
-                        (script, Some(wt_path))
+                        (s, Some(p))
                     } else {
                         (String::new(), None)
                     }
                 } else {
                     (String::new(), None)
                 };
-            worktree_dir = wt_path_computed;
+            worktree_dir = wt_path;
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
                 " --plugin-dir {}",
