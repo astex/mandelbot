@@ -215,16 +215,12 @@ impl App {
                 cell_height: ch as u16,
             });
         }
-        if is_claude {
-            let fifo_path = crate::terminal::runtime_dir().join(format!("{id}.fifo"));
-            let fifo_task = Task::run(
-                crate::terminal::fifo_stream(id, fifo_path),
-                |msg| msg,
-            );
-            (id, Task::batch([pty_task, fifo_task]))
-        } else {
-            (id, pty_task)
-        }
+        let fifo_path = crate::terminal::runtime_dir().join(format!("{id}.fifo"));
+        let fifo_task = Task::run(
+            crate::terminal::fifo_stream(id, fifo_path),
+            |msg| msg,
+        );
+        (id, Task::batch([pty_task, fifo_task]))
     }
 
     fn active_rank(&self) -> Option<AgentRank> {
@@ -432,11 +428,6 @@ impl App {
                     tab.feed(&bytes);
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
-                            tab.status = if is_shell_name(&title) {
-                                AgentStatus::Idle
-                            } else {
-                                AgentStatus::Working
-                            };
                             tab.title = Some(title);
                         }
                     }
@@ -1095,13 +1086,6 @@ impl Drop for App {
     }
 }
 
-fn is_shell_name(title: &str) -> bool {
-    matches!(
-        title,
-        "zsh" | "bash" | "fish" | "sh" | "dash" | "nu" | "elvish"
-    )
-}
-
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
     match status {
         AgentStatus::Idle => fg,
@@ -1332,4 +1316,5 @@ mod tests {
         // Legacy/unstructured titles pass through unchanged.
         assert_eq!(format_shell_title("zsh", 40), "zsh");
     }
+
 }

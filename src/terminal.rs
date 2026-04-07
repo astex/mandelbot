@@ -227,7 +227,7 @@ impl TerminalTab {
         let hooks_settings_flag = hooks_settings_path.to_string_lossy().into_owned();
 
         let prompt_flag = prompt.unwrap_or_default();
-        let (command, args_vec, env, cwd);
+        let (command, args_vec, mut env, cwd);
         let wrapped_cmd; // holds the shell -c argument for Claude tabs
         let worktree_dir; // holds the worktree path for task agents
         if is_claude {
@@ -286,6 +286,7 @@ impl TerminalTab {
                 ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
                 ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
             ]);
+
             // When a setup script is used, start in the project dir (the
             // script handles cd into the worktree). Otherwise fall back to
             // the worktree or project dir directly.
@@ -300,7 +301,13 @@ impl TerminalTab {
             let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
             command = cmd;
             args_vec = rest.to_vec();
+            let fifo_path = runtime_dir().join(format!("{id}.fifo"));
+            create_fifo(&fifo_path);
             env = shell_integration_env(command);
+            env.insert(
+                "MANDELBOT_FIFO".to_string(),
+                fifo_path.to_string_lossy().into_owned(),
+            );
             cwd = None;
         }
 
@@ -811,8 +818,14 @@ const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
 # \xc2\xa0 = UTF-8 non-breaking space, used as delimiter + visual spacing.
 _mandelbot_prompt_char() { if (( EUID == 0 )); then printf '#'; else printf '%%'; fi }
-_mandelbot_preexec() { printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" "$1" }
-_mandelbot_precmd()  { printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" }
+_mandelbot_preexec() {
+  printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" "$1"
+  [ -n "$MANDELBOT_FIFO" ] && echo status:working > "$MANDELBOT_FIFO"
+}
+_mandelbot_precmd() {
+  printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)"
+  [ -n "$MANDELBOT_FIFO" ] && echo status:idle > "$MANDELBOT_FIFO"
+}
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _mandelbot_preexec
 add-zsh-hook precmd  _mandelbot_precmd
@@ -825,11 +838,13 @@ _mandelbot_prompt_char() { if [ "$EUID" = 0 ]; then printf '#'; else printf '$';
 _mandelbot_preexec() {
   if [ -z "$MANDELBOT_IN_PROMPT" ]; then
     printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/\~}" "$(_mandelbot_prompt_char)" "$BASH_COMMAND"
+    [ -n "$MANDELBOT_FIFO" ] && echo status:working > "$MANDELBOT_FIFO"
   fi
 }
 _mandelbot_precmd() {
   MANDELBOT_IN_PROMPT=1
   printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/\~}" "$(_mandelbot_prompt_char)"
+  [ -n "$MANDELBOT_FIFO" ] && echo status:idle > "$MANDELBOT_FIFO"
   unset MANDELBOT_IN_PROMPT
 }
 trap '_mandelbot_preexec' DEBUG
