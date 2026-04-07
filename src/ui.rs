@@ -432,7 +432,7 @@ impl App {
                     tab.feed(&bytes);
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
-                            tab.status = if is_shell_name(&title) {
+                            tab.status = if is_shell_idle(&title) {
                                 AgentStatus::Idle
                             } else {
                                 AgentStatus::Working
@@ -1095,11 +1095,19 @@ impl Drop for App {
     }
 }
 
-fn is_shell_name(title: &str) -> bool {
-    matches!(
-        title,
-        "zsh" | "bash" | "fish" | "sh" | "dash" | "nu" | "elvish"
-    )
+fn is_shell_idle(title: &str) -> bool {
+    if title.contains('\u{a0}') {
+        // New format: "cwd NBSP prompt NBSP [command]".
+        // Idle when the command field is empty.
+        let cmd = title.splitn(3, '\u{a0}').nth(2).unwrap_or("");
+        cmd.is_empty()
+    } else {
+        // Legacy bare shell name.
+        matches!(
+            title,
+            "zsh" | "bash" | "fish" | "sh" | "dash" | "nu" | "elvish"
+        )
+    }
 }
 
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
@@ -1331,5 +1339,21 @@ mod tests {
     fn format_shell_title_no_tab_passthrough() {
         // Legacy/unstructured titles pass through unchanged.
         assert_eq!(format_shell_title("zsh", 40), "zsh");
+    }
+
+    #[test]
+    fn shell_idle_new_format() {
+        // precmd: cwd NBSP prompt NBSP (no command) → idle.
+        assert!(is_shell_idle("~/src/t3\u{a0}%\u{a0}"));
+        assert!(is_shell_idle("~\u{a0}$\u{a0}"));
+        // preexec: cwd NBSP prompt NBSP command → running.
+        assert!(!is_shell_idle("~/src/t3\u{a0}%\u{a0}vim"));
+    }
+
+    #[test]
+    fn shell_idle_legacy_format() {
+        assert!(is_shell_idle("zsh"));
+        assert!(is_shell_idle("bash"));
+        assert!(!is_shell_idle("vim"));
     }
 }
