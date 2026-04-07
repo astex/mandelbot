@@ -808,24 +808,28 @@ const SKILL_MANDELBOT_FEATURES: &str =
     include_str!("agents/skills/mandelbot-features/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
-# Mandelbot shell integration — sets tab title to the running command.
-_mandelbot_preexec() { printf '\e]0;%s\a' "$1" }
-_mandelbot_precmd()  { printf '\e]0;%s\a' "${ZSH_NAME:-zsh}" }
+# Mandelbot shell integration — sets tab title to cwd + running command.
+# \xc2\xa0 = UTF-8 non-breaking space, used as delimiter + visual spacing.
+_mandelbot_prompt_char() { if (( EUID == 0 )); then printf '#'; else printf '%%'; fi }
+_mandelbot_preexec() { printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" "$1" }
+_mandelbot_precmd()  { printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" }
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _mandelbot_preexec
 add-zsh-hook precmd  _mandelbot_precmd
 "#;
 
 const SHELL_INTEGRATION_BASH: &str = r#"
-# Mandelbot shell integration — sets tab title to the running command.
+# Mandelbot shell integration — sets tab title to cwd + running command.
+# \xc2\xa0 = UTF-8 non-breaking space, used as delimiter + visual spacing.
+_mandelbot_prompt_char() { if [ "$EUID" = 0 ]; then printf '#'; else printf '$'; fi }
 _mandelbot_preexec() {
   if [ -z "$MANDELBOT_IN_PROMPT" ]; then
-    printf '\e]0;%s\a' "$BASH_COMMAND"
+    printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/\~}" "$(_mandelbot_prompt_char)" "$BASH_COMMAND"
   fi
 }
 _mandelbot_precmd() {
   MANDELBOT_IN_PROMPT=1
-  printf '\e]0;%s\a' "bash"
+  printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/\~}" "$(_mandelbot_prompt_char)"
   unset MANDELBOT_IN_PROMPT
 }
 trap '_mandelbot_preexec' DEBUG
@@ -842,9 +846,7 @@ fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
 
     if shell_command.contains("zsh") {
         let path = dir.join("mandelbot.zsh");
-        if !path.exists() {
-            std::fs::write(&path, SHELL_INTEGRATION_ZSH).expect("failed to write zsh integration");
-        }
+        std::fs::write(&path, SHELL_INTEGRATION_ZSH).expect("failed to write zsh integration");
         // ZDOTDIR trick: create a .zshrc that sources the user's real config then ours.
         let zdotdir = dir.join("zdotdir");
         std::fs::create_dir_all(&zdotdir).expect("failed to create zdotdir");
@@ -865,10 +867,8 @@ fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
         env.insert("ZDOTDIR".to_string(), zdotdir.to_string_lossy().into_owned());
     } else if shell_command.contains("bash") {
         let path = dir.join("mandelbot.bash");
-        if !path.exists() {
-            std::fs::write(&path, SHELL_INTEGRATION_BASH)
-                .expect("failed to write bash integration");
-        }
+        std::fs::write(&path, SHELL_INTEGRATION_BASH)
+            .expect("failed to write bash integration");
         // For bash, use --rcfile or ENV. We'll set ENV for non-login shells.
         // Since we source user's bashrc too, write a wrapper.
         let wrapper = dir.join("bashrc_wrapper");
