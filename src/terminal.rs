@@ -243,14 +243,21 @@ impl TerminalTab {
                 pty::shell_quote(&system_prompt_flag),
                 pty::shell_quote(&hooks_settings_flag),
             );
-            // For task agents in git workflow, create a worktree and run
-            // claude inside it instead of passing `-w`.
-            worktree_dir = if rank == AgentRank::Task && workflow == "git" {
-                project_dir.as_ref().and_then(|dir| {
-                    worktree::create(dir, worktree_location, branch.as_deref())
-                })
+            // For task agents in git workflow, build a setup script that
+            // creates the worktree inside the PTY so the user sees git output.
+            let setup_script;
+            (setup_script, worktree_dir) = if rank == AgentRank::Task
+                && workflow == "git"
+                && let Some(dir) = project_dir.as_ref()
+            {
+                let (script, path) = worktree::setup_script(
+                    dir,
+                    worktree_location,
+                    branch.as_deref(),
+                );
+                (script, Some(path))
             } else {
-                None
+                (String::new(), None)
             };
             let plugin_dir = write_plugin_dir(&config_dir, workflow);
             claude_args.push_str(&format!(
@@ -266,7 +273,11 @@ impl TerminalTab {
                 claude_args.push_str(&pty::shell_quote(&prompt_flag));
             }
 
-            wrapped_cmd = format!("exec {claude_args}");
+            wrapped_cmd = if setup_script.is_empty() {
+                format!("exec {claude_args}")
+            } else {
+                format!("{setup_script} && exec {claude_args}")
+            };
             args_vec = vec!["-l", "-i", "-c", &wrapped_cmd];
             let fifo_path = runtime_dir().join(format!("{id}.fifo"));
             create_fifo(&fifo_path);
@@ -275,7 +286,14 @@ impl TerminalTab {
                 ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
                 ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
             ]);
-            cwd = worktree_dir.as_deref().or(project_dir.as_deref());
+            // When a setup script is used, start in the project dir (the
+            // script handles cd into the worktree). Otherwise fall back to
+            // the worktree or project dir directly.
+            cwd = if !setup_script.is_empty() {
+                project_dir.as_deref()
+            } else {
+                worktree_dir.as_deref().or(project_dir.as_deref())
+            };
         } else {
             worktree_dir = None;
             let parts: Vec<&str> = shell.split_whitespace().collect();
@@ -790,24 +808,28 @@ const SKILL_MANDELBOT_FEATURES: &str =
     include_str!("agents/skills/mandelbot-features/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
-# Mandelbot shell integration — sets tab title to the running command.
-_mandelbot_preexec() { printf '\e]0;%s\a' "$1" }
-_mandelbot_precmd()  { printf '\e]0;%s\a' "${ZSH_NAME:-zsh}" }
+# Mandelbot shell integration — sets tab title to cwd + running command.
+# \xc2\xa0 = UTF-8 non-breaking space, used as delimiter + visual spacing.
+_mandelbot_prompt_char() { if (( EUID == 0 )); then printf '#'; else printf '%%'; fi }
+_mandelbot_preexec() { printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" "$1" }
+_mandelbot_precmd()  { printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/~}" "$(_mandelbot_prompt_char)" }
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _mandelbot_preexec
 add-zsh-hook precmd  _mandelbot_precmd
 "#;
 
 const SHELL_INTEGRATION_BASH: &str = r#"
-# Mandelbot shell integration — sets tab title to the running command.
+# Mandelbot shell integration — sets tab title to cwd + running command.
+# \xc2\xa0 = UTF-8 non-breaking space, used as delimiter + visual spacing.
+_mandelbot_prompt_char() { if [ "$EUID" = 0 ]; then printf '#'; else printf '$'; fi }
 _mandelbot_preexec() {
   if [ -z "$MANDELBOT_IN_PROMPT" ]; then
-    printf '\e]0;%s\a' "$BASH_COMMAND"
+    printf '\e]0;%s\xc2\xa0%s\xc2\xa0%s\a' "${PWD/#$HOME/\~}" "$(_mandelbot_prompt_char)" "$BASH_COMMAND"
   fi
 }
 _mandelbot_precmd() {
   MANDELBOT_IN_PROMPT=1
-  printf '\e]0;%s\a' "bash"
+  printf '\e]0;%s\xc2\xa0%s\xc2\xa0\a' "${PWD/#$HOME/\~}" "$(_mandelbot_prompt_char)"
   unset MANDELBOT_IN_PROMPT
 }
 trap '_mandelbot_preexec' DEBUG
@@ -824,9 +846,7 @@ fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
 
     if shell_command.contains("zsh") {
         let path = dir.join("mandelbot.zsh");
-        if !path.exists() {
-            std::fs::write(&path, SHELL_INTEGRATION_ZSH).expect("failed to write zsh integration");
-        }
+        std::fs::write(&path, SHELL_INTEGRATION_ZSH).expect("failed to write zsh integration");
         // ZDOTDIR trick: create a .zshrc that sources the user's real config then ours.
         let zdotdir = dir.join("zdotdir");
         std::fs::create_dir_all(&zdotdir).expect("failed to create zdotdir");
@@ -847,10 +867,8 @@ fn shell_integration_env(shell_command: &str) -> HashMap<String, String> {
         env.insert("ZDOTDIR".to_string(), zdotdir.to_string_lossy().into_owned());
     } else if shell_command.contains("bash") {
         let path = dir.join("mandelbot.bash");
-        if !path.exists() {
-            std::fs::write(&path, SHELL_INTEGRATION_BASH)
-                .expect("failed to write bash integration");
-        }
+        std::fs::write(&path, SHELL_INTEGRATION_BASH)
+            .expect("failed to write bash integration");
         // For bash, use --rcfile or ENV. We'll set ENV for non-login shells.
         // Since we source user's bashrc too, write a wrapper.
         let wrapper = dir.join("bashrc_wrapper");

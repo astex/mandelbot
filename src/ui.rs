@@ -432,6 +432,11 @@ impl App {
                     tab.feed(&bytes);
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
+                            tab.status = if is_shell_name(&title) {
+                                AgentStatus::Idle
+                            } else {
+                                AgentStatus::Working
+                            };
                             tab.title = Some(title);
                         }
                     }
@@ -850,7 +855,14 @@ impl App {
             let label_text: String = if tab.is_pending() {
                 "new project...".into()
             } else if let Some(title) = &tab.title {
-                title.clone()
+                if !tab.is_claude {
+                    let cw = self.config.char_width();
+                    let avail = TAB_BAR_WIDTH - indent - PADDING * 2.0 - cw * 3.0;
+                    let max_chars = (avail / cw) as usize;
+                    format_shell_title(title, max_chars)
+                } else {
+                    title.clone()
+                }
             } else if tab.rank == AgentRank::Project {
                 if let Some(dir) = &tab.project_dir {
                     dir.file_name()
@@ -889,7 +901,7 @@ impl App {
                     .push(text(bg_label).size(self.config.font_size * 0.75).font(Font::MONOSPACE).color(self.terminal_theme.cyan))
                     .push(Space::new().width(6));
             }
-            if tab.is_claude {
+            {
                 let dot_size = self.config.font_size * 0.6;
                 let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
                 let dot_color = status_dot_color(tab.status, fg);
@@ -1083,6 +1095,13 @@ impl Drop for App {
     }
 }
 
+fn is_shell_name(title: &str) -> bool {
+    matches!(
+        title,
+        "zsh" | "bash" | "fish" | "sh" | "dash" | "nu" | "elvish"
+    )
+}
+
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
     match status {
         AgentStatus::Idle => fg,
@@ -1182,4 +1201,135 @@ fn parent_socket_stream(
             let _ = exit_receiver.await;
         },
     )
+}
+
+/// Format a shell tab title from a `"<cwd>\t<prompt>\t<command>"` OSC string.
+///
+/// Walks up the directory chain from longest to shortest until the title fits
+/// within `max_chars`, stopping at `~` or `/`. The prompt character varies by
+/// shell (`%` for zsh, `$` for bash, `#` for root).
+fn format_shell_title(raw: &str, max_chars: usize) -> String {
+    if !raw.contains('\u{a0}') {
+        return raw.to_string();
+    }
+    let mut fields = raw.splitn(3, '\u{a0}');
+    let cwd = fields.next().unwrap();
+    let prompt = fields.next().unwrap_or("$");
+    let cmd = fields.next().unwrap_or("");
+
+    // Collect slash positions so we can try progressively shorter prefixes.
+    // Walking backwards: full path, then drop one leading component, etc.
+    let slash_positions: Vec<usize> = cwd
+        .char_indices()
+        .filter_map(|(i, c)| if c == '/' { Some(i) } else { None })
+        .collect();
+
+    // Candidates from longest to shortest: full cwd, then after each slash.
+    let nbsp = '\u{a0}';
+    let suffix = if cmd.is_empty() {
+        format!("{nbsp}{prompt}{nbsp}")
+    } else {
+        format!("{nbsp}{prompt}{nbsp}{cmd}")
+    };
+
+    // Try the full cwd first.
+    let candidate = format!("{cwd}{suffix}");
+    if candidate.len() <= max_chars {
+        return candidate.trim_end().to_string();
+    }
+
+    // Try progressively shorter: drop leading components one at a time.
+    for &pos in &slash_positions {
+        let dir = &cwd[pos + 1..];
+        let candidate = format!("{dir}{suffix}");
+        if candidate.len() <= max_chars {
+            return candidate.trim_end().to_string();
+        }
+    }
+
+    // Nothing fits with a directory — just the prompt (+ command).
+    if cmd.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{prompt}{nbsp}{cmd}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_shell_title_idle() {
+        // At prompt — show as much dir as fits + prompt char.
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}", 40),
+            "~/src/mandelbot\u{a0}%",
+        );
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}", 18),
+            "src/mandelbot\u{a0}%",
+        );
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}", 14),
+            "mandelbot\u{a0}%",
+        );
+        assert_eq!(
+            format_shell_title("~\u{a0}%\u{a0}", 40),
+            "~\u{a0}%",
+        );
+    }
+
+    #[test]
+    fn format_shell_title_with_command_zsh() {
+        // Plenty of room: full path + command.
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}vim", 40),
+            "~/src/mandelbot\u{a0}%\u{a0}vim",
+        );
+        // Less room: drop leading components.
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}vim", 22),
+            "src/mandelbot\u{a0}%\u{a0}vim",
+        );
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}vim", 18),
+            "mandelbot\u{a0}%\u{a0}vim",
+        );
+        // Very tight: just the command.
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}%\u{a0}vim", 10),
+            "%\u{a0}vim",
+        );
+    }
+
+    #[test]
+    fn format_shell_title_with_command_bash() {
+        assert_eq!(
+            format_shell_title("~/src/mandelbot\u{a0}$\u{a0}vim", 40),
+            "~/src/mandelbot\u{a0}$\u{a0}vim",
+        );
+    }
+
+    #[test]
+    fn format_shell_title_root() {
+        assert_eq!(
+            format_shell_title("/etc/nginx\u{a0}#\u{a0}nginx -t", 40),
+            "/etc/nginx\u{a0}#\u{a0}nginx -t",
+        );
+    }
+
+    #[test]
+    fn format_shell_title_home() {
+        assert_eq!(
+            format_shell_title("~\u{a0}$\u{a0}ls", 40),
+            "~\u{a0}$\u{a0}ls",
+        );
+    }
+
+    #[test]
+    fn format_shell_title_no_tab_passthrough() {
+        // Legacy/unstructured titles pass through unchanged.
+        assert_eq!(format_shell_title("zsh", 40), "zsh");
+    }
 }
