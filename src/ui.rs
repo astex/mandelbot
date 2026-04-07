@@ -432,6 +432,11 @@ impl App {
                     tab.feed(&bytes);
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
+                            tab.status = if is_shell_name(&title) {
+                                AgentStatus::Idle
+                            } else {
+                                AgentStatus::Working
+                            };
                             tab.title = Some(title);
                         }
                     }
@@ -889,7 +894,7 @@ impl App {
                     .push(text(bg_label).size(self.config.font_size * 0.75).font(Font::MONOSPACE).color(self.terminal_theme.cyan))
                     .push(Space::new().width(6));
             }
-            if tab.is_claude {
+            {
                 let dot_size = self.config.font_size * 0.6;
                 let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
                 let dot_color = status_dot_color(tab.status, fg);
@@ -1081,6 +1086,13 @@ impl Drop for App {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.parent_socket_dir);
     }
+}
+
+fn is_shell_name(title: &str) -> bool {
+    matches!(
+        title,
+        "zsh" | "bash" | "fish" | "sh" | "dash" | "nu" | "elvish"
+    )
 }
 
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
