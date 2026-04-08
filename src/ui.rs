@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::widget::fold_placeholder::FoldPlaceholderWidget;
-use crate::widget::plan_review::PlanReviewWidget;
+use crate::widget::plan_review::{Comment, PlanReviewWidget};
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
@@ -73,6 +73,9 @@ pub enum Message {
     PlanReviewOpen(usize),
     PlanReviewAccept(usize),
     PlanReviewReject(usize),
+    PlanReviewAddComment(usize, Comment),
+    PlanReviewClearComments(usize),
+    PlanReviewFeedback(usize),
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
@@ -597,6 +600,7 @@ impl App {
                 {
                     tab.plan_review_pending = false;
                     tab.plan_visible = false;
+                    tab.plan_comments.clear();
                     tab.status = AgentStatus::Working;
                     self.respond_to_tab(tab_id, serde_json::json!({"decision": "accept"}));
                 }
@@ -608,8 +612,51 @@ impl App {
                 {
                     tab.plan_review_pending = false;
                     tab.plan_visible = false;
+                    tab.plan_comments.clear();
                     tab.status = AgentStatus::Working;
                     self.respond_to_tab(tab_id, serde_json::json!({"decision": "reject"}));
+                }
+                Task::none()
+            }
+            Message::PlanReviewAddComment(tab_id, comment) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.plan_comments.push(comment);
+                }
+                Task::none()
+            }
+            Message::PlanReviewClearComments(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.plan_comments.clear();
+                }
+                Task::none()
+            }
+            Message::PlanReviewFeedback(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id)
+                    && tab.plan_review_pending
+                    && !tab.plan_comments.is_empty()
+                {
+                    let comments: Vec<serde_json::Value> = tab
+                        .plan_comments
+                        .iter()
+                        .map(|c| {
+                            serde_json::json!({
+                                "line_start": c.line_start,
+                                "line_end": c.line_end,
+                                "char_start": c.char_start,
+                                "char_end": c.char_end,
+                                "text": c.text,
+                                "selected_text": c.selected_text,
+                            })
+                        })
+                        .collect();
+                    tab.plan_review_pending = false;
+                    tab.plan_visible = false;
+                    tab.plan_comments.clear();
+                    tab.status = AgentStatus::Working;
+                    self.respond_to_tab(
+                        tab_id,
+                        serde_json::json!({"decision": "feedback", "comments": comments}),
+                    );
                 }
                 Task::none()
             }
@@ -1146,7 +1193,14 @@ impl App {
         } else if let Some(tab) = self.active_tab() {
             if tab.plan_visible && tab.plan_path.is_some() {
                 let contents = tab.plan_contents.as_deref().unwrap_or("");
-                PlanReviewWidget::new(tab.id, contents, tab.plan_review_pending, &self.config).into()
+                PlanReviewWidget::new(
+                    tab.id,
+                    contents,
+                    tab.plan_review_pending,
+                    &tab.plan_comments,
+                    &self.config,
+                )
+                .into()
             } else {
                 TerminalWidget::new(tab, &self.config).into()
             }

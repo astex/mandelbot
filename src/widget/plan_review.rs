@@ -19,20 +19,46 @@ pub struct PlanReviewWidget<'a> {
     tab_id: usize,
     contents: &'a str,
     review_pending: bool,
+    comments: &'a [Comment],
     config: &'a Config,
 }
 
 impl<'a> PlanReviewWidget<'a> {
-    pub fn new(tab_id: usize, contents: &'a str, review_pending: bool, config: &'a Config) -> Self {
-        Self { tab_id, contents, review_pending, config }
+    pub fn new(
+        tab_id: usize,
+        contents: &'a str,
+        review_pending: bool,
+        comments: &'a [Comment],
+        config: &'a Config,
+    ) -> Self {
+        Self { tab_id, contents, review_pending, comments, config }
     }
 }
 
-/// Widget tree state — tracks the active mouse selection.
+/// A user-authored comment attached to a selection range in the rendered plan.
+/// `line_*`/`char_*` are indices over the widget's rendered-line coordinate
+/// system (the same one used by [`Selection`]).
+#[derive(Debug, Clone)]
+pub struct Comment {
+    pub line_start: usize,
+    pub char_start: usize,
+    pub line_end: usize,
+    pub char_end: usize,
+    /// Body the user typed in the composer.
+    pub text: String,
+    /// Plain-text excerpt of what was selected when the comment was made.
+    pub selected_text: String,
+}
+
+/// Widget tree state — tracks the active mouse selection and inline composer.
 #[derive(Debug, Default, Clone)]
 pub struct State {
     pub selection: Option<Selection>,
     pub dragging: bool,
+    /// True while the inline comment composer is accepting keyboard input.
+    pub composing: bool,
+    /// Text the user is currently typing in the composer.
+    pub composer_buffer: String,
 }
 
 /// Mouse selection in markdown-line coordinates. `anchor` is where the drag
@@ -221,10 +247,92 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for PlanReviewWidget<'a> {
             }
         }
 
+        // Draw gutter markers for commented line ranges. A small vertical bar
+        // sits in the left padding area for any line touched by a saved
+        // comment, plus a translucent underline tint on the affected text.
+        if !self.comments.is_empty() {
+            let marker_color = theme.yellow;
+            let underline = Color { a: 0.18, ..theme.yellow };
+            for c in self.comments {
+                for (i, ll) in layouts.iter().enumerate() {
+                    if i < c.line_start || i > c.line_end {
+                        continue;
+                    }
+                    if ll.y + ll.height > max_y {
+                        break;
+                    }
+                    let bar_x = bounds.x + pad_x / 2.0;
+                    let bar_w = (char_w / 3.0).max(2.0);
+                    renderer.fill_quad(
+                        Quad {
+                            bounds: Rectangle::new(
+                                Point::new(bar_x, ll.y),
+                                Size::new(bar_w, ll.height),
+                            ),
+                            border: Border::default(),
+                            ..Quad::default()
+                        },
+                        marker_color,
+                    );
+                    let from = if i == c.line_start { c.char_start } else { 0 };
+                    let to = if i == c.line_end { c.char_end } else { ll.char_count };
+                    if to > from && ll.char_width > 0.0 {
+                        let x = ll.text_x + from as f32 * ll.char_width;
+                        let w = (to - from) as f32 * ll.char_width;
+                        renderer.fill_quad(
+                            Quad {
+                                bounds: Rectangle::new(
+                                    Point::new(x, ll.y),
+                                    Size::new(w, ll.height),
+                                ),
+                                border: Border::default(),
+                                ..Quad::default()
+                            },
+                            underline,
+                        );
+                    }
+                }
+            }
+        }
+
         // Draw selection highlight on top of text. A translucent overlay in the
         // theme's foreground color reads clearly against any theme without
         // requiring per-span re-rendering.
         let state = tree.state.downcast_ref::<State>();
+
+        // Footer at the bottom of the bounds explaining the current keybinds.
+        let footer_h = base_line + char_w; // a little vertical breathing room
+        let footer_y = bounds.y + bounds.height - footer_h;
+        let footer_bg = tint(theme.bg, theme.fg, 0.08);
+        renderer.fill_quad(
+            Quad {
+                bounds: Rectangle::new(
+                    Point::new(bounds.x, footer_y),
+                    Size::new(bounds.width, footer_h),
+                ),
+                border: Border::default(),
+                ..Quad::default()
+            },
+            footer_bg,
+        );
+        let footer_text = footer_label(state, self.comments.len(), self.review_pending);
+        renderer.fill_text(
+            Text {
+                content: footer_text,
+                bounds: Size::new(bounds.width - pad_x * 2.0, base_line),
+                size: base_size.into(),
+                line_height: text::LineHeight::Relative(self.config.line_height),
+                font: Font::MONOSPACE,
+                align_x: iced::alignment::Horizontal::Left.into(),
+                align_y: iced::alignment::Vertical::Top.into(),
+                shaping: text::Shaping::Advanced,
+                wrapping: text::Wrapping::None,
+            },
+            Point::new(bounds.x + pad_x, footer_y + char_w / 2.0),
+            theme.fg,
+            bounds,
+        );
+
         if let Some(sel) = state.selection {
             if !sel.is_empty() {
                 let ((s_line, s_char), (e_line, e_char)) = sel.ordered();
@@ -255,6 +363,58 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for PlanReviewWidget<'a> {
                         highlight,
                     );
                 }
+            }
+        }
+
+        // Inline composer popup, anchored at the bottom-right of the selection.
+        if state.composing
+            && let Some(sel) = state.selection
+        {
+            let (_, (e_line, e_char)) = sel.ordered();
+            if let Some(ll) = layouts.get(e_line) {
+                let popup_w = (char_w * 40.0).min(bounds.width - pad_x * 2.0);
+                let popup_h = base_line + char_w * 2.0;
+                let mut px = ll.text_x + e_char as f32 * ll.char_width;
+                let mut py = ll.y + ll.height;
+                if px + popup_w > bounds.x + bounds.width - pad_x {
+                    px = bounds.x + bounds.width - pad_x - popup_w;
+                }
+                if py + popup_h > footer_y {
+                    py = (footer_y - popup_h).max(bounds.y);
+                }
+                let popup_bg = tint(theme.bg, theme.fg, 0.18);
+                renderer.fill_quad(
+                    Quad {
+                        bounds: Rectangle::new(
+                            Point::new(px, py),
+                            Size::new(popup_w, popup_h),
+                        ),
+                        border: Border {
+                            color: theme.bright_black,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        ..Quad::default()
+                    },
+                    popup_bg,
+                );
+                let buf = format!("{}\u{2581}", state.composer_buffer);
+                renderer.fill_text(
+                    Text {
+                        content: buf,
+                        bounds: Size::new(popup_w - char_w, base_line),
+                        size: base_size.into(),
+                        line_height: text::LineHeight::Relative(self.config.line_height),
+                        font: Font::MONOSPACE,
+                        align_x: iced::alignment::Horizontal::Left.into(),
+                        align_y: iced::alignment::Vertical::Top.into(),
+                        shaping: text::Shaping::Advanced,
+                        wrapping: text::Wrapping::None,
+                    },
+                    Point::new(px + char_w / 2.0, py + char_w / 2.0),
+                    theme.fg,
+                    bounds,
+                );
             }
         }
     }
@@ -304,6 +464,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for PlanReviewWidget<'a> {
                         let layouts = compute_layouts(&lines, bounds, self.config);
                         let point = hit_test(&layouts, pos);
                         let state = tree.state.downcast_mut::<State>();
+                        // Cancel any open composer when starting a new drag.
+                        if state.composing {
+                            state.composing = false;
+                            state.composer_buffer.clear();
+                        }
                         state.selection = Some(Selection { anchor: point, head: point });
                         state.dragging = true;
                         shell.request_redraw();
@@ -333,9 +498,13 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for PlanReviewWidget<'a> {
                 if state.dragging {
                     state.dragging = false;
                     // Clear empty selections so a plain click doesn't leave a
-                    // zero-width artifact in state.
+                    // zero-width artifact in state. A non-empty drag opens
+                    // the inline composer for the user to attach a comment.
                     if state.selection.is_some_and(|s| s.is_empty()) {
                         state.selection = None;
+                    } else if state.selection.is_some() {
+                        state.composing = true;
+                        state.composer_buffer.clear();
                     }
                     shell.request_redraw();
                     shell.capture_event();
@@ -348,16 +517,101 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for PlanReviewWidget<'a> {
         if let Event::Keyboard(keyboard::Event::KeyPressed {
             key,
             modifiers,
+            text,
             ..
         }) = event
         {
             use keyboard::key::Named;
+
+            // While composing a comment, capture text and editing keys before
+            // routing through global keybindings so plain ASCII characters
+            // don't fire shortcuts. Modifier-bearing keys (e.g. cmd+w) still
+            // fall through to keybindings below.
+            {
+                let state_ref = tree.state.downcast_ref::<State>();
+                if state_ref.composing && !modifiers.command() && !modifiers.control() {
+                    if matches!(key, keyboard::Key::Named(Named::Enter)) {
+                        // Save the comment from current state.
+                        let lines = markdown::parse(self.contents);
+                        let layouts = compute_layouts(&lines, bounds, self.config);
+                        let state = tree.state.downcast_mut::<State>();
+                        if let Some(sel) = state.selection {
+                            let ((s_line, s_char), (e_line, e_char)) = sel.ordered();
+                            let selected = collect_selected_text(&layouts, sel);
+                            let body = std::mem::take(&mut state.composer_buffer);
+                            state.composing = false;
+                            state.selection = None;
+                            if !body.is_empty() {
+                                shell.publish(Message::PlanReviewAddComment(
+                                    self.tab_id,
+                                    Comment {
+                                        line_start: s_line,
+                                        char_start: s_char,
+                                        line_end: e_line,
+                                        char_end: e_char,
+                                        text: body,
+                                        selected_text: selected,
+                                    },
+                                ));
+                            }
+                        }
+                        shell.request_redraw();
+                        shell.capture_event();
+                        return;
+                    }
+                    if matches!(key, keyboard::Key::Named(Named::Escape)) {
+                        let state = tree.state.downcast_mut::<State>();
+                        state.composing = false;
+                        state.composer_buffer.clear();
+                        state.selection = None;
+                        shell.request_redraw();
+                        shell.capture_event();
+                        return;
+                    }
+                    if matches!(key, keyboard::Key::Named(Named::Backspace)) {
+                        let state = tree.state.downcast_mut::<State>();
+                        state.composer_buffer.pop();
+                        shell.request_redraw();
+                        shell.capture_event();
+                        return;
+                    }
+                    if let Some(t) = text {
+                        let state = tree.state.downcast_mut::<State>();
+                        for ch in t.chars() {
+                            if !ch.is_control() {
+                                state.composer_buffer.push(ch);
+                            }
+                        }
+                        shell.request_redraw();
+                        shell.capture_event();
+                        return;
+                    }
+                }
+            }
 
             let ctx = super::keybindings::KeyContext { active_tab_id: self.tab_id };
             if let Some(msg) = super::keybindings::keybinding_message(self.config, key, *modifiers, &ctx) {
                 shell.publish(msg);
                 shell.capture_event();
                 return;
+            }
+
+            // With saved comments, Enter/Esc become send-feedback / cancel
+            // (clear comments and return to plain accept/reject mode).
+            if !self.comments.is_empty() {
+                if matches!(key, keyboard::Key::Named(Named::Enter)) {
+                    shell.publish(Message::PlanReviewFeedback(self.tab_id));
+                    shell.capture_event();
+                    return;
+                }
+                if matches!(key, keyboard::Key::Named(Named::Escape)) {
+                    let state = tree.state.downcast_mut::<State>();
+                    state.selection = None;
+                    shell.publish(Message::PlanReviewClearComments(self.tab_id));
+                    shell.request_redraw();
+                    shell.capture_event();
+                    return;
+                }
             }
 
             // Escape clears an active selection before falling through to
@@ -481,6 +735,21 @@ fn code_block_bg(theme: &crate::theme::TerminalTheme, lang: Option<&str>) -> Col
     }
 }
 
+/// Footer text shown at the bottom of the overlay. The exact label depends on
+/// whether the composer is active, whether the user has any saved comments,
+/// and whether the agent is awaiting a review decision.
+fn footer_label(state: &State, comment_count: usize, review_pending: bool) -> String {
+    if state.composing {
+        "[Enter] Save comment · [Esc] Cancel".to_string()
+    } else if comment_count > 0 {
+        format!("[Enter] Send feedback ({}) · [Esc] Cancel", comment_count)
+    } else if review_pending {
+        "[Enter] Accept · [Esc] Reject".to_string()
+    } else {
+        "[Esc] Close".to_string()
+    }
+}
+
 fn tint(base: Color, with: Color, amount: f32) -> Color {
     Color {
         r: base.r * (1.0 - amount) + with.r * amount,
@@ -547,6 +816,26 @@ fn hit_test(layouts: &[LineLayout], pos: Point) -> (usize, usize) {
         ((dx / ll.char_width).round() as usize).min(ll.char_count)
     };
     (line_idx, char_idx)
+}
+
+/// Joins the text covered by `sel` across already-computed line layouts.
+/// Used by the comment composer when saving a comment so the message
+/// payload contains the literal selected excerpt.
+fn collect_selected_text(layouts: &[LineLayout], sel: Selection) -> String {
+    let ((s_line, s_char), (e_line, e_char)) = sel.ordered();
+    let mut parts: Vec<String> = Vec::new();
+    for (i, ll) in layouts.iter().enumerate() {
+        if i < s_line || i > e_line {
+            continue;
+        }
+        let from = if i == s_line { s_char } else { 0 };
+        let to = if i == e_line { e_char } else { ll.char_count };
+        let segment: String = ll.text.chars().skip(from).take(to.saturating_sub(from)).collect();
+        if !segment.is_empty() {
+            parts.push(segment);
+        }
+    }
+    parts.join("\n")
 }
 
 /// Returns the concatenated text covered by the selection, joining lines with
@@ -658,6 +947,42 @@ mod tests {
         });
         let text = selected_text(&state, contents, bounds, &config).unwrap();
         assert_eq!(text, "pha\nbeta\ngam");
+    }
+
+    #[test]
+    fn footer_label_reflects_state() {
+        let empty = State::default();
+        assert_eq!(footer_label(&empty, 0, true), "[Enter] Accept · [Esc] Reject");
+        assert_eq!(footer_label(&empty, 0, false), "[Esc] Close");
+        assert_eq!(
+            footer_label(&empty, 3, true),
+            "[Enter] Send feedback (3) · [Esc] Cancel"
+        );
+        let mut composing = State::default();
+        composing.composing = true;
+        assert_eq!(
+            footer_label(&composing, 0, true),
+            "[Enter] Save comment · [Esc] Cancel"
+        );
+    }
+
+    #[test]
+    fn collect_selected_text_joins_lines() {
+        let config = Config::default();
+        let contents = "- alpha\n- beta\n- gamma\n";
+        let lines = markdown::parse(contents);
+        let layouts = compute_layouts(&lines, test_bounds(), &config);
+        let item_idxs: Vec<usize> = layouts
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.char_count > 0)
+            .map(|(i, _)| i)
+            .collect();
+        let sel = Selection {
+            anchor: (item_idxs[0], 2),
+            head: (item_idxs[2], 3),
+        };
+        assert_eq!(collect_selected_text(&layouts, sel), "pha\nbeta\ngam");
     }
 
     #[test]

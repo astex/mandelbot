@@ -176,6 +176,9 @@ pub struct TerminalTab {
     pub plan_contents: Option<String>,
     /// True while a `mandelbot__review_plan` MCP call is awaiting a decision.
     pub plan_review_pending: bool,
+    /// Comments accumulated by the user during a plan review. Sent as the
+    /// `feedback` decision when the user clicks "Send feedback".
+    pub plan_comments: Vec<crate::widget::plan_review::Comment>,
     term: Term<TermEventListener>,
     listener: TermEventListener,
     parser: ansi::Processor,
@@ -347,6 +350,7 @@ impl TerminalTab {
             plan_visible: false,
             plan_contents: None,
             plan_review_pending: false,
+            plan_comments: Vec::new(),
             term,
             listener,
             parser: ansi::Processor::new(),
@@ -381,6 +385,7 @@ impl TerminalTab {
             plan_visible: false,
             plan_contents: None,
             plan_review_pending: false,
+            plan_comments: Vec::new(),
             term,
             listener,
             parser: ansi::Processor::new(),
