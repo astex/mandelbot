@@ -67,6 +67,8 @@ pub enum Message {
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>),
     SetTitle(usize, String),
+    SetPlan(usize, PathBuf),
+    TogglePlanView(usize),
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
@@ -182,6 +184,7 @@ impl App {
         self.next_tab_id += 1;
         let parent = parent_id.and_then(|pid| self.tabs.iter().find(|t| t.id == pid));
         let depth = parent.map_or(0, |p| p.depth + 1);
+        let inherited_plan = parent.and_then(|p| p.plan_path.clone());
         let project_id = match rank {
             AgentRank::Home => None,
             AgentRank::Project => Some(id),
@@ -199,6 +202,11 @@ impl App {
             model, &self.parent_socket_path, prompt, branch,
         );
         self.tabs.push(tab);
+        if let Some(plan) = inherited_plan
+            && let Some(tab) = self.tabs.last_mut()
+        {
+            tab.plan_path = Some(plan);
+        }
         // Initialize colors and window size for OSC query responses.
         if let Some(tab) = self.tabs.last() {
             tab.set_colors(
@@ -541,6 +549,16 @@ impl App {
                 let (new_tab_id, task) = self.spawn_tab(true, rank, project_dir, parent_id, prompt, branch);
                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
                 task
+            }
+            Message::SetPlan(tab_id, path) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.plan_path = Some(path);
+                }
+                Task::none()
+            }
+            Message::TogglePlanView(_tab_id) => {
+                // Stub: handler is wired in PR-2.
+                Task::none()
             }
             Message::SetStatus(tab_id, status) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
@@ -905,19 +923,45 @@ impl App {
             let content = row![Space::new().width(PADDING), label, suffix, Space::new().width(PADDING)]
                 .align_y(Alignment::Center);
 
+            let has_plan = tab.plan_path.is_some();
+            let plan_btn_width = 20.0_f32;
+            let main_width = if has_plan {
+                TAB_BAR_WIDTH - indent - plan_btn_width
+            } else {
+                TAB_BAR_WIDTH - indent
+            };
+
             let btn = button(content)
                 .on_press(Message::SelectTab(tab_id))
-                .width(TAB_BAR_WIDTH - indent)
+                .width(main_width)
                 .style(move |_theme, _status| button::Style {
                     background: Some(bg.into()),
                     border: Border::default(),
                     ..Default::default()
                 });
 
-            if indent > 0.0 {
-                row![Space::new().width(indent), btn].width(TAB_BAR_WIDTH).into()
+            let main_element: Element<'_, Message> = if has_plan {
+                let plan_label = text("P")
+                    .size(self.config.font_size)
+                    .font(Font::MONOSPACE)
+                    .color(fg);
+                let plan_btn = button(container(plan_label).center_x(Fill))
+                    .on_press(Message::TogglePlanView(tab_id))
+                    .width(plan_btn_width)
+                    .style(move |_theme, _status| button::Style {
+                        background: Some(bg.into()),
+                        border: Border::default(),
+                        ..Default::default()
+                    });
+                row![btn, plan_btn].width(TAB_BAR_WIDTH - indent).into()
             } else {
                 Element::from(btn)
+            };
+
+            if indent > 0.0 {
+                row![Space::new().width(indent), main_element].width(TAB_BAR_WIDTH).into()
+            } else {
+                main_element
             }
         };
 
@@ -1162,6 +1206,11 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt, branch))
+                                }
+                                "set_plan" => {
+                                    msg.get("path")
+                                        .and_then(|v| v.as_str())
+                                        .map(|p| Message::SetPlan(tab_id, PathBuf::from(p)))
                                 }
                                 "set_status" => {
                                     msg.get("status")

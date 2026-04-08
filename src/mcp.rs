@@ -95,6 +95,20 @@ fn handle_tools_list(id: Value) -> Response {
                     },
                 },
                 {
+                    "name": "set_plan",
+                    "description": "Register the path to the current plan file (markdown) for this tab. Mandelbot reads the file directly when displaying the plan, so call this immediately after writing or rewriting a plan file in plan mode.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Absolute path to the plan markdown file.",
+                            },
+                        },
+                        "required": ["path"],
+                    },
+                },
+                {
                     "name": "set_status",
                     "description": "Set the status indicator for this tab. Use this to communicate your current state to the user.",
                     "inputSchema": {
@@ -234,6 +248,30 @@ async fn handle_tools_call(
                 }
                 Err(e) => Response::err(id, -32000, e),
             }
+        }
+        "set_plan" => {
+            let path = params
+                .get("arguments")
+                .and_then(|a| a.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let msg = serde_json::json!({
+                "type": "set_plan",
+                "tab_id": tab_id,
+                "path": path,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            Response::ok(
+                id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": "Plan registered" }],
+                }),
+            )
         }
         "set_status" => {
             let status = params
@@ -395,7 +433,8 @@ mod tests {
         let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
         assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
-        assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
+        assert_eq!(resp["result"]["tools"][2]["name"], "set_plan");
+        assert_eq!(resp["result"]["tools"][3]["name"], "set_status");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -438,6 +477,24 @@ mod tests {
         child_reader.read_line(&mut resp_line).unwrap();
         let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
         assert_eq!(resp["result"]["content"][0]["text"], "Agent spawned with tab ID 7");
+
+        // -- tools/call set_plan --
+        let call = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"set_plan","arguments":{"path":"/tmp/plan.md"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Plan registered");
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_plan");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["path"], "/tmp/plan.md");
 
         // -- tools/call set_status --
         let call = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_status","arguments":{"status":"working"}}}"#;

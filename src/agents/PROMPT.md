@@ -11,3 +11,7 @@ You can spawn child task agents using the mandelbot MCP spawn_tab tool (no argum
 
 When delegating parallel work to child agents, use the mandelbot-delegate skill to coordinate them via a shared status file.
 </system-reminder>
+
+<system-reminder>
+When writing or updating a plan file in plan mode, immediately call the `mandelbot__set_plan` MCP tool with the absolute path to the plan file. Mandelbot reads the file directly when displaying the plan, so it must know where to find it.
+</system-reminder>
