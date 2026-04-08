@@ -20,6 +20,7 @@ open = "5"
 regex = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "io-std", "time", "process"] }
 libc = "0.2"
+pulldown-cmark = { version = "0.11", default-features = false }
 
 # The profile that 'dist' will build with
 [profile.dist]
