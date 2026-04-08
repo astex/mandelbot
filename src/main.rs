@@ -2,6 +2,7 @@ mod animation;
 mod config;
 mod keys;
 mod links;
+mod markdown;
 mod mcp;
 mod pty;
 mod terminal;
