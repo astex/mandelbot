@@ -109,6 +109,14 @@ fn handle_tools_list(id: Value) -> Response {
                     },
                 },
                 {
+                    "name": "review_plan",
+                    "description": "Open the current plan file in mandelbot's plan-review overlay and wait for the user to accept, reject, or send feedback. The plan path must already be registered via `set_plan`. Use this INSTEAD of `ExitPlanMode` when running inside mandelbot. The response will be one of: {\"decision\": \"accept\"} — user approved, exit plan mode and start implementing; {\"decision\": \"reject\"} — user rejected, return to the prompt for discussion; {\"decision\": \"feedback\", \"comments\": [...]} — user sent structured feedback, treat as a denial and address the comments before re-proposing.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+                {
                     "name": "set_status",
                     "description": "Set the status indicator for this tab. Use this to communicate your current state to the user.",
                     "inputSchema": {
@@ -273,6 +281,43 @@ async fn handle_tools_call(
                 }),
             )
         }
+        "review_plan" => {
+            let msg = serde_json::json!({
+                "type": "review_plan",
+                "tab_id": tab_id,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let decision = resp
+                        .get("decision")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("reject");
+                    let text = match decision {
+                        "accept" => "User accepted the plan. Exit plan mode and begin implementing.".to_string(),
+                        "feedback" => {
+                            let comments = resp.get("comments").cloned().unwrap_or(Value::Array(vec![]));
+                            format!(
+                                "User sent feedback on the plan. Treat this as a denial: address the following comments and re-propose. Comments: {}",
+                                comments
+                            )
+                        }
+                        _ => "User rejected the plan. Return to the prompt and discuss before re-proposing.".to_string(),
+                    };
+                    Response::ok(
+                        id,
+                        serde_json::json!({
+                            "content": [{ "type": "text", "text": text }],
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
         "set_status" => {
             let status = params
                 .get("arguments")
@@ -434,7 +479,8 @@ mod tests {
         assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
         assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
         assert_eq!(resp["result"]["tools"][2]["name"], "set_plan");
-        assert_eq!(resp["result"]["tools"][3]["name"], "set_status");
+        assert_eq!(resp["result"]["tools"][3]["name"], "review_plan");
+        assert_eq!(resp["result"]["tools"][4]["name"], "set_status");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -495,6 +541,29 @@ mod tests {
         assert_eq!(parent_msg["type"], "set_plan");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["path"], "/tmp/plan.md");
+
+        // -- tools/call review_plan --
+        let call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"review_plan","arguments":{}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        // Parent receives the review_plan message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "review_plan");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+
+        // Parent writes back an accept decision.
+        parent_writer.write_all(b"{\"decision\":\"accept\"}\n").unwrap();
+        parent_writer.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("accepted"), "got: {text}");
 
         // -- tools/call set_status --
         let call = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_status","arguments":{"status":"working"}}}"#;
