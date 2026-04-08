@@ -15,12 +15,13 @@ use crate::ui::Message;
 pub struct PlanReviewWidget<'a> {
     tab_id: usize,
     contents: &'a str,
+    review_pending: bool,
     config: &'a Config,
 }
 
 impl<'a> PlanReviewWidget<'a> {
-    pub fn new(tab_id: usize, contents: &'a str, config: &'a Config) -> Self {
-        Self { tab_id, contents, config }
+    pub fn new(tab_id: usize, contents: &'a str, review_pending: bool, config: &'a Config) -> Self {
+        Self { tab_id, contents, review_pending, config }
     }
 }
 
@@ -104,7 +105,18 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for PlanReviewWidget<'a> {
                 return;
             }
 
-            if matches!(key, keyboard::Key::Named(Named::Escape)) {
+            if self.review_pending {
+                if matches!(key, keyboard::Key::Named(Named::Enter)) {
+                    shell.publish(Message::PlanReviewAccept(self.tab_id));
+                    shell.capture_event();
+                    return;
+                }
+                if matches!(key, keyboard::Key::Named(Named::Escape)) {
+                    shell.publish(Message::PlanReviewReject(self.tab_id));
+                    shell.capture_event();
+                    return;
+                }
+            } else if matches!(key, keyboard::Key::Named(Named::Escape)) {
                 shell.publish(Message::TogglePlanView(self.tab_id));
                 shell.capture_event();
             }

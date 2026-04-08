@@ -70,6 +70,9 @@ pub enum Message {
     SetTitle(usize, String),
     SetPlan(usize, PathBuf),
     TogglePlanView(usize),
+    PlanReviewOpen(usize),
+    PlanReviewAccept(usize),
+    PlanReviewReject(usize),
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
@@ -560,6 +563,11 @@ impl App {
             }
             Message::TogglePlanView(tab_id) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    // Don't allow toggling away while a review is pending —
+                    // accept/reject is the only way out.
+                    if tab.plan_review_pending && tab.plan_visible {
+                        return Task::none();
+                    }
                     tab.plan_visible = !tab.plan_visible;
                     if tab.plan_visible {
                         tab.plan_contents = tab
@@ -567,6 +575,41 @@ impl App {
                             .as_ref()
                             .and_then(|p| std::fs::read_to_string(p).ok());
                     }
+                }
+                Task::none()
+            }
+            Message::PlanReviewOpen(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.plan_visible = true;
+                    tab.plan_review_pending = true;
+                    tab.status = AgentStatus::NeedsReview;
+                    tab.plan_contents = tab
+                        .plan_path
+                        .as_ref()
+                        .and_then(|p| std::fs::read_to_string(p).ok());
+                }
+                self.focus_tab(tab_id);
+                Task::none()
+            }
+            Message::PlanReviewAccept(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id)
+                    && tab.plan_review_pending
+                {
+                    tab.plan_review_pending = false;
+                    tab.plan_visible = false;
+                    tab.status = AgentStatus::Working;
+                    self.respond_to_tab(tab_id, serde_json::json!({"decision": "accept"}));
+                }
+                Task::none()
+            }
+            Message::PlanReviewReject(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id)
+                    && tab.plan_review_pending
+                {
+                    tab.plan_review_pending = false;
+                    tab.plan_visible = false;
+                    tab.status = AgentStatus::Working;
+                    self.respond_to_tab(tab_id, serde_json::json!({"decision": "reject"}));
                 }
                 Task::none()
             }
@@ -1103,7 +1146,7 @@ impl App {
         } else if let Some(tab) = self.active_tab() {
             if tab.plan_visible && tab.plan_path.is_some() {
                 let contents = tab.plan_contents.as_deref().unwrap_or("");
-                PlanReviewWidget::new(tab.id, contents, &self.config).into()
+                PlanReviewWidget::new(tab.id, contents, tab.plan_review_pending, &self.config).into()
             } else {
                 TerminalWidget::new(tab, &self.config).into()
             }
@@ -1226,6 +1269,13 @@ fn parent_socket_stream(
                                     msg.get("path")
                                         .and_then(|v| v.as_str())
                                         .map(|p| Message::SetPlan(tab_id, PathBuf::from(p)))
+                                }
+                                "review_plan" => {
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::PlanReviewOpen(tab_id))
                                 }
                                 "set_status" => {
                                     msg.get("status")

@@ -15,3 +15,7 @@ When delegating parallel work to child agents, use the mandelbot-delegate skill 
 <system-reminder>
 When writing or updating a plan file in plan mode, immediately call the `mandelbot__set_plan` MCP tool with the absolute path to the plan file. Mandelbot reads the file directly when displaying the plan, so it must know where to find it.
 </system-reminder>
+
+<system-reminder>
+Never call `ExitPlanMode` inside mandelbot. To exit plan mode, call `mandelbot__review_plan` instead — this opens the plan-review overlay and waits for the user's decision. Ensure you have already called `mandelbot__set_plan` with the current plan file path before calling `mandelbot__review_plan`.
+</system-reminder>

@@ -174,6 +174,8 @@ pub struct TerminalTab {
     pub plan_path: Option<PathBuf>,
     pub plan_visible: bool,
     pub plan_contents: Option<String>,
+    /// True while a `mandelbot__review_plan` MCP call is awaiting a decision.
+    pub plan_review_pending: bool,
     term: Term<TermEventListener>,
     listener: TermEventListener,
     parser: ansi::Processor,
@@ -344,6 +346,7 @@ impl TerminalTab {
             plan_path: None,
             plan_visible: false,
             plan_contents: None,
+            plan_review_pending: false,
             term,
             listener,
             parser: ansi::Processor::new(),
@@ -377,6 +380,7 @@ impl TerminalTab {
             plan_path: None,
             plan_visible: false,
             plan_contents: None,
+            plan_review_pending: false,
             term,
             listener,
             parser: ansi::Processor::new(),
@@ -754,14 +758,14 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
     };
 
     // A conditional variant that only sets status when the tool_name is NOT
-    // ExitPlanMode. This avoids a race between the catch-all "blocked" hook
-    // and the ExitPlanMode-specific "needs_review" hook, which both fire in
-    // parallel on an ExitPlanMode permission request.
-    let set_status_unless_exit_plan = |status: &str| -> serde_json::Value {
+    // ExitPlanMode or mandelbot__review_plan. This avoids a race between the
+    // catch-all hook and the tool-specific "needs_review" hooks, which both
+    // fire in parallel on a plan-review request.
+    let set_status_unless_review = |status: &str| -> serde_json::Value {
         serde_json::json!({
             "type": "command",
             "command": format!(
-                r#"grep -q '"tool_name":"ExitPlanMode"\|"tool_name": "ExitPlanMode"' || echo status:{status} > $MANDELBOT_FIFO"#,
+                r#"grep -qE '"tool_name": ?"(ExitPlanMode|mandelbot__review_plan)"' || echo status:{status} > $MANDELBOT_FIFO"#,
             ),
         })
     };
@@ -771,13 +775,19 @@ fn write_hooks_settings(dir: &Path) -> PathBuf {
             "UserPromptSubmit": [{
                 "hooks": [set_status("working")],
             }],
-            "PreToolUse": [{
-                "matcher": "",
-                "hooks": [set_status("working")],
-            }],
+            "PreToolUse": [
+                {
+                    "matcher": "",
+                    "hooks": [set_status_unless_review("working")],
+                },
+                {
+                    "matcher": "mandelbot__review_plan",
+                    "hooks": [set_status("needs_review")],
+                },
+            ],
             "PermissionRequest": [
                 {
-                    "hooks": [set_status_unless_exit_plan("blocked")],
+                    "hooks": [set_status_unless_review("blocked")],
                 },
                 {
                     "matcher": "ExitPlanMode",
@@ -822,6 +832,8 @@ const SKILL_MANDELBOT_KEYBINDINGS: &str =
     include_str!("agents/skills/mandelbot-keybindings/SKILL.md");
 const SKILL_MANDELBOT_FEATURES: &str =
     include_str!("agents/skills/mandelbot-features/SKILL.md");
+const SKILL_MANDELBOT_PLAN_REVIEW: &str =
+    include_str!("agents/skills/mandelbot-plan-review/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -942,6 +954,10 @@ fn write_plugin_dir(dir: &Path, workflow: &str) -> PathBuf {
     std::fs::create_dir_all(&features_dir)
         .expect("failed to create mandelbot-features skill dir");
 
+    let plan_review_dir = plugin_dir.join("skills").join("mandelbot-plan-review");
+    std::fs::create_dir_all(&plan_review_dir)
+        .expect("failed to create mandelbot-plan-review skill dir");
+
     let delegate_content = if workflow == "git" {
         SKILL_DELEGATE
     } else {
@@ -979,6 +995,12 @@ fn write_plugin_dir(dir: &Path, workflow: &str) -> PathBuf {
     if !skill_path.exists() {
         std::fs::write(&skill_path, SKILL_MANDELBOT_FEATURES)
             .expect("failed to write mandelbot-features skill");
+    }
+
+    let skill_path = plan_review_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        std::fs::write(&skill_path, SKILL_MANDELBOT_PLAN_REVIEW)
+            .expect("failed to write mandelbot-plan-review skill");
     }
 
     plugin_dir
