@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::widget::fold_placeholder::FoldPlaceholderWidget;
+use crate::widget::plan_review::PlanReviewWidget;
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
@@ -553,11 +554,20 @@ impl App {
             Message::SetPlan(tab_id, path) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.plan_path = Some(path);
+                    tab.plan_contents = None;
                 }
                 Task::none()
             }
-            Message::TogglePlanView(_tab_id) => {
-                // Stub: handler is wired in PR-2.
+            Message::TogglePlanView(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.plan_visible = !tab.plan_visible;
+                    if tab.plan_visible {
+                        tab.plan_contents = tab
+                            .plan_path
+                            .as_ref()
+                            .and_then(|p| std::fs::read_to_string(p).ok());
+                    }
+                }
                 Task::none()
             }
             Message::SetStatus(tab_id, status) => {
@@ -1091,7 +1101,12 @@ impl App {
                 .unwrap_or(0);
             FoldPlaceholderWidget::new(fold_parent_id, fold_count, &self.config).into()
         } else if let Some(tab) = self.active_tab() {
-            TerminalWidget::new(tab, &self.config).into()
+            if tab.plan_visible && tab.plan_path.is_some() {
+                let contents = tab.plan_contents.as_deref().unwrap_or("");
+                PlanReviewWidget::new(tab.id, contents, &self.config).into()
+            } else {
+                TerminalWidget::new(tab, &self.config).into()
+            }
         } else {
             Space::new().width(Fill).height(Fill).into()
         };
