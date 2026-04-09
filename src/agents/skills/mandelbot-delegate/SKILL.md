@@ -69,9 +69,9 @@ For each child, call `spawn_tab` with a `branch` parameter (worktree/branch name
 
 > Start by running `/mandelbot-work-as-subtask` to load the subtask protocol. You are a child agent in the "<project>" project. Your coordination file is at `<absolute path to <label>.coord.md>` — read it first, then read the governing plan it references at `<absolute path to plan>` in full.
 >
-> Your job: <one-line summary>. Enter plan mode, draft your subplan into `~/.claude/plans/`, update your coord file's Plan field and log, set state to `awaiting_review`, and wait on the watcher for a `[DIRECTIVE] approved` entry before implementing.
+> Your job: <one-line summary>. Draft your subplan directly into `~/.claude/plans/` (do **not** enter plan mode — use the Write tool), update your coord file's Plan field and log, set state to `awaiting_review`, and wait on the watcher for a `[DIRECTIVE] approved` entry before implementing.
 
-Include: instruction to run `/mandelbot-work-as-subtask` first, absolute path to the child's own `*.coord.md`, absolute path to the governing plan, branch name via the `branch` param, and an explicit mention of the plan-review handshake.
+Include: instruction to run `/mandelbot-work-as-subtask` first, absolute path to the child's own `*.coord.md`, absolute path to the governing plan, branch name via the `branch` param, an explicit mention of the plan-review handshake, and an explicit "do not enter plan mode" note — plan mode's only exit is `ExitPlanMode`, which blocks on user approval and would stall the parent-review handshake.
 
 ### 5. Watch, review, direct
 

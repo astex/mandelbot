@@ -46,9 +46,11 @@ All your commits go on this branch.
 
 Read your `*.coord.md`. Note the `## Assignment` section — it contains your instructions and any paths you need (typically the governing plan). Read the governing plan in full.
 
-### 2. Enter plan mode and draft your subplan
+### 2. Draft your subplan
 
-Use Claude's normal plan mode. Write your subplan to `~/.claude/plans/<name>.md`. Your subplan may itself describe sub-delegation — that's fine.
+**Do not enter plan mode.** Claude's built-in plan mode can only be exited via `ExitPlanMode`, which blocks on user approval — but in this workflow the *parent agent* reviews your subplan, not the user. Instead, just write the subplan document directly.
+
+Pick a descriptive filename and use the `Write` tool to create `~/.claude/plans/<name>.md`. The document should cover context, approach, files to change, and verification — the same things a plan-mode plan would contain. Your subplan may itself describe sub-delegation — that's fine.
 
 ### 3. Record the plan and await review
 
