@@ -8,29 +8,9 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab]
 
 Use this skill to break parallelizable work into subtasks, spawn a child agent for each, review the subplan they draft, and monitor their progress — all via a shared `*.coord/` coordination directory.
 
-**Warning:** This project is not using git-based isolation. All child agents share the same working directory. Design task boundaries carefully to avoid file conflicts — ideally each task touches a disjoint set of files.
+**Warning:** This project is not using git-based isolation. All child agents share the same working directory. Design task boundaries carefully to avoid file conflicts — ideally each task touches a disjoint set of files, and each child's `## Assignment` spells out which files it owns.
 
-You are the **parent**. Each child owns its own file inside the coordination directory. You own the `index.md` at the top of that directory. You may append `[DIRECTIVE]` entries into any child's file, but you never edit existing entries and never touch siblings' state fields.
-
-## The coordination directory
-
-One project = one `*.coord/` directory under `~/.mandelbot/coordination/`:
-
-```
-~/.mandelbot/coordination/<project>.coord/
-  index.md                    # parent-owned — goal, plan link, how-we-work, children roster
-  <label>.coord.md            # parent-created, then child-owned — plan link, state, append-only log
-  <other-label>.coord.md
-  <nested>.coord/             # present only if a child sub-delegated
-    index.md
-    ...
-```
-
-Templates live alongside this skill: `index.template.md` and `child.template.md`.
-
-State vocabulary (used in the `**State:**` header and as the leading word of log entries where applicable): `pending`, `planning`, `awaiting_review`, `in_progress`, `blocked`, `done`, `failed`.
-
-Log entries are markdown bullets timestamped `- [YYYY-MM-DD HH:MM] <text>`. They are append-only — never edit or delete an existing entry. The `**State:**` header duplicates the latest state for fast scanning; update it together with the log entry that changes state.
+You are the **parent**. Read `<plugin-dir>/skills/_shared/coord.md` for the protocol: directory layout, ownership rules, state vocabulary, log format, `[DIRECTIVE]` marker, plan-review and block/unblock handshakes, watcher usage, and sub-delegation. This SKILL file only covers the parent-specific workflow; everything else lives in the shared doc.
 
 ## Workflow
 
@@ -48,7 +28,7 @@ mkdir -p ~/.mandelbot/coordination/<project>.coord
 
 Write `index.md` from `<plugin-dir>/skills/mandelbot-delegate/index.template.md`. Fill in:
 - Project name, absolute plan path, `**State:** in_progress`. (Omit the `**Workflow:**` line — this project has no git-based PR workflow.)
-- **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan, tell them to enter plan mode, draft a subplan, transition to `awaiting_review`, watch their own file, and wait for `[DIRECTIVE] approved` before implementing. Call out file-ownership boundaries explicitly since there is no VCS isolation.
+- **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake, and call out file-ownership boundaries explicitly since there is no VCS isolation.
 - **Children**: one bullet per child, all `pending`.
 
 Then for each child, write `<label>.coord.md` from `child.template.md`:
@@ -72,28 +52,13 @@ Include: instruction to run `/mandelbot-work-as-subtask` first, absolute path to
 
 ### 4. Watch, review, direct
 
-Monitor progress with the directory watcher. It blocks until *any* file in the tree changes, prints the changed paths and their contents, then exits. **Run it in the background** with `run_in_background: true`.
+Run the directory watcher against your coord directory in the background. When it wakes, act on what changed:
 
-```bash
-bash <plugin-dir>/skills/mandelbot-delegate/watch.sh ~/.mandelbot/coordination/<project>.coord
-```
+- **Child in `awaiting_review`** — read the subplan it links to, review against the governing plan and your intent, append `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <redline>` directly into that child's `*.coord.md` log.
+- **New `blocked: <question>` entry** — append `- [...] [DIRECTIVE] <answer>` in that child's file. File-ownership conflicts in this workflow often surface as blocks; resolve them by directing which child owns the contested file.
+- **State change elsewhere** — update the Children roster line in `index.md` to mirror the child's current state.
 
-When the watcher wakes, inspect its output and act:
-
-- **Child in `awaiting_review`** — read the subplan file it links to, review it against the governing plan and your intent, then append one of the following directly into that child's `*.coord.md` log:
-  - `- [YYYY-MM-DD HH:MM] [DIRECTIVE] approved, proceed`
-  - `- [YYYY-MM-DD HH:MM] [DIRECTIVE] <specific redline>` — the child will address and re-submit.
-
-- **New `blocked: <question>` entry** — answer with `- [YYYY-MM-DD HH:MM] [DIRECTIVE] <answer>` in that child's file. File-ownership conflicts in this workflow often surface as blocks; resolve them by directing which child owns the contested file.
-
-- **State change elsewhere** — update the Children roster in `index.md` to mirror the child's current state. This is parent-owned bookkeeping and is the only editing you do to `index.md` during the run.
-
-After handling any updates, re-arm the watcher in the background. The watcher is your **only** polling mechanism — don't read child files on a timer.
-
-**Rules when writing into a child's file:**
-- Only append. Never edit or delete existing entries.
-- Always use the `[DIRECTIVE]` marker — children scan for it.
-- Never touch a child's `**State:**` field. The child owns that.
+Then re-arm the watcher. (See `_shared/coord.md` for watcher invocation and the append-only rules for writing into child files.)
 
 ### 5. Finalize
 
@@ -102,11 +67,3 @@ When every child is `done` or `failed`:
 1. Handle failures (retry, reassign, or escalate to the user).
 2. Review the work each child produced in place — there are no branches to merge.
 3. Append a final entry to `index.md` noting completion, and set its `**State:**` to `done` (or `failed` if any child failed unrecoverably).
-
-## Sub-delegation by children
-
-If a child decides to spawn its own children, it becomes a parent in its own right: it promotes its `*.coord.md` into a sibling `*.coord/` directory at the same path, writes its own `index.md`, and follows this skill recursively one level deeper. The directory watcher catches changes at any depth.
-
-## Legacy single-file artifacts
-
-This skill used to write flat `~/.mandelbot/coordination/<name>.md` files. Those are obsolete but left in place — the new format only creates `<name>.coord/` directories, so there's no name collision, and the old files are inert once nothing reads them. Leave them alone unless the user asks you to clean up.
