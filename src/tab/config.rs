@@ -172,6 +172,8 @@ const SKILL_MANDELBOT_FEATURES: &str =
     include_str!("../agents/skills/mandelbot-features/SKILL.md");
 const SKILL_MANDELBOT_SPIKE_HARDEN: &str =
     include_str!("../agents/skills/mandelbot-spike-harden/SKILL.md");
+const SKILL_MANDELBOT_IMPLEMENT_ITERATE: &str =
+    include_str!("../agents/skills/mandelbot-implement-iterate/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -406,6 +408,22 @@ pub(super) fn write_plugin_dir(
             SKILL_MANDELBOT_SPIKE_HARDEN,
         )
         .expect("failed to write mandelbot-spike-harden skill");
+    }
+
+    let implement_iterate_dir = plugin_dir
+        .join("skills")
+        .join("mandelbot-implement-iterate");
+    std::fs::create_dir_all(&implement_iterate_dir).expect(
+        "failed to create mandelbot-implement-iterate skill dir",
+    );
+
+    let skill_path = implement_iterate_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        std::fs::write(
+            &skill_path,
+            SKILL_MANDELBOT_IMPLEMENT_ITERATE,
+        )
+        .expect("failed to write mandelbot-implement-iterate skill");
     }
 
     plugin_dir
