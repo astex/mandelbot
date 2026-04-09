@@ -17,7 +17,7 @@ One project = one `*.coord/` directory under `~/.mandelbot/coordination/`:
     ...
 ```
 
-Templates live at `<plugin-dir>/skills/mandelbot-delegate/index.template.md` and `child.template.md`.
+Templates live at `<plugin-dir>/skills/_shared/index.template.md` and `child.template.md`.
 
 ## Ownership
 

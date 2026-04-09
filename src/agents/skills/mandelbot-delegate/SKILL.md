@@ -29,7 +29,7 @@ Default to `single-pr`. Pick `multi-pr` when the pieces are unrelated or the com
 mkdir -p ~/.mandelbot/coordination/<project>.coord
 ```
 
-Write `index.md` from `<plugin-dir>/skills/mandelbot-delegate/index.template.md`. Fill in:
+Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
 - Project name, absolute plan path, workflow, `**State:** in_progress`.
 - **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake. Add anything flow-specific.
 - **Children**: one bullet per child, all `pending`.

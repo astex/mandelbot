@@ -26,7 +26,7 @@ When splitting tasks, pay special attention to file ownership — two agents edi
 mkdir -p ~/.mandelbot/coordination/<project>.coord
 ```
 
-Write `index.md` from `<plugin-dir>/skills/mandelbot-delegate/index.template.md`. Fill in:
+Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
 - Project name, absolute plan path, `**State:** in_progress`. (Omit the `**Workflow:**` line — this project has no git-based PR workflow.)
 - **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake, and call out file-ownership boundaries explicitly since there is no VCS isolation.
 - **Children**: one bullet per child, all `pending`.
