@@ -14,7 +14,7 @@ use alacritty_terminal::selection::Selection;
 
 use crate::animation::FlashState;
 use crate::config::Config;
-use crate::terminal::{AgentRank, AgentStatus, TerminalTab};
+use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::widget::fold_placeholder::FoldPlaceholderWidget;
 use crate::widget::terminal::{self, TerminalWidget};
@@ -107,7 +107,7 @@ impl App {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
 
-        let parent_socket_dir = crate::terminal::runtime_dir();
+        let parent_socket_dir = crate::tab::runtime_dir();
         std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
         let parent_socket_path = parent_socket_dir.join("parent.sock");
 
@@ -222,7 +222,7 @@ impl App {
             });
         }
 
-        let params = crate::terminal::TabSpawnParams {
+        let params = crate::tab::TabSpawnParams {
             id,
             rows,
             cols,
@@ -241,7 +241,7 @@ impl App {
 
         let tab = self.tabs.last().unwrap();
         let tab_task = Task::run(
-            crate::terminal::tab_stream(
+            crate::tab::tab_stream(
                 params,
                 event_rx,
                 pty_tx,
@@ -252,10 +252,10 @@ impl App {
         );
 
         // Create FIFO and start status reader.
-        let fifo_path = crate::terminal::runtime_dir().join(format!("{id}.fifo"));
-        crate::terminal::create_fifo(&fifo_path);
+        let fifo_path = crate::tab::runtime_dir().join(format!("{id}.fifo"));
+        crate::tab::create_fifo(&fifo_path);
         let fifo_task = Task::run(
-            crate::terminal::fifo_stream(id, fifo_path),
+            crate::tab::fifo_stream(id, fifo_path),
             |msg| msg,
         );
         (id, Task::batch([tab_task, fifo_task]))

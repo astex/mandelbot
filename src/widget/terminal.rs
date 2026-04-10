@@ -21,7 +21,7 @@ use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
 use crate::config::Config;
 use crate::keys;
 use crate::links;
-use crate::terminal::{TermInstance, TerminalTab};
+use crate::tab::{TermInstance, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
@@ -182,7 +182,7 @@ impl<'a> TerminalWidget<'a> {
         }
 
         // Fall back to regex-based URL detection.
-        let logical = crate::terminal::logical_line_at(term, grid_point.line);
+        let logical = crate::tab::logical_line_at(term, grid_point.line);
         let char_off = logical.char_offset(grid_point.line, grid_point.column.0);
         let url_match = links::find_url_at(&logical.text, char_off)?;
 

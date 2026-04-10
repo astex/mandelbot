@@ -4,7 +4,7 @@ mod keys;
 mod links;
 mod mcp;
 mod pty;
-mod terminal;
+mod tab;
 mod theme;
 mod worktree;
 mod ui;
