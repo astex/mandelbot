@@ -48,7 +48,7 @@ pub enum DisplayEntry {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    TerminalOutput(usize, Vec<u8>),
+    TabOutput(usize, usize),
     ShellExited(usize, Option<u32>),
     PtyInput(Vec<u8>),
     Scroll(i32),
@@ -192,19 +192,25 @@ impl App {
             AgentRank::Project => &self.config.models.project,
             AgentRank::Task => &self.config.models.task,
         };
-        let (tab, pty_task) = TerminalTab::spawn(
-            id, rows, cols, is_claude, rank, project_dir, parent_id,
-            depth, project_id,
-            &self.config.shell, &self.config.workflow, &self.config.worktree_location,
-            model, &self.parent_socket_path, prompt, branch,
+
+        let mut tab = TerminalTab::new(
+            id, rows, cols, is_claude, rank,
+            project_dir.clone(), parent_id, depth, project_id,
         );
+
+        // Create event channel: main thread → tab thread.
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let pty_tx = event_tx.clone();
+        tab.set_event_tx(event_tx);
+
         self.tabs.push(tab);
+
         // Initialize colors and window size for OSC query responses.
         if let Some(tab) = self.tabs.last() {
             tab.set_colors(
                 self.terminal_theme.fg,
                 self.terminal_theme.bg,
-                self.terminal_theme.fg, // cursor color falls back to fg
+                self.terminal_theme.fg,
             );
             let cw = self.config.char_width();
             let ch = self.config.char_height();
@@ -215,12 +221,44 @@ impl App {
                 cell_height: ch as u16,
             });
         }
+
+        let params = crate::terminal::TabSpawnParams {
+            id,
+            rows,
+            cols,
+            is_claude,
+            rank,
+            project_dir,
+            shell: self.config.shell.clone(),
+            workflow: self.config.workflow.clone(),
+            worktree_location: self.config.worktree_location.clone(),
+            model: model.clone(),
+            parent_socket: self.parent_socket_path.clone(),
+            prompt,
+            branch,
+            control_prefix: self.config.control_prefix.to_string(),
+        };
+
+        let tab = self.tabs.last().unwrap();
+        let tab_task = Task::run(
+            crate::terminal::tab_stream(
+                params,
+                event_rx,
+                pty_tx,
+                tab.term_arc(),
+                tab.listener(),
+            ),
+            |msg| msg,
+        );
+
+        // Create FIFO and start status reader.
         let fifo_path = crate::terminal::runtime_dir().join(format!("{id}.fifo"));
+        crate::terminal::create_fifo(&fifo_path);
         let fifo_task = Task::run(
             crate::terminal::fifo_stream(id, fifo_path),
             |msg| msg,
         );
-        (id, Task::batch([pty_task, fifo_task]))
+        (id, Task::batch([tab_task, fifo_task]))
     }
 
     fn active_rank(&self) -> Option<AgentRank> {
@@ -336,13 +374,6 @@ impl App {
             return Task::none();
         };
 
-        // Clean up git worktree if this tab created one.
-        if let Some(wt) = self.tabs[idx].worktree_path.take() {
-            if let Some(dir) = self.tabs[idx].project_dir.as_deref() {
-                crate::worktree::remove(dir, &wt);
-            }
-        }
-
         let closing_parent_id = self.tabs[idx].parent_id;
         let closing_depth = self.tabs[idx].depth;
 
@@ -422,10 +453,10 @@ impl App {
                 }
                 Task::none()
             }
-            Message::TerminalOutput(tab_id, bytes) => {
+            Message::TabOutput(tab_id, bg_tasks) => {
                 let mut tasks: Vec<Task<Message>> = Vec::new();
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                    tab.feed(&bytes);
+                    tab.background_tasks = bg_tasks;
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
                             tab.title = Some(title);
@@ -468,19 +499,10 @@ impl App {
                 Task::batch(tasks)
             }
             Message::ShellExited(tab_id, exit_code) => match exit_code {
-                Some(0) | None => {
-                    // TODO: None means child.wait() failed, which
-                    // shouldn't happen since we own the Child. Log
-                    // this once we have proper error monitoring.
-                    self.close_tab(tab_id)
-                }
-                Some(code) => {
+                Some(0) | None => self.close_tab(tab_id),
+                Some(_code) => {
+                    // Exit hint is written by the tab thread.
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                        let hint = format!(
-                            "\r\n[process exited with code {}; {} + w to close tab]\r\n",
-                            code, self.config.control_prefix,
-                        );
-                        tab.feed(hint.as_bytes());
                         tab.status = AgentStatus::Error;
                     }
                     Task::none()

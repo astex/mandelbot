@@ -21,7 +21,7 @@ use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
 use crate::config::Config;
 use crate::keys;
 use crate::links;
-use crate::terminal::TerminalTab;
+use crate::terminal::{TermInstance, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
@@ -138,13 +138,22 @@ impl<'a> TerminalWidget<'a> {
         )
     }
 
-    fn track_geometry(&self, bounds: &Rectangle) -> Option<TrackGeometry> {
-        let grid = self.tab.grid();
-        TrackGeometry::new(bounds.height, grid.screen_lines(), self.tab.history_size())
+    fn track_geometry(
+        &self,
+        term: &TermInstance,
+        bounds: &Rectangle,
+    ) -> Option<TrackGeometry> {
+        let grid = term.grid();
+        TrackGeometry::new(bounds.height, grid.screen_lines(), grid.history_size())
     }
 
-    fn pixel_to_grid(&self, bounds: &Rectangle, pos: Point) -> (GridPoint, Side) {
-        let grid = self.tab.grid();
+    fn pixel_to_grid(
+        &self,
+        term: &TermInstance,
+        bounds: &Rectangle,
+        pos: Point,
+    ) -> (GridPoint, Side) {
+        let grid = term.grid();
         let col_f = (pos.x - bounds.x) / self.char_width();
         let row_f = (pos.y - bounds.y) / self.char_height();
 
@@ -159,16 +168,21 @@ impl<'a> TerminalWidget<'a> {
         (GridPoint::new(line, Column(col)), side)
     }
 
-    fn detect_link(&self, bounds: &Rectangle, pos: Point) -> Option<Interaction> {
-        let (grid_point, _side) = self.pixel_to_grid(bounds, pos);
+    fn detect_link(
+        &self,
+        term: &TermInstance,
+        bounds: &Rectangle,
+        pos: Point,
+    ) -> Option<Interaction> {
+        let (grid_point, _side) = self.pixel_to_grid(term, bounds, pos);
 
         // Try OSC8 hyperlink first — the cell itself carries the URL.
-        if let Some(link) = self.detect_osc8_link(grid_point) {
+        if let Some(link) = self.detect_osc8_link(term, grid_point) {
             return Some(link);
         }
 
         // Fall back to regex-based URL detection.
-        let logical = self.tab.logical_line_at(grid_point.line);
+        let logical = crate::terminal::logical_line_at(term, grid_point.line);
         let char_off = logical.char_offset(grid_point.line, grid_point.column.0);
         let url_match = links::find_url_at(&logical.text, char_off)?;
 
@@ -193,8 +207,12 @@ impl<'a> TerminalWidget<'a> {
 
     /// Detect an OSC8 hyperlink at the given grid position and find its full
     /// extent on the same row.
-    fn detect_osc8_link(&self, point: GridPoint) -> Option<Interaction> {
-        let grid = self.tab.grid();
+    fn detect_osc8_link(
+        &self,
+        term: &TermInstance,
+        point: GridPoint,
+    ) -> Option<Interaction> {
+        let grid = term.grid();
         let link = grid[point.line][point.column].hyperlink()?;
         let url = link.uri().to_string();
         let cols = grid.columns();
@@ -221,9 +239,13 @@ impl<'a> TerminalWidget<'a> {
         Some(Interaction::HoveringLink { url, cells })
     }
 
-    fn thumb_rect(&self, bounds: &Rectangle) -> Option<Rectangle> {
-        let track = self.track_geometry(bounds)?;
-        let thumb_y = track.thumb_y(bounds.y, self.tab.grid().display_offset());
+    fn thumb_rect(
+        &self,
+        term: &TermInstance,
+        bounds: &Rectangle,
+    ) -> Option<Rectangle> {
+        let track = self.track_geometry(term, bounds)?;
+        let thumb_y = track.thumb_y(bounds.y, term.grid().display_offset());
         let track_x = bounds.x + bounds.width - SCROLLBAR_WIDTH;
 
         Some(Rectangle::new(
@@ -290,13 +312,18 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             return;
         }
 
-        let grid = self.tab.grid();
+        let term = self.tab.lock_term();
+        let grid = term.grid();
         let display_offset = grid.display_offset();
         let cursor_point = grid.cursor.point;
         let blink_state = tree.state.downcast_ref::<TerminalState>();
-        let show_cursor = self.tab.mode().contains(TermMode::SHOW_CURSOR)
-            && (!self.tab.cursor_blinking() || blink_state.cursor_blink_visible);
-        let selection_range = self.tab.selection_range();
+        let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR)
+            && (!term.cursor_style().blinking
+                || blink_state.cursor_blink_visible);
+        let selection_range = term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&term));
 
         use std::sync::OnceLock;
         static FONT_NAME: OnceLock<String> = OnceLock::new();
@@ -439,7 +466,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }
         }
 
-        if let Some(thumb) = self.thumb_rect(&bounds) {
+        if let Some(thumb) = self.thumb_rect(&term, &bounds) {
             let scrollbar_active = matches!(state.interaction, Interaction::Scrollbar { .. });
             let alpha = if scrollbar_active || state.scrollbar_hovered { 0.7 } else { 0.4 };
 
@@ -522,14 +549,37 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 
                     // Scrollbar takes priority.
                     let scrollbar = self.scrollbar_rect(&bounds);
-                    if scrollbar.contains(pos) && self.tab.history_size() > 0 {
-                        let mut drag_start_offset = self.tab.grid().display_offset();
-
-                        if let (Some(thumb), Some(track)) = (self.thumb_rect(&bounds), self.track_geometry(&bounds)) {
-                            if !thumb.contains(pos) {
-                                drag_start_offset = track.offset_from_y(pos.y, bounds.y);
-                                shell.publish(Message::ScrollTo(drag_start_offset));
+                    let scrollbar_hit = {
+                        let term = self.tab.lock_term();
+                        let grid = term.grid();
+                        if scrollbar.contains(pos)
+                            && grid.history_size() > 0
+                        {
+                            let mut offset = grid.display_offset();
+                            let mut jumped = false;
+                            if let (Some(thumb), Some(track)) = (
+                                self.thumb_rect(&term, &bounds),
+                                self.track_geometry(&term, &bounds),
+                            ) {
+                                if !thumb.contains(pos) {
+                                    offset = track.offset_from_y(
+                                        pos.y, bounds.y,
+                                    );
+                                    jumped = true;
+                                }
                             }
+                            Some((offset, jumped))
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some((drag_start_offset, jumped)) =
+                        scrollbar_hit
+                    {
+                        if jumped {
+                            shell.publish(Message::ScrollTo(
+                                drag_start_offset,
+                            ));
                         }
 
                         state.interaction = Interaction::Scrollbar {
@@ -542,7 +592,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 
                     // Text selection in terminal content area.
                     if bounds.contains(pos) {
-                        let (grid_point, side) = self.pixel_to_grid(&bounds, pos);
+                        let term = self.tab.lock_term();
+                        let (grid_point, side) =
+                            self.pixel_to_grid(&term, &bounds, pos);
 
                         // Detect multi-click.
                         let now = Instant::now();
@@ -588,8 +640,11 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     && bounds.contains(*position)
                 {
                     let had_link = matches!(state.interaction, Interaction::HoveringLink { .. });
-                    state.interaction = self.detect_link(&bounds, *position)
+                    let term = self.tab.lock_term();
+                    state.interaction = self
+                        .detect_link(&term, &bounds, *position)
                         .unwrap_or(Interaction::Idle);
+                    drop(term);
                     let has_link = matches!(state.interaction, Interaction::HoveringLink { .. });
                     if had_link || has_link {
                         shell.request_redraw();
@@ -598,7 +653,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 
                 match &state.interaction {
                     Interaction::Scrollbar { drag_start_y, drag_start_offset } => {
-                        if let Some(track) = self.track_geometry(&bounds) {
+                        let term = self.tab.lock_term();
+                        if let Some(track) = self.track_geometry(&term, &bounds) {
                             let target = track.offset_from_drag(
                                 *drag_start_y,
                                 *drag_start_offset,
@@ -609,7 +665,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         shell.capture_event();
                     }
                     Interaction::Selecting => {
-                        let (grid_point, side) = self.pixel_to_grid(&bounds, *position);
+                        let term = self.tab.lock_term();
+                        let (grid_point, side) =
+                            self.pixel_to_grid(&term, &bounds, *position);
                         shell.publish(Message::UpdateSelection(grid_point, side));
 
                         // Auto-scroll when dragging above or below bounds.
@@ -716,7 +774,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 if self.config.matches_control(*modifiers)
                     && key == keyboard::Key::Character("c".into())
                 {
-                    if let Some(content) = self.tab.selection_to_string() {
+                    let term = self.tab.lock_term();
+                    if let Some(content) = term.selection_to_string() {
                         _clipboard.write(iced::advanced::clipboard::Kind::Standard, content);
                     }
                     shell.capture_event();

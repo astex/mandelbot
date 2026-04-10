@@ -2,18 +2,19 @@ use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionRange};
-use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::selection::Selection;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{ClipboardType, Config, TermMode};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{self, Rgb};
-use alacritty_terminal::{Grid, Term};
-use portable_pty::{MasterPty, PtySize};
+use alacritty_terminal::Term;
+use portable_pty::PtySize;
 
 use futures::SinkExt;
 
@@ -53,7 +54,7 @@ pub struct ClipboardLoadRequest {
 }
 
 #[derive(Clone)]
-struct TermEventListener {
+pub(crate) struct TermEventListener {
     title: Arc<Mutex<Option<String>>>,
     bell: Arc<AtomicBool>,
     colors: Arc<Mutex<TermColors>>,
@@ -128,6 +129,8 @@ impl EventListener for TermEventListener {
     }
 }
 
+pub(crate) type TermInstance = Term<TermEventListener>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRank {
     Home,
@@ -158,12 +161,45 @@ impl AgentStatus {
     }
 }
 
+pub enum TabEvent {
+    PtyData(Vec<u8>),
+    PtyEof,
+    Input(Vec<u8>),
+    Resize {
+        rows: usize,
+        cols: usize,
+        pixel_width: u16,
+        pixel_height: u16,
+    },
+    Scroll(i32),
+    ScrollTo(usize),
+    SetSelection(Option<Selection>),
+    UpdateSelection(Point, Side),
+    Shutdown,
+}
+
+pub struct TabSpawnParams {
+    pub id: usize,
+    pub rows: usize,
+    pub cols: usize,
+    pub is_claude: bool,
+    pub rank: AgentRank,
+    pub project_dir: Option<PathBuf>,
+    pub shell: String,
+    pub workflow: String,
+    pub worktree_location: String,
+    pub model: String,
+    pub parent_socket: PathBuf,
+    pub prompt: Option<String>,
+    pub branch: Option<String>,
+    pub control_prefix: String,
+}
+
 pub struct TerminalTab {
     pub id: usize,
     pub is_claude: bool,
     pub rank: AgentRank,
     pub project_dir: Option<PathBuf>,
-    pub worktree_path: Option<PathBuf>,
     pub parent_id: Option<usize>,
     pub depth: usize,
     pub project_id: Option<usize>,
@@ -171,16 +207,13 @@ pub struct TerminalTab {
     pub status: AgentStatus,
     pub background_tasks: usize,
     pub pending_input: Option<String>,
-    term: Term<TermEventListener>,
+    term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
-    parser: ansi::Processor,
-    master: Option<Box<dyn MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
-    pty_cols: usize,
+    event_tx: Option<mpsc::Sender<TabEvent>>,
 }
 
 impl TerminalTab {
-    pub fn spawn(
+    pub fn new(
         id: usize,
         rows: usize,
         cols: usize,
@@ -190,147 +223,15 @@ impl TerminalTab {
         parent_id: Option<usize>,
         depth: usize,
         project_id: Option<usize>,
-        shell: &str,
-        workflow: &str,
-        worktree_location: &str,
-        model: &str,
-        parent_socket: &Path,
-        prompt: Option<String>,
-        branch: Option<String>,
-    ) -> (Self, iced::Task<Message>) {
+    ) -> Self {
         let size = TermSize::new(cols, rows);
         let listener = TermEventListener::new();
         let term = Term::new(Config::default(), &size, listener.clone());
-
-        let workflow = if workflow == "detect" {
-            let is_git = project_dir.as_ref().is_some_and(|dir| {
-                std::process::Command::new("git")
-                    .args(["rev-parse", "--is-inside-work-tree"])
-                    .current_dir(dir)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .is_ok_and(|s| s.success())
-            });
-            if is_git { "git" } else { "none" }
-        } else {
-            workflow
-        };
-
-        let config_dir = write_mcp_config();
-        let mcp_config_flag = config_dir.join("mcp-config.json").to_string_lossy().into_owned();
-        let home = std::env::var("HOME").unwrap_or_default();
-        let mandelbot_dir = PathBuf::from(&home).join(".mandelbot");
-        let system_prompt_path = write_system_prompt(&config_dir, rank);
-        let system_prompt_flag = system_prompt_path.to_string_lossy().into_owned();
-        let hooks_settings_path = write_hooks_settings(&config_dir);
-        let hooks_settings_flag = hooks_settings_path.to_string_lossy().into_owned();
-
-        let prompt_flag = prompt.unwrap_or_default();
-        let (command, args_vec, mut env, cwd);
-        let wrapped_cmd; // holds the shell -c argument for Claude tabs
-        let worktree_dir; // holds the worktree path for task agents
-        if is_claude {
-            // Spawn Claude inside a login shell so that shell profiles and
-            // direnv are evaluated before the process starts.
-            let shell_parts: Vec<&str> = shell.split_whitespace().collect();
-            command = shell_parts[0];
-
-            let mut claude_args = format!(
-                "claude --model {} --mcp-config {} --append-system-prompt-file {} --settings {}",
-                pty::shell_quote(model),
-                pty::shell_quote(&mcp_config_flag),
-                pty::shell_quote(&system_prompt_flag),
-                pty::shell_quote(&hooks_settings_flag),
-            );
-            // For task agents in git workflow, build a setup script that
-            // creates the worktree inside the PTY so the user sees git output.
-            let setup_script;
-            (setup_script, worktree_dir) = if rank == AgentRank::Task
-                && workflow == "git"
-                && let Some(dir) = project_dir.as_ref()
-            {
-                let (script, path) = worktree::setup_script(
-                    dir,
-                    worktree_location,
-                    branch.as_deref(),
-                );
-                (script, Some(path))
-            } else {
-                (String::new(), None)
-            };
-            let plugin_dir = write_plugin_dir(&config_dir, workflow);
-            claude_args.push_str(&format!(
-                " --plugin-dir {}",
-                pty::shell_quote(&plugin_dir.to_string_lossy()),
-            ));
-            claude_args.push_str(&format!(
-                " --add-dir {}",
-                pty::shell_quote(&mandelbot_dir.to_string_lossy()),
-            ));
-            if !prompt_flag.is_empty() {
-                claude_args.push_str(" -- ");
-                claude_args.push_str(&pty::shell_quote(&prompt_flag));
-            }
-
-            wrapped_cmd = if setup_script.is_empty() {
-                format!("exec {claude_args}")
-            } else {
-                format!("{setup_script} && exec {claude_args}")
-            };
-            args_vec = vec!["-l", "-i", "-c", &wrapped_cmd];
-            let fifo_path = runtime_dir().join(format!("{id}.fifo"));
-            create_fifo(&fifo_path);
-            env = HashMap::from([
-                ("MANDELBOT_TAB_ID".to_string(), id.to_string()),
-                ("MANDELBOT_PARENT_SOCKET".to_string(), parent_socket.to_string_lossy().into_owned()),
-                ("MANDELBOT_FIFO".to_string(), fifo_path.to_string_lossy().into_owned()),
-            ]);
-
-            // When a setup script is used, start in the project dir (the
-            // script handles cd into the worktree). Otherwise fall back to
-            // the worktree or project dir directly.
-            cwd = if !setup_script.is_empty() {
-                project_dir.as_deref()
-            } else {
-                worktree_dir.as_deref().or(project_dir.as_deref())
-            };
-        } else {
-            worktree_dir = None;
-            let parts: Vec<&str> = shell.split_whitespace().collect();
-            let (cmd, rest) = parts.split_first().expect("shell config must not be empty");
-            command = cmd;
-            args_vec = rest.to_vec();
-            let fifo_path = runtime_dir().join(format!("{id}.fifo"));
-            create_fifo(&fifo_path);
-            env = shell_integration_env(command);
-            env.insert(
-                "MANDELBOT_FIFO".to_string(),
-                fifo_path.to_string_lossy().into_owned(),
-            );
-            cwd = None;
-        }
-
-        let shell_config = pty::ShellConfig {
-            command,
-            args: &args_vec,
-            env,
-            cwd,
-            rows: rows as u16,
-            cols: cols as u16,
-        };
-
-        let (master, child) = pty::spawn_shell(&shell_config).expect("failed to spawn PTY");
-
-        let reader = master.try_clone_reader().expect("failed to clone reader");
-        let writer = master.take_writer().expect("failed to take writer");
-
-        let tab = Self {
+        Self {
             id,
             is_claude,
             rank,
             project_dir,
-            worktree_path: worktree_dir.clone(),
             parent_id,
             depth,
             project_id,
@@ -338,134 +239,54 @@ impl TerminalTab {
             status: AgentStatus::default(),
             background_tasks: 0,
             pending_input: None,
-            term,
+            term: Arc::new(Mutex::new(term)),
             listener,
-            parser: ansi::Processor::new(),
-            master: Some(master),
-            writer: Some(writer),
-            pty_cols: cols,
-        };
-
-        let task = iced::Task::run(pty_stream(id, reader, child), |msg| msg);
-        (tab, task)
+            event_tx: None,
+        }
     }
 
-    pub fn new_pending(id: usize, rows: usize, cols: usize, parent_id: usize) -> Self {
-        let size = TermSize::new(cols, rows);
-        let listener = TermEventListener::new();
-        let term = Term::new(Config::default(), &size, listener.clone());
-
-        Self {
+    pub fn new_pending(
+        id: usize,
+        rows: usize,
+        cols: usize,
+        parent_id: usize,
+    ) -> Self {
+        let mut tab = Self::new(
             id,
-            is_claude: true,
-            rank: AgentRank::Project,
-            project_dir: None,
-            worktree_path: None,
-            parent_id: Some(parent_id),
-            depth: 1,
-            project_id: Some(id),
-            title: None,
-            status: AgentStatus::default(),
-            background_tasks: 0,
-            pending_input: Some(String::new()),
-            term,
-            listener,
-            parser: ansi::Processor::new(),
-            master: None,
-            writer: None,
-            pty_cols: cols,
-        }
+            rows,
+            cols,
+            true,
+            AgentRank::Project,
+            None,
+            Some(parent_id),
+            1,
+            Some(id),
+        );
+        tab.pending_input = Some(String::new());
+        tab
+    }
+
+    pub fn set_event_tx(&mut self, tx: mpsc::Sender<TabEvent>) {
+        self.event_tx = Some(tx);
     }
 
     pub fn is_pending(&self) -> bool {
         self.pending_input.is_some()
     }
 
-    pub fn feed(&mut self, data: &[u8]) {
-        let was_at_bottom = self.term.grid().display_offset() == 0;
-        self.parser.advance(&mut self.term, data);
-        if was_at_bottom {
-            self.term.scroll_display(Scroll::Bottom);
-        }
-        // Flush any PTY responses generated by event callbacks (color/size queries).
-        let responses: Vec<String> =
-            self.listener.pty_responses.lock().unwrap().drain(..).collect();
-        for response in responses {
-            self.write_input(response.as_bytes());
-        }
-        if self.is_claude {
-            if let Some(count) = self.detect_prompt_shell_count() {
-                self.background_tasks = count;
-            }
-        }
+    pub(crate) fn lock_term(&self) -> std::sync::MutexGuard<'_, TermInstance> {
+        self.term.lock().unwrap()
     }
 
-    /// Extract the text content of a single grid row, right-trimmed.
-    fn row_text(&self, line: Line) -> String {
-        let grid = self.term.grid();
-        let cols = grid.columns();
-        let text: String = (0..cols).map(|col| grid[line][Column(col)].c).collect();
-        text.trim_end().to_string()
+    pub(crate) fn term_arc(&self) -> Arc<Mutex<TermInstance>> {
+        Arc::clone(&self.term)
     }
 
-    /// Detect Claude Code's prompt frame and read the background shell count.
-    ///
-    /// Claude Code doesn't fire a hook when a background task ends, and
-    /// scanning child processes with pgrep produces false positives (MCP
-    /// servers, zombies, etc.). Instead we read the "· N shells" indicator
-    /// that Claude already renders in its prompt status line.
-    ///
-    /// Returns `Some(n)` if the prompt is visible (n=0 means no shells indicator),
-    /// or `None` if the prompt isn't detected (interactive mode, etc.).
-    fn detect_prompt_shell_count(&self) -> Option<usize> {
-        let grid = self.term.grid();
-        let screen_lines = grid.screen_lines();
-        // The cursor sits on the ❯ input line. The prompt structure below
-        // the cursor (increasing Line numbers) is:
-        //   cursor:   ❯
-        //   cursor+1: ─────── (bottom border)
-        //   cursor+2: [Opus 4.6] ...
-        //   cursor+3: ⏵⏵ mode on · N shells
-        //   cursor+4: (possible blanks)
-        // And above the cursor:
-        //   cursor-1: ─────── (top border)
-        //
-        // Scan a window around the cursor: a few lines above and below.
-        let cursor_line = grid.cursor.point.line.0;
-        let top = (cursor_line - 2).max(0) as usize;
-        let bot = ((cursor_line + 6) as usize).min(screen_lines - 1);
-        let rows: Vec<String> = (top..=bot)
-            .map(|i| self.row_text(Line(i as i32)))
-            .collect();
-
-        // Find two border rows to confirm this is the prompt frame.
-        let mut first_border = None;
-        let mut second_border = None;
-        for (i, text) in rows.iter().enumerate() {
-            if is_border_row(text) {
-                if first_border.is_none() {
-                    first_border = Some(i);
-                } else {
-                    second_border = Some(i);
-                    break;
-                }
-            }
-        }
-
-        let (Some(_top_border), Some(bot_border)) = (first_border, second_border) else {
-            return None;
-        };
-
-        // Scan the rows after the bottom border for "· N shell".
-        for i in (bot_border + 1)..rows.len() {
-            if let Some(n) = parse_shell_count(&rows[i]) {
-                return Some(n);
-            }
-        }
-
-        // Prompt is present but no shells indicator → 0 background tasks.
-        Some(0)
+    pub(crate) fn listener(&self) -> TermEventListener {
+        self.listener.clone()
     }
+
+    // --- Side-effect draining (thread-safe via listener Arcs) ---
 
     /// Take the latest title set via OSC escape sequences, if any.
     pub fn take_osc_title(&self) -> Option<String> {
@@ -478,7 +299,12 @@ impl TerminalTab {
     }
 
     /// Update the theme colors used for OSC 10/11/12 color query responses.
-    pub fn set_colors(&self, fg: iced::Color, bg: iced::Color, cursor: iced::Color) {
+    pub fn set_colors(
+        &self,
+        fg: iced::Color,
+        bg: iced::Color,
+        cursor: iced::Color,
+    ) {
         *self.listener.colors.lock().unwrap() = TermColors {
             fg: color_to_rgb(fg),
             bg: color_to_rgb(bg),
@@ -501,124 +327,85 @@ impl TerminalTab {
         std::mem::take(&mut *self.listener.clipboard_loads.lock().unwrap())
     }
 
-    pub fn write_input(&mut self, bytes: &[u8]) {
-        if let Some(writer) = &mut self.writer {
-            let _ = writer.write_all(bytes);
-            let _ = writer.flush();
+    // --- Command senders (forward to tab thread via event_tx) ---
+
+    pub fn write_input(&self, bytes: &[u8]) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::Input(bytes.to_vec()));
         }
     }
 
-    pub fn scroll(&mut self, delta: i32) {
-        self.term.scroll_display(Scroll::Delta(delta));
-    }
-
-    pub fn scroll_to(&mut self, offset: usize) {
-        let current = self.term.grid().display_offset() as i32;
-        let delta = offset as i32 - current;
-        self.term.scroll_display(Scroll::Delta(delta));
-    }
-
-    pub fn resize(&mut self, rows: usize, cols: usize, pixel_width: u16, pixel_height: u16) {
-        if rows == self.term.screen_lines() && cols == self.pty_cols {
-            return;
+    pub fn scroll(&self, delta: i32) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::Scroll(delta));
         }
+    }
 
-        let size = TermSize::new(cols, rows);
-        self.term.resize(size);
-        self.pty_cols = cols;
+    pub fn scroll_to(&self, offset: usize) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::ScrollTo(offset));
+        }
+    }
 
-        if let Some(master) = &self.master {
-            let _ = master.resize(PtySize {
-                rows: rows as u16,
-                cols: cols as u16,
+    pub fn resize(
+        &self,
+        rows: usize,
+        cols: usize,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::Resize {
+                rows,
+                cols,
                 pixel_width,
                 pixel_height,
             });
+        } else {
+            // Pending tab — resize term directly.
+            self.term.lock().unwrap().resize(TermSize::new(cols, rows));
         }
     }
 
-    pub fn rows(&self) -> usize {
-        self.term.screen_lines()
+    pub fn set_selection(&self, selection: Option<Selection>) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::SetSelection(selection));
+        }
     }
 
-    pub fn grid(&self) -> &Grid<Cell> {
-        self.term.grid()
+    pub fn update_selection(&self, point: Point, side: Side) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::UpdateSelection(point, side));
+        }
+    }
+
+    // --- Read-only methods (lock term briefly) ---
+
+    pub fn rows(&self) -> usize {
+        self.term.lock().unwrap().screen_lines()
     }
 
     pub fn history_size(&self) -> usize {
-        self.term.grid().history_size()
+        self.term.lock().unwrap().grid().history_size()
     }
 
     pub fn mode(&self) -> TermMode {
-        *self.term.mode()
+        *self.term.lock().unwrap().mode()
     }
 
     pub fn cursor_blinking(&self) -> bool {
-        self.term.cursor_style().blinking
-    }
-
-    pub fn set_selection(&mut self, selection: Option<Selection>) {
-        self.term.selection = selection;
-    }
-
-    pub fn update_selection(&mut self, point: Point, side: Side) {
-        if let Some(sel) = self.term.selection.as_mut() {
-            sel.update(point, side);
-        }
-    }
-
-    pub fn selection_to_string(&self) -> Option<String> {
-        self.term.selection_to_string()
-    }
-
-    pub fn selection_range(&self) -> Option<SelectionRange> {
-        self.term.selection.as_ref()?.to_range(&self.term)
-    }
-
-    /// Extract the logical line (possibly spanning multiple wrapped rows)
-    /// that contains the given grid line. Returns the concatenated text and
-    /// metadata needed to map between character offsets and grid positions.
-    pub fn logical_line_at(&self, line: Line) -> LogicalLine {
-        let grid = self.term.grid();
-        let cols = grid.columns();
-        let topmost = Line(-(grid.history_size() as i32));
-        let bottommost = Line(grid.screen_lines() as i32 - 1);
-
-        // Walk backwards to find the first row of this logical line.
-        // A row wraps into the next if its last cell has WRAPLINE set.
-        let mut start = line;
-        loop {
-            let prev = Line(start.0 + 1);
-            if prev > bottommost {
-                break;
-            }
-            if grid[prev][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
-                start = prev;
-            } else {
-                break;
-            }
-        }
-
-        // Walk forward collecting text until we find a row without WRAPLINE.
-        let mut text = String::new();
-        let mut current = start;
-        loop {
-            for col in 0..cols {
-                text.push(grid[current][Column(col)].c);
-            }
-            if current <= topmost {
-                break;
-            }
-            if grid[current][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
-                current = Line(current.0 - 1);
-            } else {
-                break;
-            }
-        }
-
-        LogicalLine { text, start_line: start, cols }
+        self.term.lock().unwrap().cursor_style().blinking
     }
 }
+
+impl Drop for TerminalTab {
+    fn drop(&mut self) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(TabEvent::Shutdown);
+        }
+    }
+}
+
 
 pub struct LogicalLine {
     pub text: String,
@@ -640,6 +427,93 @@ impl LogicalLine {
         (Line(self.start_line.0 - row_offset as i32), col)
     }
 }
+
+/// Extract the logical line containing the given grid line.
+pub fn logical_line_at(term: &TermInstance, line: Line) -> LogicalLine {
+    let grid = term.grid();
+    let cols = grid.columns();
+    let topmost = Line(-(grid.history_size() as i32));
+    let bottommost = Line(grid.screen_lines() as i32 - 1);
+
+    // Walk backwards to find the first row of this logical line.
+    let mut start = line;
+    loop {
+        let prev = Line(start.0 + 1);
+        if prev > bottommost {
+            break;
+        }
+        if grid[prev][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+            start = prev;
+        } else {
+            break;
+        }
+    }
+
+    // Walk forward collecting text until we find a row without WRAPLINE.
+    let mut text = String::new();
+    let mut current = start;
+    loop {
+        for col in 0..cols {
+            text.push(grid[current][Column(col)].c);
+        }
+        if current <= topmost {
+            break;
+        }
+        if grid[current][Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+            current = Line(current.0 - 1);
+        } else {
+            break;
+        }
+    }
+
+    LogicalLine { text, start_line: start, cols }
+}
+
+/// Extract the text content of a single grid row, right-trimmed.
+fn row_text(term: &TermInstance, line: Line) -> String {
+    let grid = term.grid();
+    let cols = grid.columns();
+    let text: String = (0..cols).map(|col| grid[line][Column(col)].c).collect();
+    text.trim_end().to_string()
+}
+
+/// Detect Claude Code's prompt frame and read the background shell count.
+fn detect_prompt_shell_count(term: &TermInstance) -> Option<usize> {
+    let grid = term.grid();
+    let screen_lines = grid.screen_lines();
+    let cursor_line = grid.cursor.point.line.0;
+    let top = (cursor_line - 2).max(0) as usize;
+    let bot = ((cursor_line + 6) as usize).min(screen_lines - 1);
+    let rows: Vec<String> = (top..=bot)
+        .map(|i| row_text(term, Line(i as i32)))
+        .collect();
+
+    let mut first_border = None;
+    let mut second_border = None;
+    for (i, text) in rows.iter().enumerate() {
+        if is_border_row(text) {
+            if first_border.is_none() {
+                first_border = Some(i);
+            } else {
+                second_border = Some(i);
+                break;
+            }
+        }
+    }
+
+    let (Some(_top_border), Some(bot_border)) = (first_border, second_border) else {
+        return None;
+    };
+
+    for i in (bot_border + 1)..rows.len() {
+        if let Some(n) = parse_shell_count(&rows[i]) {
+            return Some(n);
+        }
+    }
+
+    Some(0)
+}
+
 
 /// Convert an iced `Color` (0.0–1.0 floats) to alacritty's `Rgb`.
 fn color_to_rgb(c: iced::Color) -> Rgb {
@@ -692,7 +566,7 @@ fn current_exe_path() -> String {
         .to_owned()
 }
 
-fn create_fifo(path: &Path) {
+pub fn create_fifo(path: &Path) {
     let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
     let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
     if ret != 0 {
@@ -1012,31 +886,338 @@ pub fn fifo_stream(tab_id: usize, fifo_path: PathBuf) -> impl iced::futures::Str
     )
 }
 
-fn pty_stream(
-    tab_id: usize,
-    mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+pub fn tab_stream(
+    params: TabSpawnParams,
+    event_rx: mpsc::Receiver<TabEvent>,
+    pty_event_tx: mpsc::Sender<TabEvent>,
+    term: Arc<Mutex<TermInstance>>,
+    listener: TermEventListener,
 ) -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         32,
         move |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-            let (exit_sender, exit_receiver) = iced::futures::channel::oneshot::channel::<()>();
+            let (exit_sender, exit_receiver) =
+                iced::futures::channel::oneshot::channel::<()>();
 
             std::thread::spawn(move || {
-                let mut read_buffer = [0u8; 4096];
-                loop {
-                    match reader.read(&mut read_buffer) {
-                        Ok(0) | Err(_) => break,
-                        Ok(bytes_read) => {
-                            let bytes = read_buffer[..bytes_read].to_vec();
-                            if futures::executor::block_on(sender.send(Message::TerminalOutput(tab_id, bytes))).is_err() {
+                let id = params.id;
+                let is_claude = params.is_claude;
+                let rank = params.rank;
+                let project_dir = params.project_dir;
+                let control_prefix = params.control_prefix;
+
+                // --- Setup phase ---
+
+                let workflow = if params.workflow == "detect" {
+                    let is_git = project_dir.as_ref().is_some_and(|dir| {
+                        std::process::Command::new("git")
+                            .args(["rev-parse", "--is-inside-work-tree"])
+                            .current_dir(dir)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .is_ok_and(|s| s.success())
+                    });
+                    if is_git {
+                        "git".to_string()
+                    } else {
+                        "none".to_string()
+                    }
+                } else {
+                    params.workflow
+                };
+
+                let config_dir = write_mcp_config();
+                let mcp_config_flag = config_dir
+                    .join("mcp-config.json")
+                    .to_string_lossy()
+                    .into_owned();
+                let home = std::env::var("HOME").unwrap_or_default();
+                let mandelbot_dir = PathBuf::from(&home).join(".mandelbot");
+                let system_prompt_path = write_system_prompt(&config_dir, rank);
+                let system_prompt_flag =
+                    system_prompt_path.to_string_lossy().into_owned();
+                let hooks_settings_path = write_hooks_settings(&config_dir);
+                let hooks_settings_flag =
+                    hooks_settings_path.to_string_lossy().into_owned();
+
+                let prompt_flag = params.prompt.unwrap_or_default();
+                let command: String;
+                let args_owned: Vec<String>;
+                let mut env: HashMap<String, String>;
+                let cwd: Option<PathBuf>;
+                let worktree_dir: Option<PathBuf>;
+
+                if is_claude {
+                    let shell_parts: Vec<&str> =
+                        params.shell.split_whitespace().collect();
+                    command = shell_parts[0].to_string();
+
+                    let mut claude_args = format!(
+                        "claude --model {} --mcp-config {} \
+                         --append-system-prompt-file {} --settings {}",
+                        pty::shell_quote(&params.model),
+                        pty::shell_quote(&mcp_config_flag),
+                        pty::shell_quote(&system_prompt_flag),
+                        pty::shell_quote(&hooks_settings_flag),
+                    );
+
+                    let setup_script;
+                    (setup_script, worktree_dir) =
+                        if rank == AgentRank::Task
+                            && workflow == "git"
+                            && let Some(dir) = project_dir.as_ref()
+                        {
+                            let (script, path) = worktree::setup_script(
+                                dir,
+                                &params.worktree_location,
+                                params.branch.as_deref(),
+                            );
+                            (script, Some(path))
+                        } else {
+                            (String::new(), None)
+                        };
+
+                    let plugin_dir = write_plugin_dir(&config_dir, &workflow);
+                    claude_args.push_str(&format!(
+                        " --plugin-dir {}",
+                        pty::shell_quote(&plugin_dir.to_string_lossy()),
+                    ));
+                    claude_args.push_str(&format!(
+                        " --add-dir {}",
+                        pty::shell_quote(&mandelbot_dir.to_string_lossy()),
+                    ));
+                    if !prompt_flag.is_empty() {
+                        claude_args.push_str(" -- ");
+                        claude_args.push_str(&pty::shell_quote(&prompt_flag));
+                    }
+
+                    let wrapped_cmd = if setup_script.is_empty() {
+                        format!("exec {claude_args}")
+                    } else {
+                        format!("{setup_script} && exec {claude_args}")
+                    };
+
+                    let fifo_path = runtime_dir().join(format!("{id}.fifo"));
+                    env = HashMap::from([
+                        ("MANDELBOT_TAB_ID".to_string(), id.to_string()),
+                        (
+                            "MANDELBOT_PARENT_SOCKET".to_string(),
+                            params
+                                .parent_socket
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
+                        (
+                            "MANDELBOT_FIFO".to_string(),
+                            fifo_path.to_string_lossy().into_owned(),
+                        ),
+                    ]);
+
+                    cwd = if !setup_script.is_empty() {
+                        project_dir.clone()
+                    } else {
+                        worktree_dir.clone().or(project_dir.clone())
+                    };
+
+                    args_owned = vec![
+                        "-l".to_string(),
+                        "-i".to_string(),
+                        "-c".to_string(),
+                        wrapped_cmd,
+                    ];
+                } else {
+                    worktree_dir = None;
+                    let parts: Vec<&str> =
+                        params.shell.split_whitespace().collect();
+                    let (cmd, rest) = parts
+                        .split_first()
+                        .expect("shell config must not be empty");
+                    command = cmd.to_string();
+                    args_owned =
+                        rest.iter().map(|s| s.to_string()).collect();
+                    let fifo_path = runtime_dir().join(format!("{id}.fifo"));
+                    env = shell_integration_env(&command);
+                    env.insert(
+                        "MANDELBOT_FIFO".to_string(),
+                        fifo_path.to_string_lossy().into_owned(),
+                    );
+                    cwd = None;
+                }
+
+                let args_refs: Vec<&str> =
+                    args_owned.iter().map(|s| s.as_str()).collect();
+                let shell_config = pty::ShellConfig {
+                    command: &command,
+                    args: &args_refs,
+                    env,
+                    cwd: cwd.as_deref(),
+                    rows: params.rows as u16,
+                    cols: params.cols as u16,
+                };
+
+                let (master, mut child) = pty::spawn_shell(&shell_config)
+                    .expect("failed to spawn PTY");
+                let reader = master
+                    .try_clone_reader()
+                    .expect("failed to clone reader");
+                let mut writer =
+                    master.take_writer().expect("failed to take writer");
+
+                // --- Spawn PTY reader thread ---
+                std::thread::spawn(move || {
+                    let mut reader = reader;
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match reader.read(&mut buf) {
+                            Ok(0) | Err(_) => {
+                                let _ =
+                                    pty_event_tx.send(TabEvent::PtyEof);
                                 break;
+                            }
+                            Ok(n) => {
+                                let _ = pty_event_tx.send(
+                                    TabEvent::PtyData(
+                                        buf[..n].to_vec(),
+                                    ),
+                                );
                             }
                         }
                     }
+                });
+
+                // --- Main event loop ---
+                let mut parser =
+                    ansi::Processor::<ansi::StdSyncHandler>::new();
+                let mut pty_cols = params.cols;
+                let mut pty_alive = true;
+                let mut bg_tasks: usize = 0;
+
+                loop {
+                    match event_rx.recv() {
+                        Ok(TabEvent::PtyData(bytes)) => {
+                            let mut t = term.lock().unwrap();
+                            let was_at_bottom =
+                                t.grid().display_offset() == 0;
+                            parser.advance(&mut *t, &bytes);
+                            if was_at_bottom {
+                                t.scroll_display(Scroll::Bottom);
+                            }
+                            let responses: Vec<String> = listener
+                                .pty_responses
+                                .lock()
+                                .unwrap()
+                                .drain(..)
+                                .collect();
+                            drop(t);
+                            for response in responses {
+                                let _ =
+                                    writer.write_all(response.as_bytes());
+                                let _ = writer.flush();
+                            }
+                            if is_claude {
+                                let t = term.lock().unwrap();
+                                if let Some(count) =
+                                    detect_prompt_shell_count(&t)
+                                {
+                                    bg_tasks = count;
+                                }
+                            }
+                            let _ = futures::executor::block_on(
+                                sender.send(Message::TabOutput(
+                                    id, bg_tasks,
+                                )),
+                            );
+                        }
+                        Ok(TabEvent::Input(bytes)) => {
+                            if pty_alive {
+                                let _ = writer.write_all(&bytes);
+                                let _ = writer.flush();
+                            }
+                        }
+                        Ok(TabEvent::Resize {
+                            rows,
+                            cols,
+                            pixel_width,
+                            pixel_height,
+                        }) => {
+                            let mut t = term.lock().unwrap();
+                            if rows != t.screen_lines()
+                                || cols != pty_cols
+                            {
+                                t.resize(TermSize::new(cols, rows));
+                                pty_cols = cols;
+                                drop(t);
+                                if pty_alive {
+                                    let _ = master.resize(PtySize {
+                                        rows: rows as u16,
+                                        cols: cols as u16,
+                                        pixel_width,
+                                        pixel_height,
+                                    });
+                                }
+                            }
+                        }
+                        Ok(TabEvent::Scroll(delta)) => {
+                            term.lock()
+                                .unwrap()
+                                .scroll_display(Scroll::Delta(delta));
+                        }
+                        Ok(TabEvent::ScrollTo(offset)) => {
+                            let mut t = term.lock().unwrap();
+                            let current =
+                                t.grid().display_offset() as i32;
+                            t.scroll_display(Scroll::Delta(
+                                offset as i32 - current,
+                            ));
+                        }
+                        Ok(TabEvent::SetSelection(sel)) => {
+                            term.lock().unwrap().selection = sel;
+                        }
+                        Ok(TabEvent::UpdateSelection(pt, side)) => {
+                            let mut t = term.lock().unwrap();
+                            if let Some(sel) = t.selection.as_mut() {
+                                sel.update(pt, side);
+                            }
+                        }
+                        Ok(TabEvent::PtyEof) => {
+                            pty_alive = false;
+                            let exit_code = child
+                                .wait()
+                                .ok()
+                                .map(|s| s.exit_code());
+                            if let Some(code) = exit_code {
+                                if code != 0 {
+                                    let hint = format!(
+                                        "\r\n[process exited with \
+                                         code {}; {} + w to close \
+                                         tab]\r\n",
+                                        code, control_prefix,
+                                    );
+                                    let mut t = term.lock().unwrap();
+                                    parser.advance(
+                                        &mut *t,
+                                        hint.as_bytes(),
+                                    );
+                                }
+                            }
+                            let _ = futures::executor::block_on(
+                                sender.send(Message::ShellExited(
+                                    id, exit_code,
+                                )),
+                            );
+                        }
+                        Ok(TabEvent::Shutdown) | Err(_) => {
+                            if let Some(wt) = &worktree_dir {
+                                if let Some(dir) = &project_dir {
+                                    worktree::remove(dir, wt);
+                                }
+                            }
+                            break;
+                        }
+                    }
                 }
-                let exit_code = child.wait().ok().map(|status| status.exit_code());
-                let _ = futures::executor::block_on(sender.send(Message::ShellExited(tab_id, exit_code)));
+
                 let _ = exit_sender.send(());
             });
 
