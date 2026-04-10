@@ -1,149 +1,32 @@
+mod events;
+mod grid;
 mod stream;
 
 pub mod config;
 
 pub use config::{create_fifo, runtime_dir};
+pub use events::{ClipboardLoadRequest, ClipboardStoreRequest};
+pub(crate) use events::TermInstance;
+pub use grid::logical_line_at;
 pub use stream::{fifo_stream, tab_stream};
 
+pub(crate) use events::TermEventListener;
+pub(crate) use grid::detect_prompt_shell_count;
+
+use events::{color_to_rgb, new_term, TermColors};
+
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
+use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::selection::Selection;
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{ClipboardType, Config, TermMode};
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::vte::ansi::Rgb;
-use alacritty_terminal::Term;
+use alacritty_terminal::term::TermMode;
 
-/// Theme colors converted to alacritty's Rgb for responding to color
-/// queries.
-#[derive(Clone, Copy)]
-struct TermColors {
-    fg: Rgb,
-    bg: Rgb,
-    cursor: Rgb,
-}
-
-impl Default for TermColors {
-    fn default() -> Self {
-        Self {
-            fg: Rgb { r: 0x83, g: 0x94, b: 0x96 },
-            bg: Rgb { r: 0x00, g: 0x2b, b: 0x36 },
-            cursor: Rgb { r: 0x83, g: 0x94, b: 0x96 },
-        }
-    }
-}
-
-/// A clipboard store request captured from the terminal.
-pub struct ClipboardStoreRequest {
-    pub clipboard_type: ClipboardType,
-    pub text: String,
-}
-
-/// A clipboard load request captured from the terminal.
-/// The `formatter` converts clipboard text into the escape sequence
-/// to write back.
-pub struct ClipboardLoadRequest {
-    pub clipboard_type: ClipboardType,
-    pub formatter:
-        Arc<dyn Fn(&str) -> String + Sync + Send + 'static>,
-}
-
-#[derive(Clone)]
-pub(crate) struct TermEventListener {
-    title: Arc<Mutex<Option<String>>>,
-    bell: Arc<AtomicBool>,
-    colors: Arc<Mutex<TermColors>>,
-    window_size: Arc<Mutex<WindowSize>>,
-    /// Responses to write back to the PTY, drained after each feed.
-    pub(crate) pty_responses: Arc<Mutex<Vec<String>>>,
-    clipboard_stores: Arc<Mutex<Vec<ClipboardStoreRequest>>>,
-    clipboard_loads: Arc<Mutex<Vec<ClipboardLoadRequest>>>,
-}
-
-impl TermEventListener {
-    fn new() -> Self {
-        Self {
-            title: Arc::new(Mutex::new(None)),
-            bell: Arc::new(AtomicBool::new(false)),
-            colors: Arc::new(Mutex::new(TermColors::default())),
-            window_size: Arc::new(Mutex::new(WindowSize {
-                num_lines: 24,
-                num_cols: 80,
-                cell_width: 0,
-                cell_height: 0,
-            })),
-            pty_responses: Arc::new(Mutex::new(Vec::new())),
-            clipboard_stores: Arc::new(Mutex::new(Vec::new())),
-            clipboard_loads: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-}
-
-impl EventListener for TermEventListener {
-    fn send_event(&self, event: Event) {
-        match event {
-            Event::Title(t) => {
-                *self.title.lock().unwrap() = Some(t);
-            }
-            Event::ResetTitle => {
-                *self.title.lock().unwrap() = None;
-            }
-            Event::Bell => {
-                self.bell.store(true, Ordering::Relaxed);
-            }
-            Event::ColorRequest(index, callback) => {
-                let colors = *self.colors.lock().unwrap();
-                let rgb = match index {
-                    // OSC 10 = foreground, 11 = background,
-                    // 12 = cursor.
-                    11 => colors.bg,
-                    12 => colors.cursor,
-                    _ => colors.fg,
-                };
-                let response = callback(rgb);
-                self.pty_responses
-                    .lock()
-                    .unwrap()
-                    .push(response);
-            }
-            Event::TextAreaSizeRequest(callback) => {
-                let size = *self.window_size.lock().unwrap();
-                let response = callback(size);
-                self.pty_responses
-                    .lock()
-                    .unwrap()
-                    .push(response);
-            }
-            Event::ClipboardStore(clipboard_type, text) => {
-                self.clipboard_stores
-                    .lock()
-                    .unwrap()
-                    .push(ClipboardStoreRequest {
-                        clipboard_type,
-                        text,
-                    });
-            }
-            Event::ClipboardLoad(clipboard_type, formatter) => {
-                self.clipboard_loads
-                    .lock()
-                    .unwrap()
-                    .push(ClipboardLoadRequest {
-                        clipboard_type,
-                        formatter,
-                    });
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(crate) type TermInstance = Term<TermEventListener>;
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRank {
@@ -238,13 +121,7 @@ impl TerminalTab {
         depth: usize,
         project_id: Option<usize>,
     ) -> Self {
-        let size = TermSize::new(cols, rows);
-        let listener = TermEventListener::new();
-        let term = Term::new(
-            Config::default(),
-            &size,
-            listener.clone(),
-        );
+        let (term, listener) = new_term(cols, rows);
         Self {
             id,
             is_claude,
@@ -458,171 +335,5 @@ impl Drop for TerminalTab {
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(TabEvent::Shutdown);
         }
-    }
-}
-
-pub struct LogicalLine {
-    pub text: String,
-    pub start_line: Line,
-    pub cols: usize,
-}
-
-impl LogicalLine {
-    /// Convert a grid point to a character offset in the logical
-    /// line text.
-    pub fn char_offset(
-        &self,
-        line: Line,
-        col: usize,
-    ) -> usize {
-        let row_offset = (self.start_line.0 - line.0) as usize;
-        row_offset * self.cols + col
-    }
-
-    /// Convert a character offset back to a grid (line, col) pair.
-    pub fn grid_position(
-        &self,
-        char_offset: usize,
-    ) -> (Line, usize) {
-        let row_offset = char_offset / self.cols;
-        let col = char_offset % self.cols;
-        (
-            Line(self.start_line.0 - row_offset as i32),
-            col,
-        )
-    }
-}
-
-/// Extract the logical line containing the given grid line.
-pub fn logical_line_at(
-    term: &TermInstance,
-    line: Line,
-) -> LogicalLine {
-    let grid = term.grid();
-    let cols = grid.columns();
-    let topmost = Line(-(grid.history_size() as i32));
-    let bottommost = Line(grid.screen_lines() as i32 - 1);
-
-    // Walk backwards to find the first row of this logical line.
-    let mut start = line;
-    loop {
-        let prev = Line(start.0 + 1);
-        if prev > bottommost {
-            break;
-        }
-        if grid[prev][Column(cols - 1)]
-            .flags
-            .contains(Flags::WRAPLINE)
-        {
-            start = prev;
-        } else {
-            break;
-        }
-    }
-
-    // Walk forward collecting text until we find a row without
-    // WRAPLINE.
-    let mut text = String::new();
-    let mut current = start;
-    loop {
-        for col in 0..cols {
-            text.push(grid[current][Column(col)].c);
-        }
-        if current <= topmost {
-            break;
-        }
-        if grid[current][Column(cols - 1)]
-            .flags
-            .contains(Flags::WRAPLINE)
-        {
-            current = Line(current.0 - 1);
-        } else {
-            break;
-        }
-    }
-
-    LogicalLine { text, start_line: start, cols }
-}
-
-/// Extract the text content of a single grid row, right-trimmed.
-fn row_text(term: &TermInstance, line: Line) -> String {
-    let grid = term.grid();
-    let cols = grid.columns();
-    let text: String =
-        (0..cols).map(|col| grid[line][Column(col)].c).collect();
-    text.trim_end().to_string()
-}
-
-/// Detect Claude Code's prompt frame and read the background shell
-/// count.
-fn detect_prompt_shell_count(
-    term: &TermInstance,
-) -> Option<usize> {
-    let grid = term.grid();
-    let screen_lines = grid.screen_lines();
-    let cursor_line = grid.cursor.point.line.0;
-    let top = (cursor_line - 2).max(0) as usize;
-    let bot =
-        ((cursor_line + 6) as usize).min(screen_lines - 1);
-    let rows: Vec<String> = (top..=bot)
-        .map(|i| row_text(term, Line(i as i32)))
-        .collect();
-
-    let mut first_border = None;
-    let mut second_border = None;
-    for (i, text) in rows.iter().enumerate() {
-        if is_border_row(text) {
-            if first_border.is_none() {
-                first_border = Some(i);
-            } else {
-                second_border = Some(i);
-                break;
-            }
-        }
-    }
-
-    let (Some(_top_border), Some(bot_border)) =
-        (first_border, second_border)
-    else {
-        return None;
-    };
-
-    for i in (bot_border + 1)..rows.len() {
-        if let Some(n) = parse_shell_count(&rows[i]) {
-            return Some(n);
-        }
-    }
-
-    Some(0)
-}
-
-/// Convert an iced `Color` (0.0–1.0 floats) to alacritty's `Rgb`.
-fn color_to_rgb(c: iced::Color) -> Rgb {
-    Rgb {
-        r: (c.r * 255.0).round() as u8,
-        g: (c.g * 255.0).round() as u8,
-        b: (c.b * 255.0).round() as u8,
-    }
-}
-
-/// Check if a row looks like a Claude Code prompt border (10+ '─'
-/// characters).
-fn is_border_row(text: &str) -> bool {
-    text.len() >= 10 && text.chars().take(10).all(|c| c == '─')
-}
-
-/// Parse "· N shell(s)" from a line, returning N if found.
-fn parse_shell_count(text: &str) -> Option<usize> {
-    // The middle dot is U+00B7.
-    let idx = text.find("· ")?;
-    let after = &text[idx + "· ".len()..];
-    let num_str: String =
-        after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let n: usize = num_str.parse().ok()?;
-    if after[num_str.len()..].trim_start().starts_with("shell")
-    {
-        Some(n)
-    } else {
-        None
     }
 }
