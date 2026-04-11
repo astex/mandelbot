@@ -50,7 +50,7 @@ Copy this into the spike child's assignment and prompt — it is the entire poin
 - Skipping tests entirely.
 - Leaving `TODO` / `FIXME` comments.
 - Hacking around edge cases (assume happy path, skip retries).
-- Mocking or stubbing external dependencies.
+- Mocking or stubbing dependencies that are not on the critical path.
 - Ignoring error paths — panic, log-and-continue, whatever's fastest.
 - Copy-pasting instead of refactoring.
 
