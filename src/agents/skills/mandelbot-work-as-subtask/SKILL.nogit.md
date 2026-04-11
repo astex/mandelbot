@@ -47,7 +47,7 @@ Edit your `*.coord.md`:
 Run the watcher against your own file in the background (see `_shared/coord.md` for the exact invocation). When it wakes, re-read your file and scan for any new `[DIRECTIVE]` entries:
 
 - **`[DIRECTIVE] approved`** — append `- [...] approved, starting implementation`, set `**State:** in_progress`, proceed to step 5.
-- **Redline directive** — address it (may involve rewriting your subplan and updating `**Plan:**`), append a log entry describing what you changed, stay in `awaiting_review`, re-arm the watcher.
+- **Revision request directive** — address it (may involve rewriting your subplan and updating `**Plan:**`), append a log entry describing what you changed, stay in `awaiting_review`, re-arm the watcher.
 - **No new directive** — your own edits may have woken the watcher. Re-arm it and wait.
 
 Do not start implementation until you see an approval directive.
