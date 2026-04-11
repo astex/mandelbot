@@ -27,7 +27,7 @@ mkdir -p ~/.mandelbot/coordination/<project>.coord
 ```
 
 Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
-- Project name, absolute plan path, `**State:** in_progress`. (Omit the `**Workflow:**` line — this project has no git-based PR workflow.)
+- Project name, absolute plan path. (Omit the `**Workflow:**` line — this project has no git-based PR workflow.)
 - **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake, and call out file-ownership boundaries explicitly since there is no VCS isolation.
 - **Children**: one bullet per child, all `pending`.
 
@@ -64,4 +64,4 @@ When every child is `done` or `failed`:
 
 1. Handle failures (retry, reassign, or escalate to the user).
 2. Review the work each child produced in place — there are no branches to merge.
-3. Append a final entry to `index.md` noting completion, and set its `**State:**` to `done` (or `failed` if any child failed unrecoverably).
+3. Append a final entry to `index.md` noting completion.

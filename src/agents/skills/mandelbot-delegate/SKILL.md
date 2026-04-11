@@ -30,7 +30,7 @@ mkdir -p ~/.mandelbot/coordination/<project>.coord
 ```
 
 Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
-- Project name, absolute plan path, workflow, `**State:** in_progress`.
+- Project name, absolute plan path, workflow.
 - **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake. Add anything flow-specific.
 - **Children**: one bullet per child, all `pending`.
 
@@ -66,6 +66,6 @@ Then re-arm that child's watcher in the background. (See `_shared/coord.md` for 
 When every child is `done` or `failed`:
 
 1. Handle failures (retry, reassign, or escalate to the user).
-2. Append a final entry to `index.md` noting completion, and set its `**State:**` to `done` (or `failed` if any child failed unrecoverably).
+2. Append a final entry to `index.md` noting completion.
 3. **`multi-pr`**: you're done — children own their PRs. Report the list to the user and stop.
 4. **`single-pr`**: create an integration branch off the base, `git merge --no-ff <child-branch>` for each child, resolve conflicts, push, and open one PR covering all the work.
