@@ -48,7 +48,7 @@ Follow the `mandelbot-delegate` workflow. In `index.md`'s "How we work" section,
 
 - The exit condition and the `max_generations` cap.
 - A note that this is a multi-generation iterate run — children should expect their assignments to reference ideas harvested from prior generations.
-- The **merge strategy** for between generations. This is project-specific — some projects require human review before merging, others let the parent review and merge directly. Whatever the rule, state it here so the parent knows what to do in step 4½. See [Integrate generation N](#4½-integrate-generation-n).
+- The **merge strategy** for between generations. This is project-specific — some projects require human review before merging, others let the parent review and merge directly. Whatever the rule, state it here so children know what "done" means. If human review is required, tell children to open a PR and wait for it to merge before reporting `done`. See [Integrate generation N](#4½-integrate-generation-n).
 - The idea convention, written for children. Use something like:
 
 > While working, you are encouraged (not required) to drop **ideas** into your log using the `idea:` prefix — analogous to `blocked:`. An idea is anything you noticed that would make the code, the tests, the tooling, or a future generation better: follow-ups, alternative approaches, refactors you wish existed, tooling gaps, smells.
