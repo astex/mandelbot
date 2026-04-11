@@ -6,71 +6,59 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab]
 
 # Delegate to Subtasks
 
-Use this skill to break parallelizable work into subtasks, spawn child agents for each, and monitor their progress via a shared coordination file.
+Use this skill to break parallelizable work into subtasks, spawn a child agent for each, review the subplan they draft, and monitor their progress — all via a shared `*.coord/` coordination directory.
 
-**Warning:** This project is not using git-based isolation. All child agents share the same working directory. Design task boundaries carefully to avoid file conflicts — ideally each task touches a disjoint set of files.
+**Warning:** This project is not using git-based isolation. All child agents share the same working directory. Design task boundaries carefully to avoid file conflicts — ideally each task touches a disjoint set of files, and each child's `## Assignment` spells out which files it owns.
+
+You are the **parent**. Read `<plugin-dir>/skills/_shared/coord.md` for the protocol: directory layout, ownership rules, state vocabulary, log format, `[DIRECTIVE]` marker, plan-review and block/unblock handshakes, watcher usage, and sub-delegation. This SKILL file only covers the parent-specific workflow; everything else lives in the shared doc.
 
 ## Workflow
 
 ### 1. Plan your work
 
-Use Claude's normal planning mechanism to create a plan. Note the plan file path (typically `~/.claude/plans/<name>.md`).
+Use your normal planning mechanism. Note the plan path (typically `~/.claude/plans/<name>.md`).
 
 When splitting tasks, pay special attention to file ownership — two agents editing the same file will cause conflicts. Prefer task boundaries that map to separate files or directories.
 
-### 2. Create the coordination status file
+### 2. Create the coordination directory
 
 ```bash
-mkdir -p ~/.mandelbot/coordination
+mkdir -p ~/.mandelbot/coordination/<project>.coord
 ```
 
-Create a status file at `~/.mandelbot/coordination/<descriptive-name>.md` using the template at `<plugin-dir>/skills/delegate/template.md` as a starting point. Fill in the title, plan path, and one row per task.
+Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
+- Project name, absolute plan path.
+- **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake, and call out file-ownership boundaries explicitly since there is no VCS isolation.
+- **Children**: one bullet per child.
 
-- **Labels** should be short identifiers (a few words), just enough to match back to the plan step. Don't duplicate the full plan text.
-- All tasks start as `pending`.
+Then for each child, write `<child>.coord.md` from `child.template.md`:
+- `**Parent:** ../index.md`
+- `**Plan:** <to be filled in by child after planning>`
+- `**State:** pending`
+- An `## Assignment` section with the child's instructions **inline**, including which files the child owns and any absolute paths it needs (governing plan, relevant files). Children only read their own `*.coord.md` and files it explicitly references, so be explicit.
+- An empty `## Log` section.
+
+Labels should be short identifiers (a few words) matching back to the plan.
 
 ### 3. Spawn child agents
 
-For each task, call the `spawn_tab` MCP tool with a prompt like:
+For each child, call `spawn_tab` with a prompt like:
 
-> Start by running `/mandelbot-work-as-subtask` to load the subtask protocol. You are working on task <N> from the coordination file at `~/.mandelbot/coordination/<name>.md`. Read the coordination file and the referenced plan file to understand your assignment. Update your row in the coordination file as you work.
+> Start by running `/mandelbot-work-as-subtask` to load the subtask protocol. You are a child agent in the "<project>" project. Your coordination file is at `<absolute path to <child>.coord.md>` — read it first, then read the governing plan it references at `<absolute path to plan>` in full.
+>
+> Your job: <one-line summary>. Draft your subplan directly into `~/.claude/plans/` (do **not** enter plan mode — use the Write tool), update your coord file's Plan field and log, set state to `awaiting_review`, and wait on the watcher for a `[DIRECTIVE] approved` entry before implementing.
 
-Include:
-- Instruction to run `/mandelbot-work-as-subtask` **first**
-- The **absolute path** to the coordination file
-- The **task number** they are responsible for
-- Instruction to read both the coordination file and the plan
+Include: instruction to run `/mandelbot-work-as-subtask` first, absolute path to the child's own `*.coord.md`, absolute path to the governing plan, an explicit mention of the plan-review handshake, and an explicit "do not enter plan mode" note — plan mode's only exit is `ExitPlanMode`, which blocks on user approval and would stall the parent-review handshake.
 
-### 4. Monitor progress
+### 4. Watch, review, direct
 
-Use the watcher script to wait for changes to the coordination file. The script blocks until the file changes, prints the updated contents, then exits. **Run it in the background** (using `run_in_background`) so you are free to do other work while waiting. You will be notified when the file changes.
+For each child, run a separate watcher against that child's `*.coord.md` in the background (one watcher per child — see `_shared/coord.md` for the invocation). When a watcher wakes, inspect the child's file and act:
 
-```bash
-# Run with run_in_background: true
-bash <plugin-dir>/skills/delegate/watch.sh ~/.mandelbot/coordination/<name>.md
-```
+- **Child in `awaiting_review`** — read the subplan it links to, review against the governing plan and your intent, append `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <revision request>` directly into that child's `*.coord.md` log.
+- **New `blocked: <question>` entry** — append `- [...] [DIRECTIVE] <answer>` in that child's file. File-ownership conflicts in this workflow often surface as blocks; resolve them by directing which child owns the contested file.
 
-When the watcher completes and you are notified, check its output:
-- If any tasks are still `pending`, `in_progress`, or `blocked` — **run the watcher again** (in the background) to wait for the next update.
-- If all tasks are `done` or `failed` — proceed to step 5.
+Then re-arm that child's watcher in the background. (See `_shared/coord.md` for the append-only rules for writing into child files.)
 
-**Important:**
-- The watcher script is your **only** monitoring mechanism. Do **not** also read the coordination file manually — that duplicates work and wastes context.
-- **Be patient.** Child agents take time to spin up. After spawning, the first watcher run may take a while before any agent updates. This is normal.
+### 5. Finalize
 
-### 5. Review and summarize
-
-When all tasks show `done` or `failed`:
-1. Review the work each child agent produced
-2. Fill in the **Summary** section of the coordination file
-3. Handle any failed tasks (retry, reassign, or escalate)
-
-## Status Values
-
-| Status | Meaning |
-|--------|---------|
-| `pending` | Not yet started |
-| `in_progress` | Agent is actively working |
-| `done` | Work complete |
-| `blocked` | Waiting on another task or external input |
-| `failed` | Could not complete; see notes |
+When every child is `done` or `failed`, handle failures (retry, reassign, or escalate to the user) and wrap up however is appropriate for this project.

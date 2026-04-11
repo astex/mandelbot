@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Watch a coordination file for a change, print its contents, then exit.
-# Usage: bash watch.sh <path-to-coordination-file>
+# Watch a file for a change, print its contents, then exit.
+# Usage: bash watch.sh <file>
 #
 # Tracks the last-seen hash in a sidecar file (<file>.lasthash) so that
 # changes between runs are detected immediately on startup.
