@@ -64,4 +64,3 @@ When every child is `done` or `failed`:
 
 1. Handle failures (retry, reassign, or escalate to the user).
 2. Review the work each child produced in place — there are no branches to merge.
-3. Append a final entry to `index.md` noting completion.

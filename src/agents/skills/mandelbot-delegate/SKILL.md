@@ -66,6 +66,5 @@ Then re-arm that child's watcher in the background. (See `_shared/coord.md` for 
 When every child is `done` or `failed`:
 
 1. Handle failures (retry, reassign, or escalate to the user).
-2. Append a final entry to `index.md` noting completion.
-3. **`multi-pr`**: you're done — children own their PRs. Report the list to the user and stop.
-4. **`single-pr`**: create an integration branch off the base, `git merge --no-ff <child-branch>` for each child, resolve conflicts, push, and open one PR covering all the work.
+2. **`multi-pr`**: you're done — children own their PRs. Report the list to the user and stop.
+3. **`single-pr`**: create an integration branch off the base, `git merge --no-ff <child-branch>` for each child, resolve conflicts, push, and open one PR covering all the work.
