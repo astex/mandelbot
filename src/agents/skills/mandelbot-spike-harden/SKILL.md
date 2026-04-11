@@ -42,7 +42,7 @@ The spike child's branch is your starting point for hardening work. Children you
 
 Copy this into the spike child's assignment and prompt — it is the entire point of the spike role.
 
-**Goal:** Prove the approach end-to-end. A working, runnable result beats a clean one. Ship fastest-path.
+**Goal:** Prove the approach end-to-end. A working, runnable result beats a clean one. Take the fastest path to "it works on my machine." Do not merge, deploy, publish, or otherwise ship your changes — the spike is a prototype, not a release.
 
 **Permitted shortcuts:**
 
