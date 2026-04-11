@@ -148,12 +148,16 @@ const HOME_PROMPT: &str =
 const PROJECT_PROMPT: &str =
     include_str!("../agents/PROJECT_PROMPT.md");
 
+const SKILL_SHARED_COORD: &str =
+    include_str!("../agents/skills/_shared/coord.md");
+const SKILL_SHARED_INDEX_TEMPLATE: &str =
+    include_str!("../agents/skills/_shared/index.template.md");
+const SKILL_SHARED_CHILD_TEMPLATE: &str =
+    include_str!("../agents/skills/_shared/child.template.md");
 const SKILL_DELEGATE: &str =
     include_str!("../agents/skills/mandelbot-delegate/SKILL.md");
 const SKILL_DELEGATE_NOGIT: &str =
     include_str!("../agents/skills/mandelbot-delegate/SKILL.nogit.md");
-const SKILL_DELEGATE_TEMPLATE: &str =
-    include_str!("../agents/skills/mandelbot-delegate/template.md");
 const SKILL_DELEGATE_WATCH: &str =
     include_str!("../agents/skills/mandelbot-delegate/watch.sh");
 const SKILL_WORK_AS_SUBTASK: &str =
@@ -300,6 +304,10 @@ pub(super) fn write_plugin_dir(
 ) -> PathBuf {
     let plugin_dir = dir.join("plugins");
 
+    let shared_dir = plugin_dir.join("skills").join("_shared");
+    std::fs::create_dir_all(&shared_dir)
+        .expect("failed to create _shared skill dir");
+
     let delegate_dir =
         plugin_dir.join("skills").join("mandelbot-delegate");
     std::fs::create_dir_all(&delegate_dir)
@@ -333,14 +341,22 @@ pub(super) fn write_plugin_dir(
     } else {
         SKILL_DELEGATE_NOGIT
     };
+    std::fs::write(shared_dir.join("coord.md"), SKILL_SHARED_COORD)
+        .expect("failed to write shared coord protocol");
+    std::fs::write(
+        shared_dir.join("index.template.md"),
+        SKILL_SHARED_INDEX_TEMPLATE,
+    )
+    .expect("failed to write shared index template");
+    std::fs::write(
+        shared_dir.join("child.template.md"),
+        SKILL_SHARED_CHILD_TEMPLATE,
+    )
+    .expect("failed to write shared child template");
+
     let skill_path = delegate_dir.join("SKILL.md");
     std::fs::write(&skill_path, delegate_content)
         .expect("failed to write delegate skill");
-    std::fs::write(
-        delegate_dir.join("template.md"),
-        SKILL_DELEGATE_TEMPLATE,
-    )
-    .expect("failed to write delegate template");
     std::fs::write(
         delegate_dir.join("watch.sh"),
         SKILL_DELEGATE_WATCH,
