@@ -1253,6 +1253,36 @@ impl App {
             Theme::Light
         }
     }
+
+    /// Spike-only: emit a snapshot of tab tree state as a JSON value.
+    pub fn headless_snapshot(&self, label: Option<String>) -> serde_json::Value {
+        let tabs: Vec<serde_json::Value> = self
+            .tabs
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id,
+                    "title": t.title,
+                    "rank": format!("{:?}", t.rank),
+                    "status": format!("{:?}", t.status),
+                    "depth": t.depth,
+                    "parent_id": t.parent_id,
+                    "is_claude": t.is_claude,
+                    "is_pending": t.is_pending(),
+                })
+            })
+            .collect();
+
+        let folded: Vec<usize> = self.folded_tabs.iter().copied().collect();
+
+        serde_json::json!({
+            "label": label,
+            "active_tab_id": self.active_tab_id,
+            "prev_active_tab_id": self.prev_active_tab_id,
+            "tabs": tabs,
+            "folded": folded,
+        })
+    }
 }
 
 impl Drop for App {
