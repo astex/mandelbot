@@ -296,6 +296,103 @@ impl App {
         order
     }
 
+    /// Returns a mapping `tab_id -> number` (0..=9) for which visible tabs
+    /// get digit shortcuts. The 10 slots follow the active tab's neighborhood:
+    /// Home + first shell + ancestors + active tab's siblings, then filled
+    /// outward by rank order. Numbers are always assigned in display order
+    /// top-to-bottom.
+    fn tab_number_assignments(&self) -> HashMap<usize, usize> {
+        let display_order = self.tab_display_order();
+        let visible: Vec<usize> = display_order.iter()
+            .filter_map(|e| match e {
+                DisplayEntry::Tab(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let is_visible = |id: usize| visible.contains(&id);
+
+        let mut eligible: HashSet<usize> = HashSet::new();
+
+        // 1. Home tab.
+        if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
+            if is_visible(home.id) {
+                eligible.insert(home.id);
+            }
+        }
+
+        // 2. First shell tab in display order.
+        if eligible.len() < 10 {
+            if let Some(shell_id) = visible.iter().copied().find(|&id| {
+                self.tabs.iter().find(|t| t.id == id).map(|t| !t.is_claude).unwrap_or(false)
+            }) {
+                eligible.insert(shell_id);
+            }
+        }
+
+        // 3. Ancestors of the active tab, walking the parent chain.
+        if let Some(active_tab) = self.tabs.iter().find(|t| t.id == self.active_tab_id) {
+            let mut cur = active_tab.parent_id;
+            while let Some(pid) = cur {
+                if eligible.len() >= 10 { break; }
+                if is_visible(pid) {
+                    eligible.insert(pid);
+                }
+                cur = self.tabs.iter().find(|t| t.id == pid).and_then(|t| t.parent_id);
+            }
+
+            // 4. The active tab itself, then its siblings.
+            if eligible.len() < 10 && is_visible(active_tab.id) {
+                eligible.insert(active_tab.id);
+            }
+            let active_parent = active_tab.parent_id;
+            let active_is_claude = active_tab.is_claude;
+            for t in self.tabs.iter() {
+                if eligible.len() >= 10 { break; }
+                if t.id != active_tab.id
+                    && t.parent_id == active_parent
+                    && t.is_claude == active_is_claude
+                    && is_visible(t.id)
+                {
+                    eligible.insert(t.id);
+                }
+            }
+        }
+
+        // 5. Everything else in rank order: Home, Project, Task, then shells.
+        //    Within each rank, visit in display order.
+        for rank in [AgentRank::Home, AgentRank::Project, AgentRank::Task] {
+            if eligible.len() >= 10 { break; }
+            for &id in &visible {
+                if eligible.len() >= 10 { break; }
+                if let Some(t) = self.tabs.iter().find(|t| t.id == id) {
+                    if t.is_claude && t.rank == rank {
+                        eligible.insert(id);
+                    }
+                }
+            }
+        }
+        for &id in &visible {
+            if eligible.len() >= 10 { break; }
+            if let Some(t) = self.tabs.iter().find(|t| t.id == id) {
+                if !t.is_claude {
+                    eligible.insert(id);
+                }
+            }
+        }
+
+        // Assign numbers in display order.
+        let mut assignments = HashMap::new();
+        let mut next = 0_usize;
+        for &id in &visible {
+            if next > 9 { break; }
+            if eligible.contains(&id) {
+                assignments.insert(id, next);
+                next += 1;
+            }
+        }
+        assignments
+    }
+
     fn collect_children(&self, parent_id: usize, order: &mut Vec<DisplayEntry>) {
         for tab in self.tabs.iter().filter(|t| t.parent_id == Some(parent_id) && t.is_claude) {
             order.push(DisplayEntry::Tab(tab.id));
@@ -796,14 +893,9 @@ impl App {
                 Task::none()
             }
             Message::SelectTabByIndex(index) => {
-                let display_order = self.tab_display_order();
-                // Tab numbers skip fold entries, so find the Nth real tab.
-                let entry = display_order.iter()
-                    .filter(|e| matches!(e, DisplayEntry::Tab(_)))
-                    .nth(index)
-                    .cloned();
-                if let Some(entry) = entry {
-                    self.select_display_entry(&entry);
+                let assignments = self.tab_number_assignments();
+                if let Some((&tab_id, _)) = assignments.iter().find(|&(_, &n)| n == index) {
+                    self.focus_tab(tab_id);
                 }
                 Task::none()
             }
@@ -858,7 +950,7 @@ impl App {
         let display_order = self.tab_display_order();
 
         let active_fold = self.active_fold;
-        let tab_button = |tab: &TerminalTab, display_index: usize, active_tab_id: usize, indent: f32| {
+        let tab_button = |tab: &TerminalTab, display_number: Option<usize>, active_tab_id: usize, indent: f32| {
             let is_active = tab.id == active_tab_id && active_fold.is_none();
             let tab_id = tab.id;
 
@@ -890,10 +982,9 @@ impl App {
                 String::new()
             };
 
-            let number_text = if display_index <= 9 {
-                format!("{}", display_index)
-            } else {
-                " ".into()
+            let number_text = match display_number {
+                Some(n) => format!("{n}"),
+                None => " ".into(),
             };
 
             let label = text(label_text)
@@ -995,24 +1086,11 @@ impl App {
             }
         };
 
-        // Build a mapping from display_order index → tab number (skipping folds).
-        let mut tab_numbers: Vec<Option<usize>> = Vec::new();
-        let mut next_number = 0_usize;
-        for entry in &display_order {
-            match entry {
-                DisplayEntry::Tab(_) => {
-                    tab_numbers.push(Some(next_number));
-                    next_number += 1;
-                }
-                DisplayEntry::Fold { .. } => {
-                    tab_numbers.push(None);
-                }
-            }
-        }
+        let number_assignments = self.tab_number_assignments();
 
         // Agent tree: Home → Projects → Tasks.
         tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
-        for (i, entry) in display_order.iter().enumerate() {
+        for entry in display_order.iter() {
             match entry {
                 DisplayEntry::Tab(tab_id) => {
                     let Some(tab) = self.tabs.iter().find(|t| t.id == *tab_id) else { continue };
@@ -1023,7 +1101,7 @@ impl App {
                         tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
                     }
                     let indent = tab.depth as f32 * indent_step;
-                    let num = tab_numbers[i].unwrap_or(usize::MAX);
+                    let num = number_assignments.get(&tab.id).copied();
                     tab_col = tab_col.push(tab_button(tab, num, self.active_tab_id, indent));
                 }
                 DisplayEntry::Fold { parent_id, count, depth } => {
@@ -1034,7 +1112,7 @@ impl App {
 
         // Shell tabs (flat).
         let mut first_shell = true;
-        for (i, entry) in display_order.iter().enumerate() {
+        for entry in display_order.iter() {
             let DisplayEntry::Tab(tab_id) = entry else { continue };
             let Some(tab) = self.tabs.iter().find(|t| t.id == *tab_id) else { continue };
             if tab.is_claude { continue; }
@@ -1048,7 +1126,7 @@ impl App {
                     tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
                 }
             }
-            let num = tab_numbers[i].unwrap_or(usize::MAX);
+            let num = number_assignments.get(&tab.id).copied();
             tab_col = tab_col.push(tab_button(tab, num, self.active_tab_id, 0.0));
         }
 
