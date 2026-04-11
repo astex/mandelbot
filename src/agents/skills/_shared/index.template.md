@@ -1,7 +1,6 @@
 # <project name>
 
 **Plan:** <absolute path to ~/.claude/plans/...>
-**Workflow:** <single-pr | multi-pr>
 
 ## How we work
 

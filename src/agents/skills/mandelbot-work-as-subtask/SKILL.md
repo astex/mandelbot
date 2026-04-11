@@ -64,7 +64,7 @@ Do the work. Append log entries on state changes, not on a timer. If you get stu
 ### 6. Finish
 
 1. Push your branch.
-2. Your assignment states the workflow. If it's **`multi-pr`**, create a PR for your branch and include the URL in a log entry. If it's **`single-pr`**, do not create a PR; the parent will merge.
+2. Follow any wrap-up instructions in your assignment (e.g. whether to open a PR or leave that to the parent).
 3. Append `- [...] done` and set `**State:** done`.
 
 If you can't complete the task, append `- [...] failed: <reason>` and set `**State:** failed`.
