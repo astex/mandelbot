@@ -12,7 +12,7 @@ Read `<plugin-dir>/skills/_shared/coord.md` for the protocol: directory layout, 
 
 **Two rules to internalize before anything else:**
 
-- **You read only your own `*.coord.md`** and files it explicitly references by path. Never `../index.md`, never a sibling.
+- **You read your own `*.coord.md` and the parent's `../index.md`** (plus files explicitly referenced by path from your `*.coord.md`). Never a sibling's file.
 - **You write only to your own `*.coord.md`** (append-only log; never edit existing entries, including the parent's `[DIRECTIVE]` entries) and to the branch you own.
 
 ## Worktree and branch
@@ -29,9 +29,9 @@ All your commits go on this branch.
 
 ## Workflow
 
-### 1. Read your file and the governing plan
+### 1. Read your file, the index, and the governing plan
 
-Read your `*.coord.md`. Note the `## Assignment` section — it contains your instructions and any paths you need (typically the governing plan). Read the governing plan in full.
+Read your `*.coord.md` and the parent's `../index.md`. The index has the "How we work" section — protocol notes, conventions, and context for this batch. Then read the governing plan referenced in the index.
 
 ### 2. Draft your subplan
 

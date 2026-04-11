@@ -34,7 +34,7 @@ Rules:
 4. **The idea is the child's, not a directive.** The parent decides whether it becomes next-generation work. Children do not act on their own ideas in the current generation unless their assignment explicitly covers them.
 5. **Scoped to this generation.** Children don't cross-reference prior generations; the parent carries anything worth carrying forward.
 
-The canonical place this convention is explained to children is the [per-child framing](#per-child-framing) below.
+Children learn this convention by reading `index.md`'s "How we work" section, where the parent includes it during setup (see step 2 below).
 
 ## Flow
 
@@ -46,9 +46,15 @@ Write (or reuse) a plan file. In addition to the normal plan content, decide the
 
 Follow the `mandelbot-delegate` workflow. In `index.md`'s "How we work" section, include:
 
-- The exit condition.
-- The `max_generations` cap.
+- The exit condition and the `max_generations` cap.
 - A note that this is a multi-generation iterate run — children should expect their assignments to reference ideas harvested from prior generations.
+- The idea convention, written for children. Use something like:
+
+> While working, you are encouraged (not required) to drop **ideas** into your log using the `idea:` prefix — analogous to `blocked:`. An idea is anything you noticed that would make the code, the tests, the tooling, or a future generation better: follow-ups, alternative approaches, refactors you wish existed, tooling gaps, smells.
+>
+> Format: `- [YYYY-MM-DD HH:MM] idea: <one-line summary> — <optional brief rationale>`
+>
+> Ideas are log entries, not a separate section. They are **not** a state change — keep working. One idea per line. Do not implement your own ideas unless your assignment explicitly covers them — log them and the parent decides what gets picked up.
 
 ### 3. Spawn generation N
 
@@ -58,9 +64,9 @@ In each child's assignment, include:
 
 - The work for this generation.
 - Any ideas harvested from prior generations that this child should act on (put these in the assignment text, not as `[DIRECTIVE]` entries — directives are for mid-flight corrections to a running child).
-- The [per-child framing](#per-child-framing) block.
+- The generation number so children know where they are in the loop.
 
-Children follow the normal plan-review handshake from `_shared/coord.md`.
+Children follow the normal plan-review handshake from `_shared/coord.md`. They pick up the idea convention from `index.md`'s "How we work" section.
 
 ### 4. Wait for generation N
 
@@ -98,18 +104,6 @@ The parent picks one per run and writes it into `index.md`'s "How we work" secti
 - **External fitness signal.** Something checkable between generations: tests pass, a benchmark crosses a threshold, lints clean, a specific error gone.
 
 Always pair with the `max_generations` safety cap. Soft exit conditions without a cap are a foot-gun.
-
-## Per-child framing
-
-Include this in each child's `## Assignment` — it is the single source of truth children see for the idea convention.
-
-> While working, you are encouraged (not required) to drop **ideas** into your log using the `idea:` prefix — analogous to `blocked:`. An idea is anything you noticed that would make the code, the tests, the tooling, or a future generation of this loop better: follow-ups, alternative approaches, refactors you wish existed, tooling gaps, smells.
->
-> Format: `- [YYYY-MM-DD HH:MM] idea: <one-line summary> — <optional brief rationale>`
->
-> Rules: ideas are log entries, not a separate section. They are **not** a state change — keep working. One idea per line. Do not implement your own ideas in this generation unless your assignment explicitly covers them — log them and the parent decides what gets picked up.
->
-> You are generation **\<N\>** of this loop. Your assignment may reference ideas harvested from earlier generations; those are listed in the assignment text above.
 
 ## Failure modes
 

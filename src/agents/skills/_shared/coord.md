@@ -27,7 +27,7 @@ Templates live at `<plugin-dir>/skills/_shared/index.template.md` and `child.tem
 
 **One exception:** the parent may *append* `[DIRECTIVE]` entries into any child's log. It never edits existing entries, never touches a child's `**State:**` header, never touches sibling files.
 
-**Children read only their own `*.coord.md`** and files it explicitly references by path (typically the governing plan and code files mentioned in the assignment). Children do **not** read `../index.md` or sibling files.
+**Children read their own `*.coord.md` and the parent's `../index.md`** — plus any files explicitly referenced by path from their `*.coord.md` (typically the governing plan and code files mentioned in the assignment). Children do **not** read sibling files.
 
 ## State vocabulary
 
