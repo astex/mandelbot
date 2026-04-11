@@ -1,5 +1,6 @@
 mod animation;
 mod config;
+mod headless;
 mod keys;
 mod links;
 mod mcp;
@@ -12,6 +13,17 @@ mod widget;
 
 fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().collect();
+
+    if let Some(i) = args.iter().position(|a| a == "--headless") {
+        let scenario_path = args
+            .get(i + 1)
+            .expect("--headless requires a scenario path argument");
+        if let Err(e) = headless::run(std::path::Path::new(scenario_path)) {
+            eprintln!("headless error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     if args.contains(&"--mcp-server".to_string()) {
         let tab_id =
