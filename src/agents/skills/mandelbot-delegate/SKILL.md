@@ -32,7 +32,7 @@ mkdir -p ~/.mandelbot/coordination/<project>.coord
 Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
 - Project name, absolute plan path, workflow.
 - **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan and the plan-review handshake. Add anything flow-specific.
-- **Children**: one bullet per child, all `pending`.
+- **Children**: one bullet per child.
 
 Then for each child, write `<label>.coord.md` from `child.template.md`:
 - `**Parent:** ../index.md`

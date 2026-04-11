@@ -9,4 +9,4 @@
 
 ## Children
 
-- **<label>** (<role>) — pending — [link](./<label>.coord.md)
+- **<label>** (<role>) — [link](./<label>.coord.md)
