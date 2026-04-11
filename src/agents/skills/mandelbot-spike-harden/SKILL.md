@@ -71,7 +71,7 @@ Fixed heading. The parent reads this section to plan hardening.
 What was built: <brief description of what works end-to-end>
 
 What was skipped or hacked:
-- <file:line or area> — <what was hacked or skipped> — <what the real version should do>
+- <file:line or area> — <what was hacked or skipped>
 - ...
 ```
 
