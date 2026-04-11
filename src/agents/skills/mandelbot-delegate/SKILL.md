@@ -14,7 +14,7 @@ You are the **parent**. Read `<plugin-dir>/skills/_shared/coord.md` for the prot
 
 ### 1. Plan your work
 
-Use Claude's normal planning mechanism. Note the plan path (typically `~/.claude/plans/<name>.md`).
+Use your normal planning mechanism. Note the plan path (typically `~/.claude/plans/<name>.md`).
 
 ### 2. Choose a workflow
 

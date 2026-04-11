@@ -16,7 +16,7 @@ You are the **parent**. Read `<plugin-dir>/skills/_shared/coord.md` for the prot
 
 ### 1. Plan your work
 
-Use Claude's normal planning mechanism. Note the plan path (typically `~/.claude/plans/<name>.md`).
+Use your normal planning mechanism. Note the plan path (typically `~/.claude/plans/<name>.md`).
 
 When splitting tasks, pay special attention to file ownership — two agents editing the same file will cause conflicts. Prefer task boundaries that map to separate files or directories.
 
