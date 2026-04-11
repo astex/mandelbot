@@ -8,7 +8,7 @@ One project = one `*.coord/` directory under `~/.mandelbot/coordination/`:
 
 ```
 ~/.mandelbot/coordination/<project>.coord/
-  index.md                    # parent-owned — goal, plan link, how-we-work, children roster
+  index.md                    # parent-owned — goal, plan link, how-we-work, children list
   <label>.coord.md            # parent-created, then child-owned — plan link, state, append-only log
   <other-label>.coord.md
   <nested>.coord/             # present only if a child sub-delegated
@@ -21,7 +21,7 @@ Templates live at `<plugin-dir>/skills/_shared/index.template.md` and `child.tem
 
 ## Ownership
 
-**The parent owns `index.md`.** It writes the initial file and later updates only the Children roster to mirror child states. It does not edit anything else inside `index.md` during the run.
+**The parent owns `index.md`.** It writes the initial file with the children list and does not need to update it during the run — each child's own `*.coord.md` is the source of truth for that child's state.
 
 **Each child owns its own `<label>.coord.md`.** It writes the `**Plan:**` and `**State:**` headers and appends log entries.
 

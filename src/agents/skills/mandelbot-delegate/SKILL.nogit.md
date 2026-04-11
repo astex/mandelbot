@@ -56,8 +56,6 @@ For each child, run a separate watcher against that child's `*.coord.md` in the 
 
 - **Child in `awaiting_review`** — read the subplan it links to, review against the governing plan and your intent, append `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <revision request>` directly into that child's `*.coord.md` log.
 - **New `blocked: <question>` entry** — append `- [...] [DIRECTIVE] <answer>` in that child's file. File-ownership conflicts in this workflow often surface as blocks; resolve them by directing which child owns the contested file.
-- **State change** — update the Children roster line in `index.md` to mirror the child's current state.
-
 Then re-arm that child's watcher in the background. (See `_shared/coord.md` for the append-only rules for writing into child files.)
 
 ### 5. Finalize
