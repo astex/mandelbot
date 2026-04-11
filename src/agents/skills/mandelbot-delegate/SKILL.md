@@ -57,4 +57,4 @@ Then re-arm that child's watcher in the background. (See `_shared/coord.md` for 
 
 ### 5. Finalize
 
-When every child is `done` or `failed`, handle failures (retry, reassign, or escalate to the user) and wrap up however is appropriate for this project — merge branches, open PRs, report to the user, etc.
+When every child is `done` or `failed`, handle failures (retry, reassign, or escalate) and wrap up however is appropriate for this project — merge branches, open PRs, report results, etc.

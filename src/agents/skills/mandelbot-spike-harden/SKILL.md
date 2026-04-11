@@ -34,7 +34,7 @@ When the spike child reports `done`, read `spike.coord.md` — especially the `#
 
 - If the hardening work is parallelizable (it usually is — summary items tend to be independent), plan it and delegate via `mandelbot-delegate`.
 - If it's small enough to do directly, just do it.
-- If the spike proved the approach is wrong, escalate to the user.
+- If the spike proved the approach is wrong, escalate.
 
 The spike child's branch is your starting point for hardening work. Children you delegate to should branch off it.
 
@@ -80,5 +80,5 @@ Each entry must be specific enough that someone reading only the summary and the
 ## Failure modes
 
 - **Spike fails.** Parent decides whether to abort or course-correct via `[DIRECTIVE]`. Uses the standard block/unblock handshake from `_shared/coord.md`.
-- **Spike proves the approach is wrong.** Escalate to the user — the spike did its job by ruling the approach out cheaply.
+- **Spike proves the approach is wrong.** Escalate — the spike did its job by ruling the approach out cheaply.
 - **Summary missing or vague.** Parent appends a `[DIRECTIVE]` asking for a better summary before considering the spike done.

@@ -77,6 +77,12 @@ When a child needs input from the parent:
 
 If the protocol itself can't accommodate something the child needs, it uses the same mechanism — append a question, wait, do not silently deviate.
 
+## Escalation
+
+Escalation uses the same block/unblock handshake. When a child hits something beyond its scope — the approach is wrong, a decision is needed that it can't make, or it needs resources it doesn't have — it appends `- [...] blocked: <explanation>` and waits. The parent decides what to do: answer directly, redirect the child, or escalate further up its own chain (the parent's parent may not be the user — in a nested tree, the parent may itself be a child with its own `*.coord.md`).
+
+The child does not need to know who ultimately resolves the issue. It blocks, the parent handles it.
+
 ## The watcher
 
 A single-file watcher script lives at `<plugin-dir>/skills/_shared/watch.sh`. It blocks until the target file changes, prints its contents, then exits. **Always run it in the background** (`run_in_background: true`) so you're free to do other work while waiting.
