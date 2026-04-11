@@ -79,8 +79,8 @@ Generation N+1 children must start from code that includes generation N's change
 
 How merging happens depends on the project's merge strategy (defined in "How we work"):
 
-- **Parent reviews and merges directly.** The parent reviews gen-N children's code, merges their branches into an integration branch (or main), and gen-N+1 children branch off the merged state.
-- **Human review required.** Gen-N children open PRs. The parent waits for the PRs to be reviewed and merged before proceeding. Use the block/unblock handshake if needed — the parent can block on its own coord file or simply wait.
+- **Parent reviews and merges directly.** The parent reviews gen-N children's code, merges their branches, and gen-N+1 children branch off the merged state.
+- **Human review required.** Gen-N children open PRs and do not report `done` until their PRs are merged. The parent's normal wait loop (step 4) naturally blocks until integration is complete.
 
 Either way: do not spawn generation N+1 until generation N's code is integrated. Children working on stale code will produce conflicts and wasted work.
 
