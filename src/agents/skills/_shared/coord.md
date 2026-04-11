@@ -79,22 +79,19 @@ If the protocol itself can't accommodate something the child needs, it uses the 
 
 ## The watcher
 
-One script, two modes, lives at `<plugin-dir>/skills/mandelbot-delegate/watch.sh`. It blocks until its target changes, prints what changed, then exits. **Always run it in the background** (`run_in_background: true`) so you're free to do other work while waiting.
+A single-file watcher script lives at `<plugin-dir>/skills/_shared/watch.sh`. It blocks until the target file changes, prints its contents, then exits. **Always run it in the background** (`run_in_background: true`) so you're free to do other work while waiting.
 
-- **Child → file mode.** A child watches its own `*.coord.md`:
-  ```bash
-  bash <plugin-dir>/skills/mandelbot-delegate/watch.sh <absolute path to your *.coord.md>
-  ```
-- **Parent → directory mode.** A parent watches the whole `*.coord/` tree (recursively, so nested sub-delegation is caught):
-  ```bash
-  bash <plugin-dir>/skills/mandelbot-delegate/watch.sh ~/.mandelbot/coordination/<project>.coord
-  ```
+```bash
+bash <plugin-dir>/skills/_shared/watch.sh <absolute path to file>
+```
+
+Both parents and children use the same script — one invocation per file. A parent runs one watcher per child file (each in the background). A child runs one watcher against its own `*.coord.md`.
 
 The watcher is your **only** polling mechanism. Do not read coordination files on a timer. When the watcher wakes, act on what changed and re-arm it in the background.
 
 ## Sub-delegation
 
-If a child decides to spawn its own children, it becomes a parent in its own right: it promotes its `*.coord.md` into a sibling `*.coord/` directory at the same path, writes its own `index.md`, and follows the `mandelbot-delegate` flow one level deeper. The ancestor's directory watcher catches changes at any depth — no special handling needed.
+If a child decides to spawn its own children, it becomes a parent in its own right: it promotes its `*.coord.md` into a sibling `*.coord/` directory at the same path, writes its own `index.md`, and follows the `mandelbot-delegate` flow one level deeper.
 
 ## Legacy single-file artifacts
 
