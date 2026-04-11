@@ -56,7 +56,7 @@ Copy this into the spike child's assignment and prompt — it is the entire poin
 
 **Required deliverables:**
 
-1. A runnable end-to-end implementation on the spike child's branch.
+1. A runnable end-to-end implementation on the spike child's branch. The spike child pushes its branch before marking `done` — the branch name is the handoff artifact the parent and any subsequent children use as their starting point.
 2. A `## Summary` section in `spike.coord.md` when done — not a new file, a section within the existing coord file.
 
 **The summary is a first-class deliverable, not an afterthought.** It is the handoff to the parent for the hardening phase. If the spike child did not write a summary, it did not finish.
