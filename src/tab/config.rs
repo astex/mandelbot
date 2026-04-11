@@ -170,6 +170,8 @@ const SKILL_MANDELBOT_KEYBINDINGS: &str =
     include_str!("../agents/skills/mandelbot-keybindings/SKILL.md");
 const SKILL_MANDELBOT_FEATURES: &str =
     include_str!("../agents/skills/mandelbot-features/SKILL.md");
+const SKILL_MANDELBOT_SPIKE_HARDEN: &str =
+    include_str!("../agents/skills/mandelbot-spike-harden/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -336,6 +338,13 @@ pub(super) fn write_plugin_dir(
     std::fs::create_dir_all(&features_dir)
         .expect("failed to create mandelbot-features skill dir");
 
+    let spike_harden_dir = plugin_dir
+        .join("skills")
+        .join("mandelbot-spike-harden");
+    std::fs::create_dir_all(&spike_harden_dir).expect(
+        "failed to create mandelbot-spike-harden skill dir",
+    );
+
     let delegate_content = if workflow == "git" {
         SKILL_DELEGATE
     } else {
@@ -388,6 +397,15 @@ pub(super) fn write_plugin_dir(
     if !skill_path.exists() {
         std::fs::write(&skill_path, SKILL_MANDELBOT_FEATURES)
             .expect("failed to write mandelbot-features skill");
+    }
+
+    let skill_path = spike_harden_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        std::fs::write(
+            &skill_path,
+            SKILL_MANDELBOT_SPIKE_HARDEN,
+        )
+        .expect("failed to write mandelbot-spike-harden skill");
     }
 
     plugin_dir
