@@ -48,7 +48,6 @@ Follow the `mandelbot-delegate` workflow. In `index.md`'s "How we work" section,
 
 - The exit condition and the `max_generations` cap.
 - A note that this is a multi-generation iterate run — children should expect their assignments to reference ideas harvested from prior generations.
-- The **merge strategy** for between generations. This is project-specific — some projects require human review before merging, others let the parent review and merge directly. Whatever the rule, state it here so the parent knows what to do in step 4½. See [Integrate generation N](#4½-integrate-generation-n).
 - The idea convention, written for children. Use something like:
 
 > While working, you are encouraged (not required) to drop **ideas** into your log using the `idea:` prefix — analogous to `blocked:`. An idea is anything you noticed that would make the code, the tests, the tooling, or a future generation better: follow-ups, alternative approaches, refactors you wish existed, tooling gaps, smells.
@@ -72,17 +71,6 @@ Children follow the normal plan-review handshake from `_shared/coord.md`. They p
 ### 4. Wait for generation N
 
 Standard delegate monitoring — one watcher per child, re-arm until all are `done` or `failed`.
-
-### 4½. Integrate generation N
-
-Generation N+1 children must start from code that includes generation N's changes. Before spawning the next generation, ensure gen-N's branches are merged.
-
-How merging happens depends on the project's merge strategy (defined in "How we work"):
-
-- **Parent reviews and merges directly.** The parent reviews gen-N children's code, merges their branches into an integration branch (or main), and gen-N+1 children branch off the merged state.
-- **Human review required.** Gen-N children open PRs. The parent waits for the PRs to be reviewed and merged before proceeding. Use the block/unblock handshake if needed — the parent can block on its own coord file or simply wait.
-
-Either way: do not spawn generation N+1 until generation N's code is integrated. Children working on stale code will produce conflicts and wasted work.
 
 ### 5. Harvest ideas
 
