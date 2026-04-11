@@ -53,7 +53,7 @@ The parent uses `[DIRECTIVE]` as the leading marker when appending into a child'
 
 ```
 - [2026-04-09 12:34] [DIRECTIVE] approved, proceed
-- [2026-04-09 13:10] [DIRECTIVE] <redline or answer>
+- [2026-04-09 13:10] [DIRECTIVE] <revision request or answer>
 ```
 
 Children scan their log for new `[DIRECTIVE]` entries when their watcher wakes.
@@ -63,8 +63,8 @@ Children scan their log for new `[DIRECTIVE]` entries when their watcher wakes.
 1. Child drafts its subplan by **writing the document directly** with the `Write` tool into `~/.claude/plans/<name>.md`. **Do not use Claude's built-in plan mode** — its only exit is `ExitPlanMode`, which blocks on user approval and would stall the handshake.
 2. Child sets `**Plan:**` to the subplan path, sets `**State:** awaiting_review`, appends `- [...] plan drafted at <path>, awaiting review`.
 3. Child runs the watcher against its own file in the background and waits.
-4. Parent's directory watcher wakes, sees the child's new state, reads the linked subplan, and appends either `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <redline>` directly into the child's log.
-5. On approval: child sets `**State:** in_progress`, appends `- [...] approved, starting implementation`, proceeds. On redline: child addresses it, updates its `**Plan:**` if needed, stays in `awaiting_review`, re-arms the watcher.
+4. Parent's directory watcher wakes, sees the child's new state, reads the linked subplan, and appends either `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <revision request>` directly into the child's log.
+5. On approval: child sets `**State:** in_progress`, appends `- [...] approved, starting implementation`, proceeds. On revision request: child addresses it, updates its `**Plan:**` if needed, stays in `awaiting_review`, re-arms the watcher.
 
 ## The block/unblock handshake
 

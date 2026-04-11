@@ -57,7 +57,7 @@ Include: instruction to run `/mandelbot-work-as-subtask` first, absolute path to
 
 Run the directory watcher against your coord directory in the background. When it wakes, act on what changed:
 
-- **Child in `awaiting_review`** — read the subplan it links to, review against the governing plan and your intent, append `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <redline>` directly into that child's `*.coord.md` log.
+- **Child in `awaiting_review`** — read the subplan it links to, review against the governing plan and your intent, append `- [...] [DIRECTIVE] approved, proceed` or `- [...] [DIRECTIVE] <revision request>` directly into that child's `*.coord.md` log.
 - **New `blocked: <question>` entry** — append `- [...] [DIRECTIVE] <answer>` in that child's file.
 - **State change elsewhere** — update the Children roster line in `index.md` to mirror the child's current state.
 
