@@ -145,16 +145,32 @@ fn is_border_row(text: &str) -> bool {
     text.len() >= 10 && text.chars().take(10).all(|c| c == '─')
 }
 
-/// Parse "· N shell(s)" from a line, returning N if found.
+/// Parse a shell count from a line.  Handles both the older
+/// "· N shell(s)" format and the current "N shell(s) · …" format.
 fn parse_shell_count(text: &str) -> Option<usize> {
-    // The middle dot is U+00B7.
-    let idx = text.find("· ")?;
-    let after = &text[idx + "· ".len()..];
+    let trimmed = text.trim();
+
+    // Current format: "N shell(s) · ↓ to manage"
+    let num_str: String =
+        trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !num_str.is_empty() {
+        if let Ok(n) = num_str.parse::<usize>() {
+            if trimmed[num_str.len()..]
+                .trim_start()
+                .starts_with("shell")
+            {
+                return Some(n);
+            }
+        }
+    }
+
+    // Legacy format: "· N shell(s)"
+    let idx = trimmed.find("· ")?;
+    let after = &trimmed[idx + "· ".len()..];
     let num_str: String =
         after.chars().take_while(|c| c.is_ascii_digit()).collect();
     let n: usize = num_str.parse().ok()?;
-    if after[num_str.len()..].trim_start().starts_with("shell")
-    {
+    if after[num_str.len()..].trim_start().starts_with("shell") {
         Some(n)
     } else {
         None
