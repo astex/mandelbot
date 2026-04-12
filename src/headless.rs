@@ -45,6 +45,10 @@ pub enum Action {
     CloseTab(usize),
     SetTitle { tab_id: usize, title: String },
     SetStatus { tab_id: usize, status: String },
+    PtyInput(String),
+    Wait { seconds: f32 },
+    WaitFor { tab_id: usize, contains: String, timeout_seconds: f32 },
+    GridText { tab_id: usize, label: Option<String> },
     PendingChar(char),
     PendingSubmit,
     PendingCancel,
@@ -333,6 +337,9 @@ pub fn run(scenario_path: &Path) -> Result<(), Box<dyn Error>> {
         height: DEFAULT_WINDOW_HEIGHT,
     }));
 
+    // Drain briefly so the home tab's PTY starts up.
+    host.drain_pending(Duration::from_millis(500));
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
@@ -355,6 +362,42 @@ pub fn run(scenario_path: &Path) -> Result<(), Box<dyn Error>> {
                     }
                 })?;
                 Some(Message::SetStatus(tab_id, parsed))
+            }
+            Action::PtyInput(text) => Some(Message::PtyInput(text.into_bytes())),
+            Action::Wait { seconds } => {
+                host.drain_pending(Duration::from_secs_f32(seconds));
+                None
+            }
+            Action::WaitFor { tab_id, contains, timeout_seconds } => {
+                let found = drain_until(
+                    &mut host,
+                    Duration::from_secs_f32(timeout_seconds),
+                    |h| {
+                        h.grid_text(tab_id)
+                            .map(|t| t.contains(&contains))
+                            .unwrap_or(false)
+                    },
+                );
+                if !found {
+                    eprintln!(
+                        "action {index}: WaitFor timed out after {timeout_seconds}s waiting for {:?} in tab {tab_id}",
+                        contains
+                    );
+                }
+                None
+            }
+            Action::GridText { tab_id, label } => {
+                use std::io::Write;
+                let text = host.grid_text(tab_id).unwrap_or_default();
+                let obj = serde_json::json!({
+                    "type": "grid_text",
+                    "label": label,
+                    "tab_id": tab_id,
+                    "text": text,
+                });
+                let line = serde_json::to_string(&obj).unwrap();
+                writeln!(out, "{line}").map_err(HeadlessError::WriteSnapshot)?;
+                None
             }
             Action::PendingChar(c) => Some(Message::PendingInput(PendingKey::Char(c))),
             Action::PendingSubmit => Some(Message::PendingInput(PendingKey::Submit)),

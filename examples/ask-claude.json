@@ -1,0 +1,14 @@
+{
+  "actions": [
+    { "WaitFor": { "tab_id": 0, "contains": "trust this folder", "timeout_seconds": 30 } },
+    { "Wait": { "seconds": 1 } },
+    { "PtyInput": "\r" },
+    { "WaitFor": { "tab_id": 0, "contains": "❯", "timeout_seconds": 30 } },
+    { "Wait": { "seconds": 1 } },
+    { "PtyInput": "What is 2+2? Reply with just the number.\r" },
+    { "Wait": { "seconds": 3 } },
+    { "GridText": { "tab_id": 0, "label": "after-submit" } },
+    { "WaitFor": { "tab_id": 0, "contains": "just the number", "timeout_seconds": 60 } },
+    { "GridText": { "tab_id": 0, "label": "claude-response" } }
+  ]
+}
