@@ -944,10 +944,8 @@ impl App {
         };
 
         // Determine whether to show group separator lines.
-        let has_shells = self.tabs.iter().any(|t| !t.is_claude);
         let has_agents = self.tabs.iter().any(|t| t.is_claude);
-        let project_count = self.tabs.iter().filter(|t| t.rank == AgentRank::Project).count();
-        let show_separators = (has_agents && has_shells) || project_count > 1;
+        let show_separators = self.tabs.len() > 1;
 
         let separator = || -> Element<'_, Message> {
             let muted = Color { a: 0.25, ..fg };
