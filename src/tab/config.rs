@@ -288,16 +288,29 @@ pub(super) fn shell_integration_env(
 pub(super) fn write_system_prompt(
     dir: &Path,
     rank: AgentRank,
+    tab_id: usize,
 ) -> PathBuf {
-    let (filename, content) = match rank {
-        AgentRank::Home => ("home-prompt.md", HOME_PROMPT),
-        AgentRank::Project => {
-            ("project-prompt.md", PROJECT_PROMPT)
+    let (filename, base_content) = match rank {
+        AgentRank::Home => {
+            (format!("home-prompt-{tab_id}.md"), HOME_PROMPT)
         }
-        AgentRank::Task => ("system-prompt.md", SYSTEM_PROMPT),
+        AgentRank::Project => {
+            (format!("project-prompt-{tab_id}.md"), PROJECT_PROMPT)
+        }
+        AgentRank::Task => {
+            (format!("system-prompt-{tab_id}.md"), SYSTEM_PROMPT)
+        }
     };
     let path = dir.join(filename);
     if !path.exists() {
+        let content = format!(
+            "{base_content}\n\
+             <system-reminder>\n\
+             Your mandelbot tab ID is {tab_id}. \
+             You can close yourself or any of your child tabs \
+             using the mandelbot MCP close_tab tool.\n\
+             </system-reminder>\n"
+        );
         std::fs::write(&path, content)
             .expect("failed to write system prompt");
     }

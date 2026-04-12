@@ -66,6 +66,7 @@ pub enum Message {
     NextIdle,
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>),
+    McpCloseTab(usize, usize),
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
@@ -886,6 +887,82 @@ impl App {
                 }
             }
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
+            Message::McpCloseTab(requesting_tab_id, target_tab_id) => {
+                // Verify the requester is the target itself or an ancestor.
+                let authorized = if requesting_tab_id == target_tab_id {
+                    true
+                } else {
+                    let mut current = Some(target_tab_id);
+                    let mut found = false;
+                    while let Some(id) = current {
+                        let tab = self.tabs.iter().find(|t| t.id == id);
+                        match tab {
+                            Some(t) => {
+                                if t.parent_id == Some(requesting_tab_id) {
+                                    found = true;
+                                    break;
+                                }
+                                current = t.parent_id;
+                            }
+                            None => break,
+                        }
+                    }
+                    found
+                };
+
+                if !authorized {
+                    self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                        "error": "not authorized to close that tab"
+                    }));
+                    return Task::none();
+                }
+
+                // Collect the target and all its descendants.
+                let mut to_close = vec![target_tab_id];
+                let mut i = 0;
+                while i < to_close.len() {
+                    let parent = to_close[i];
+                    for tab in &self.tabs {
+                        if tab.parent_id == Some(parent) && !to_close.contains(&tab.id) {
+                            to_close.push(tab.id);
+                        }
+                    }
+                    i += 1;
+                }
+
+                for &id in &to_close {
+                    self.folded_tabs.remove(&id);
+                }
+                if to_close.contains(&self.active_tab_id) {
+                    // Find the nearest surviving tab.
+                    let old_idx = self.tabs.iter()
+                        .position(|t| t.id == self.active_tab_id)
+                        .unwrap_or(0);
+                    let new_id = self.tabs.iter()
+                        .enumerate()
+                        .filter(|(_, t)| !to_close.contains(&t.id))
+                        .min_by_key(|(idx, _)| (*idx as isize - old_idx as isize).unsigned_abs())
+                        .map(|(_, t)| t.id);
+                    if let Some(id) = new_id {
+                        self.focus_tab(id);
+                    }
+                }
+                if self.prev_active_tab_id.is_some_and(|id| to_close.contains(&id)) {
+                    self.prev_active_tab_id = None;
+                }
+
+                let count = to_close.len();
+                self.tabs.retain(|t| !to_close.contains(&t.id));
+
+                if self.tabs.is_empty() {
+                    return iced::exit();
+                }
+
+                self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                    "message": format!("Closed {count} tab(s)")
+                }));
+                Task::none()
+            }
             Message::SelectTab(tab_id) => {
                 if self.tabs.iter().any(|t| t.id == tab_id) {
                     self.focus_tab(tab_id);
@@ -1262,6 +1339,18 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt, branch))
+                                }
+                                "close_tab" => {
+                                    let target_tab_id = msg
+                                        .get("target_tab_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize)
+                                        .unwrap_or(0);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpCloseTab(tab_id, target_tab_id))
                                 }
                                 "set_status" => {
                                     msg.get("status")

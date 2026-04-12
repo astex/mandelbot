@@ -134,7 +134,7 @@ pub fn tab_stream(
                     PathBuf::from(&home).join(".mandelbot");
                 let system_prompt_path =
                     config::write_system_prompt(
-                        &config_dir, rank,
+                        &config_dir, rank, id,
                     );
                 let system_prompt_flag = system_prompt_path
                     .to_string_lossy()
