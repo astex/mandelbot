@@ -1,0 +1,10 @@
+{
+  "actions": [
+    { "SetTitle": { "tab_id": 0, "title": "demo-home" } },
+    "NewTab",
+    "NewTab",
+    { "Snapshot": { "label": "after-two-shells" } },
+    { "CloseTab": 2 },
+    { "Snapshot": { "label": "after-close" } }
+  ]
+}

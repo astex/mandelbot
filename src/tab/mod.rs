@@ -9,6 +9,7 @@ pub use events::{ClipboardLoadRequest, ClipboardStoreRequest};
 pub(crate) use events::TermInstance;
 pub use grid::logical_line_at;
 pub use stream::{fifo_stream, tab_stream};
+pub(crate) use stream::{run_fifo_thread, run_tab_thread};
 
 pub(crate) use events::TermEventListener;
 pub(crate) use grid::detect_prompt_shell_count;
@@ -28,14 +29,16 @@ use alacritty_terminal::term::TermMode;
 
 use std::sync::atomic::Ordering;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum AgentRank {
     Home,
     Project,
     Task,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub enum AgentStatus {
     #[default]
     Idle,

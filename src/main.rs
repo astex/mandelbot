@@ -1,5 +1,8 @@
 mod animation;
 mod config;
+mod effect;
+mod headless;
+mod host;
 mod keys;
 mod links;
 mod mcp;
@@ -12,6 +15,19 @@ mod widget;
 
 fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().collect();
+
+    if let Some(i) = args.iter().position(|a| a == "--headless") {
+        let Some(scenario_path) = args.get(i + 1) else {
+            eprintln!("error: --headless requires a scenario path argument");
+            eprintln!("usage: mandelbot --headless <scenario.json>");
+            std::process::exit(2);
+        };
+        if let Err(e) = headless::run(std::path::Path::new(scenario_path)) {
+            eprintln!("headless error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     if args.contains(&"--mcp-server".to_string()) {
         let tab_id =
@@ -44,10 +60,10 @@ fn main() -> iced::Result {
     )
     .ok();
 
-    let mut app = iced::application(ui::App::boot, ui::App::update, ui::App::view)
+    let mut app = iced::application(host::IcedHost::boot, host::IcedHost::update, host::IcedHost::view)
         .title("Mandelbot")
-        .subscription(ui::App::subscription)
-        .theme(ui::App::theme)
+        .subscription(host::IcedHost::subscription)
+        .theme(host::IcedHost::theme)
         .window(iced::window::Settings {
             size: window_size,
             icon,
