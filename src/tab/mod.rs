@@ -9,6 +9,7 @@ pub use events::{ClipboardLoadRequest, ClipboardStoreRequest};
 pub(crate) use events::TermInstance;
 pub use grid::logical_line_at;
 pub use stream::{fifo_stream, tab_stream};
+pub(crate) use stream::{run_fifo_thread, run_tab_thread};
 
 pub(crate) use events::TermEventListener;
 pub(crate) use grid::detect_prompt_shell_count;

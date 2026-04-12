@@ -1,6 +1,6 @@
 ---
 name: test-mandelbot-headless
-description: Drive mandelbot from a scripted JSON scenario and inspect app state without opening a window. Use this to exercise App::update state transitions (tab tree, focus, status, titles) from an agent that has no display.
+description: Drive mandelbot from a scripted JSON scenario and inspect app state without opening a window. Use this to exercise App::update state transitions (tab tree, focus, status, titles) and real PTY behavior (shell output, grid content) from an agent that has no display.
 ---
 
 # Test mandelbot headlessly
@@ -10,32 +10,29 @@ real `App` state machine, runs scripted messages through `App::update`, and
 prints newline-delimited JSON snapshots of the tab tree to stdout. No Iced
 window is opened, and no parent-socket listener is bound.
 
-This lets agents working on mandelbot itself exercise state transitions
-without needing a display or a real PTY.
+Effects returned by `App::update` are fully executed: spawned tabs get real
+PTYs, real shell output flows into the alacritty terminal grid, and clipboard
+operations are captured in-memory. This lets agents exercise both state
+transitions and real shell behavior without a display.
 
 ## When to use
 
 - Verifying that a change to `App::update` still produces the expected tab
   tree (creation, selection, close, fold, status, titles).
-- Reproducing bugs that live in the state machine rather than the renderer or
-  the PTY.
-- Writing regression tests. `tests/headless.rs` is an example — it runs the
-  binary against `examples/headless-demo.json` and asserts on the resulting
-  snapshot JSON.
+- Testing real shell behavior: spawn a tab, inject keystrokes, read back grid
+  content.
+- Reproducing bugs that live in the state machine or the PTY pipeline.
+- Writing regression tests. `tests/headless.rs` runs the binary against
+  scenario files; `src/headless.rs` has a `#[cfg(test)]` module with API-level
+  tests using `HeadlessHost` directly.
 
-## When NOT to use
+## Limitations
 
-Every `iced::Task<Message>` returned by `App::update` is **dropped**. Anything
-that lives inside those tasks is silent:
-
-- PTY spawning / shell output
-- Clipboard I/O
-- MCP parent-socket traffic (the listener is never even bound)
-- Bell flashes
-- Window subscription (beyond the initial auto-injected resize)
-
-Do not use headless mode to test any of those. If you write a scenario that
-relies on side effects from a `Task`, it will pass for the wrong reason.
+- No parent-socket listener is bound, so MCP-related messages
+  (`McpSpawnAgent`, `RespondToTab`) are handled but the responses go nowhere.
+- Bell effects (`TriggerBell`) are no-ops — no animation in headless mode.
+- `Effect::Exit` is a no-op — the headless host doesn't terminate the process.
+- No rendering pipeline — `view()` is never called.
 
 ## Running the demo
 
@@ -58,15 +55,66 @@ Pipe through `jq` for readability:
 cargo run --quiet -- --headless examples/headless-demo.json | jq .
 ```
 
-## Running the integration test
+## Running the tests
 
 ```sh
-cargo test --test headless
+cargo test --test headless       # integration tests (binary subprocess)
+cargo test headless::tests       # unit test with real PTY
+cargo test                       # all tests
 ```
 
-This runs `tests/headless.rs` which spawns the binary itself, parses stdout,
-and asserts on the expected snapshot fields. Use it as a template for new
-behavior tests.
+The `headless::tests::real_pty_grid_content` test spawns a real shell tab,
+types `echo mandelbot-headless-marker`, waits for the output to appear in the
+terminal grid, and asserts on it.
+
+## HeadlessHost API (for Rust tests)
+
+For tests that need to interact with real PTYs and inspect grid content, use
+the `HeadlessHost` API directly instead of going through the binary:
+
+```rust
+use crate::headless::{HeadlessHost, drain_until};
+use crate::ui::Message;
+use iced::Size;
+use std::time::Duration;
+
+let mut host = HeadlessHost::new();
+
+// Boot: inject window resize to spawn home tab.
+host.step(Message::WindowResized(Size { width: 1600.0, height: 900.0 }));
+
+// Spawn a shell tab.
+host.step(Message::NewTab);
+
+// Wait for the shell to boot and produce output.
+drain_until(&mut host, Duration::from_secs(5), |h| {
+    h.grid_text(1).map(|t| !t.is_empty()).unwrap_or(false)
+});
+
+// Type a command.
+host.step(Message::PtyInput(b"echo hello\r".to_vec()));
+
+// Wait for the output to appear in the grid.
+drain_until(&mut host, Duration::from_secs(5), |h| {
+    h.grid_text(1).map(|t| t.contains("hello")).unwrap_or(false)
+});
+
+// Read grid content.
+let grid = host.grid_text(1).unwrap();
+assert!(grid.contains("hello"));
+
+// Clipboard captures are also available.
+assert!(host.clipboard.is_none()); // no OSC 52 writes yet
+```
+
+Key methods:
+- `HeadlessHost::new()` — create a headless session
+- `host.step(msg)` — send a message through `App::update` and execute effects
+- `host.drain_pending(timeout)` — process pending messages from tab threads
+- `drain_until(&mut host, timeout, predicate)` — drain until predicate is true
+- `host.snapshot(label)` — get a `HeadlessSnapshot` of app state
+- `host.grid_text(tab_id)` — read terminal grid content as a string
+- `host.clipboard` / `host.primary_clipboard` — captured clipboard writes
 
 ## Scenario format
 
@@ -78,8 +126,8 @@ Actions (these map 1:1 to `ui::Message` variants; see `src/headless.rs`):
 
 | Action | Shape | Effect |
 |---|---|---|
-| `WindowResized` | `{"WindowResized": {"width": 1600, "height": 900}}` | Resize the window. One is auto-injected at startup (1600×900) so the home tab boots. |
-| `NewTab` | `"NewTab"` | Append a shell tab. |
+| `WindowResized` | `{"WindowResized": {"width": 1600, "height": 900}}` | Resize the window. One is auto-injected at startup (1600x900) so the home tab boots. |
+| `NewTab` | `"NewTab"` | Append a shell tab. Real PTY is spawned. |
 | `SpawnAgent` | `"SpawnAgent"` | Same as the keybind — behavior depends on the active tab's rank. |
 | `SelectTab` | `{"SelectTab": 2}` | Focus tab by id. |
 | `SelectTabByIndex` | `{"SelectTabByIndex": 1}` | Focus the Nth tab in display order. |
@@ -125,12 +173,32 @@ match on in assertions.
 3. Run `cargo run -- --headless <path>` and eyeball the output, or add a
    `#[test]` in `tests/headless.rs` that spawns the binary via
    `env!("CARGO_BIN_EXE_mandelbot")` and asserts on the parsed snapshots.
+4. For tests that need real PTY interaction or grid inspection, use the
+   `HeadlessHost` API directly (see above).
 
-Example: check that closing the home tab exits cleanly (headless `iced::exit()`
-is a no-op, so the follow-up snapshot just shows an empty tab list).
+Example: check that closing the home tab exits cleanly.
 
 ```json
 { "actions": [ { "CloseTab": 0 }, { "Snapshot": {} } ] }
+```
+
+Example: spawn a shell, run a command, and verify grid output (as a Rust test):
+
+```rust
+#[test]
+fn shell_echo_test() {
+    let mut host = HeadlessHost::new();
+    host.step(Message::WindowResized(Size { width: 1600.0, height: 900.0 }));
+    host.step(Message::NewTab);
+    drain_until(&mut host, Duration::from_secs(3), |h| {
+        h.grid_text(1).map(|t| !t.is_empty()).unwrap_or(false)
+    });
+    host.step(Message::PtyInput(b"echo test-marker\r".to_vec()));
+    let found = drain_until(&mut host, Duration::from_secs(3), |h| {
+        h.grid_text(1).map(|t| t.contains("test-marker")).unwrap_or(false)
+    });
+    assert!(found);
+}
 ```
 
 ## Gotchas
@@ -141,5 +209,7 @@ is a no-op, so the follow-up snapshot just shows an empty tab list).
   home tab" branch in `App::update`. If your scenario starts with an explicit
   `WindowResized`, it'll be the *second* resize the app sees, not the first.
 - The runtime directory at `runtime_dir()` (e.g. `/run/user/$UID/mandelbot-$PID/`)
-  is still created so tab FIFOs have somewhere to land, but it's cleaned up
-  on `App::drop`.
+  is still created so tab FIFOs have somewhere to land, and is cleaned up on
+  `HeadlessHost::drop`.
+- Shell tabs spawn real processes. Tests that run commands should use
+  deterministic, fast commands (e.g. `echo marker`) and appropriate timeouts.

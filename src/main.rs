@@ -1,6 +1,8 @@
 mod animation;
 mod config;
+mod effect;
 mod headless;
+mod host;
 mod keys;
 mod links;
 mod mcp;
@@ -58,10 +60,10 @@ fn main() -> iced::Result {
     )
     .ok();
 
-    let mut app = iced::application(ui::App::boot, ui::App::update, ui::App::view)
+    let mut app = iced::application(host::IcedHost::boot, host::IcedHost::update, host::IcedHost::view)
         .title("Mandelbot")
-        .subscription(ui::App::subscription)
-        .theme(ui::App::theme)
+        .subscription(host::IcedHost::subscription)
+        .theme(host::IcedHost::theme)
         .window(iced::window::Settings {
             size: window_size,
             icon,
