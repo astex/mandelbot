@@ -104,9 +104,6 @@ pub struct App {
 
 impl App {
     pub fn boot() -> (Self, Task<Message>) {
-        let config = Config::load();
-        let terminal_theme = config.terminal_theme();
-
         let parent_socket_dir = crate::tab::runtime_dir();
         std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
         let parent_socket_path = parent_socket_dir.join("parent.sock");
@@ -121,7 +118,35 @@ impl App {
             |msg| msg,
         );
 
-        let app = Self {
+        let app = Self::new_inner(parent_socket_dir, parent_socket_path, response_writers);
+        (app, listen_task)
+    }
+
+    /// Construct an `App` for headless use: no parent-socket listener is bound
+    /// and `Drop` will not touch the filesystem. The runtime directory is
+    /// still created because tab FIFOs live inside it, but no `parent.sock`
+    /// is opened. Used by `src/headless.rs` to drive `App::update` without an
+    /// Iced runtime.
+    pub fn boot_headless() -> Self {
+        let parent_socket_dir = crate::tab::runtime_dir();
+        // FIFOs for spawned tabs still land here; the listener path is unused.
+        std::fs::create_dir_all(&parent_socket_dir)
+            .expect("failed to create runtime dir");
+        let parent_socket_path = parent_socket_dir.join("parent.sock");
+        let response_writers: ResponseWriters = Arc::new(Mutex::new(HashMap::new()));
+        // Intentionally leave parent_socket_dir populated so Drop cleans it up.
+        Self::new_inner(parent_socket_dir, parent_socket_path, response_writers)
+    }
+
+    fn new_inner(
+        parent_socket_dir: PathBuf,
+        parent_socket_path: PathBuf,
+        response_writers: ResponseWriters,
+    ) -> Self {
+        let config = Config::load();
+        let terminal_theme = config.terminal_theme();
+
+        Self {
             config,
             tabs: Vec::new(),
             active_tab_id: 0,
@@ -135,9 +160,7 @@ impl App {
             bell_flashes: FlashState::default(),
             folded_tabs: HashSet::new(),
             active_fold: None,
-        };
-
-        (app, listen_task)
+        }
     }
 
     fn active_tab(&self) -> Option<&TerminalTab> {
@@ -1102,34 +1125,56 @@ impl App {
     }
 
     /// Spike-only: emit a snapshot of tab tree state as a JSON value.
-    pub fn headless_snapshot(&self, label: Option<String>) -> serde_json::Value {
-        let tabs: Vec<serde_json::Value> = self
+    pub fn headless_snapshot(&self, label: Option<String>) -> HeadlessSnapshot {
+        let tabs = self
             .tabs
             .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "id": t.id,
-                    "title": t.title,
-                    "rank": format!("{:?}", t.rank),
-                    "status": format!("{:?}", t.status),
-                    "depth": t.depth,
-                    "parent_id": t.parent_id,
-                    "is_claude": t.is_claude,
-                    "is_pending": t.is_pending(),
-                })
+            .map(|t| HeadlessTab {
+                id: t.id,
+                title: t.title.clone(),
+                rank: t.rank,
+                status: t.status,
+                depth: t.depth,
+                parent_id: t.parent_id,
+                is_claude: t.is_claude,
+                is_pending: t.is_pending(),
             })
             .collect();
 
-        let folded: Vec<usize> = self.folded_tabs.iter().copied().collect();
+        let mut folded: Vec<usize> = self.folded_tabs.iter().copied().collect();
+        folded.sort_unstable();
 
-        serde_json::json!({
-            "label": label,
-            "active_tab_id": self.active_tab_id,
-            "prev_active_tab_id": self.prev_active_tab_id,
-            "tabs": tabs,
-            "folded": folded,
-        })
+        HeadlessSnapshot {
+            label,
+            active_tab_id: self.active_tab_id,
+            prev_active_tab_id: self.prev_active_tab_id,
+            tabs,
+            folded,
+        }
     }
+}
+
+/// JSON-serializable snapshot of `App` state produced by `App::headless_snapshot`.
+/// The shape is stable enough for scenario tests to assert against.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HeadlessSnapshot {
+    pub label: Option<String>,
+    pub active_tab_id: usize,
+    pub prev_active_tab_id: Option<usize>,
+    pub tabs: Vec<HeadlessTab>,
+    pub folded: Vec<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HeadlessTab {
+    pub id: usize,
+    pub title: Option<String>,
+    pub rank: AgentRank,
+    pub status: AgentStatus,
+    pub depth: usize,
+    pub parent_id: Option<usize>,
+    pub is_claude: bool,
+    pub is_pending: bool,
 }
 
 impl Drop for App {
