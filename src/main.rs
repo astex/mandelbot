@@ -15,9 +15,11 @@ fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().collect();
 
     if let Some(i) = args.iter().position(|a| a == "--headless") {
-        let scenario_path = args
-            .get(i + 1)
-            .expect("--headless requires a scenario path argument");
+        let Some(scenario_path) = args.get(i + 1) else {
+            eprintln!("error: --headless requires a scenario path argument");
+            eprintln!("usage: mandelbot --headless <scenario.json>");
+            std::process::exit(2);
+        };
         if let Err(e) = headless::run(std::path::Path::new(scenario_path)) {
             eprintln!("headless error: {e}");
             std::process::exit(1);

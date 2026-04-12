@@ -28,14 +28,16 @@ use alacritty_terminal::term::TermMode;
 
 use std::sync::atomic::Ordering;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum AgentRank {
     Home,
     Project,
     Task,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub enum AgentStatus {
     #[default]
     Idle,
