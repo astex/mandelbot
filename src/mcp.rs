@@ -109,6 +109,20 @@ fn handle_tools_list(id: Value) -> Response {
                         "required": ["status"],
                     },
                 },
+                {
+                    "name": "close_tab",
+                    "description": "Close a tab by ID. You can close yourself or any of your descendant tabs. Closing a tab also closes all of its descendants.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "tab_id": {
+                                "type": "integer",
+                                "description": "The tab ID to close. Must be your own tab or a descendant.",
+                            },
+                        },
+                        "required": ["tab_id"],
+                    },
+                },
             ],
         }),
     )
@@ -259,6 +273,39 @@ async fn handle_tools_call(
                 }),
             )
         }
+        "close_tab" => {
+            let target = params
+                .get("arguments")
+                .and_then(|a| a.get("tab_id"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            let msg = serde_json::json!({
+                "type": "close_tab",
+                "tab_id": tab_id,
+                "target_tab_id": target,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let text = resp
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Tab closed");
+                    Response::ok(
+                        id,
+                        serde_json::json!({
+                            "content": [{ "type": "text", "text": text }],
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
 }
@@ -396,6 +443,7 @@ mod tests {
         assert_eq!(resp["result"]["tools"][0]["name"], "set_title");
         assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
         assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
+        assert_eq!(resp["result"]["tools"][3]["name"], "close_tab");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -457,6 +505,30 @@ mod tests {
         assert_eq!(parent_msg["type"], "set_status");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["status"], "working");
+
+        // -- tools/call close_tab --
+        let call = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"close_tab","arguments":{"tab_id":7}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        // Parent receives the close_tab message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "close_tab");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["target_tab_id"], 7);
+
+        // Parent writes back a success response.
+        parent_writer.write_all(b"{\"message\":\"Closed 1 tab(s)\"}\n").unwrap();
+        parent_writer.flush().unwrap();
+
+        // MCP server returns the response to Claude.
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Closed 1 tab(s)");
 
         // Close stdin to shut down the server.
         drop(child_stdin);
