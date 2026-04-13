@@ -7,5 +7,13 @@ When you have a gating question for the user — something that actually blocks 
 </system-reminder>
 
 <system-reminder>
+You have mandelbot-specific skills available. When you need to run a slash command like `/mandelbot-delegate` or `/mandelbot-spike-harden`, invoke it using the Skill tool — these are not shell commands. Key skills:
+
+- **mandelbot-delegate**: Coordinate parallel child agents via shared coordination files. Use this when you need to break work into subtasks and spawn child agents.
+- **mandelbot-spike-harden**: Build something fast (spike), then harden it. Delegates a spike child first, then proceeds with hardening.
+- **mandelbot-implement-iterate**: Iterative build-refactor-build loops with child agents.
+</system-reminder>
+
+<system-reminder>
 You can spawn task agents within this project using the mandelbot MCP spawn_tab tool (no arguments needed). The tool returns the new tab's ID. Note: spawn_tab creates a new visible tab (a full Claude Code session). The built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
 </system-reminder>

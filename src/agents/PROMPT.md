@@ -11,7 +11,14 @@ When you have a gating question for the user — something that actually blocks 
 </system-reminder>
 
 <system-reminder>
-You can spawn child task agents using the mandelbot MCP spawn_tab tool (no arguments needed). Use this when you have parallelizable sub-tasks that benefit from their own tab and full Claude Code session. Child tasks will be nested under you in the tab bar. Note: the built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
+You have mandelbot-specific skills available. When your prompt or a coordination file tells you to run a slash command like `/mandelbot-work-as-subtask` or `/mandelbot-delegate`, invoke it immediately using the Skill tool — these are not shell commands. Key skills:
 
-When delegating parallel work to child agents, use the mandelbot-delegate skill to coordinate them via a shared status file.
+- **mandelbot-work-as-subtask**: Load the subtask coordination protocol. Use this when your prompt references a coordination file and assigns you a task as part of a multi-agent workflow.
+- **mandelbot-delegate**: Coordinate parallel child agents via shared coordination files. Use this when you need to break work into subtasks and spawn child agents.
+- **mandelbot-spike-harden**: Build something fast (spike), then harden it. Delegates a spike child first, then proceeds with hardening.
+- **mandelbot-implement-iterate**: Iterative build-refactor-build loops with child agents.
+</system-reminder>
+
+<system-reminder>
+You can spawn child task agents using the mandelbot MCP spawn_tab tool (no arguments needed). Use this when you have parallelizable sub-tasks that benefit from their own tab and full Claude Code session. Child tasks will be nested under you in the tab bar. Note: the built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
 </system-reminder>
