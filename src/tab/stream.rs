@@ -13,8 +13,8 @@ use futures::SinkExt;
 
 use super::config;
 use super::{
-    detect_prompt_shell_count, AgentStatus, TabEvent,
-    TabSpawnParams, TermEventListener, TermInstance,
+    detect_prompt_info, AgentStatus, TabEvent, TabSpawnParams,
+    TermEventListener, TermInstance,
 };
 use crate::pty;
 use crate::ui::Message;
@@ -328,6 +328,7 @@ pub fn tab_stream(
                 let mut pty_cols = params.cols;
                 let mut pty_alive = true;
                 let mut bg_tasks: usize = 0;
+                let mut pr_number: Option<u32> = None;
 
                 loop {
                     match event_rx.recv() {
@@ -354,17 +355,20 @@ pub fn tab_stream(
                             }
                             if is_claude {
                                 let t = term.lock().unwrap();
-                                if let Some(count) =
-                                    detect_prompt_shell_count(&t)
+                                if let Some(info) =
+                                    detect_prompt_info(&t)
                                 {
-                                    bg_tasks = count;
+                                    bg_tasks = info.shell_count;
+                                    pr_number = info.pr_number;
                                 }
                             }
                             let _ =
                                 futures::executor::block_on(
                                     sender.send(
                                         Message::TabOutput(
-                                            id, bg_tasks,
+                                            id,
+                                            bg_tasks,
+                                            pr_number,
                                         ),
                                     ),
                                 );

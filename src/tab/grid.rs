@@ -96,11 +96,18 @@ fn row_text(term: &TermInstance, line: Line) -> String {
     text.trim_end().to_string()
 }
 
-/// Detect Claude Code's prompt frame and read the background shell
-/// count.
-pub(crate) fn detect_prompt_shell_count(
+#[derive(Default)]
+pub(crate) struct PromptInfo {
+    pub shell_count: usize,
+    pub pr_number: Option<u32>,
+}
+
+/// Detect Claude Code's prompt frame and read status indicators
+/// (background shell count, tracked PR number) from the lines below
+/// it.
+pub(crate) fn detect_prompt_info(
     term: &TermInstance,
-) -> Option<usize> {
+) -> Option<PromptInfo> {
     let grid = term.grid();
     let screen_lines = grid.screen_lines();
     let cursor_line = grid.cursor.point.line.0;
@@ -130,13 +137,21 @@ pub(crate) fn detect_prompt_shell_count(
         return None;
     };
 
-    for i in (bot_border + 1)..rows.len() {
-        if let Some(n) = parse_shell_count(&rows[i]) {
-            return Some(n);
+    let mut info = PromptInfo::default();
+    for row in rows.iter().skip(bot_border + 1) {
+        if info.shell_count == 0 {
+            if let Some(n) = parse_shell_count(row) {
+                info.shell_count = n;
+            }
+        }
+        if info.pr_number.is_none() {
+            if let Some(n) = parse_pr_number(row) {
+                info.pr_number = Some(n);
+            }
         }
     }
 
-    Some(0)
+    Some(info)
 }
 
 /// Check if a row looks like a Claude Code prompt border (10+ '─'
@@ -174,5 +189,40 @@ fn parse_shell_count(text: &str) -> Option<usize> {
         Some(n)
     } else {
         None
+    }
+}
+
+/// Parse a tracked PR number from a status line.  Matches the
+/// Claude Code `PR #<number>` indicator that appears below the
+/// prompt frame.
+fn parse_pr_number(text: &str) -> Option<u32> {
+    let idx = text.find("PR #")?;
+    let after = &text[idx + "PR #".len()..];
+    let digits: String =
+        after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pr_number_from_statusline() {
+        let line =
+            "‣‣ accept edits on (shift+tab to cycle) · PR #28045";
+        assert_eq!(parse_pr_number(line), Some(28045));
+    }
+
+    #[test]
+    fn no_pr_number_when_absent() {
+        let line = "‣‣ accept edits on (shift+tab to cycle)";
+        assert_eq!(parse_pr_number(line), None);
+    }
+
+    #[test]
+    fn ignores_pr_without_hash() {
+        let line = "PR 123 is cool";
+        assert_eq!(parse_pr_number(line), None);
     }
 }
