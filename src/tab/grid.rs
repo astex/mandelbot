@@ -96,18 +96,10 @@ fn row_text(term: &TermInstance, line: Line) -> String {
     text.trim_end().to_string()
 }
 
-#[derive(Default)]
-pub(crate) struct PromptInfo {
-    pub shell_count: usize,
-    pub pr_number: Option<u32>,
-}
-
-/// Detect Claude Code's prompt frame and read status indicators
-/// (background shell count, tracked PR number) from the lines below
-/// it.
-pub(crate) fn detect_prompt_info(
-    term: &TermInstance,
-) -> Option<PromptInfo> {
+/// Return the row texts that sit below Claude Code's prompt frame,
+/// or `None` if the frame isn't on screen.  Used by the per-field
+/// scrapers below.
+fn prompt_status_rows(term: &TermInstance) -> Option<Vec<String>> {
     let grid = term.grid();
     let screen_lines = grid.screen_lines();
     let cursor_line = grid.cursor.point.line.0;
@@ -137,21 +129,32 @@ pub(crate) fn detect_prompt_info(
         return None;
     };
 
-    let mut info = PromptInfo::default();
-    for row in rows.iter().skip(bot_border + 1) {
-        if info.shell_count == 0 {
-            if let Some(n) = parse_shell_count(row) {
-                info.shell_count = n;
-            }
-        }
-        if info.pr_number.is_none() {
-            if let Some(n) = parse_pr_number(row) {
-                info.pr_number = Some(n);
-            }
+    Some(rows.into_iter().skip(bot_border + 1).collect())
+}
+
+/// Detect Claude Code's prompt frame and read the background shell
+/// count.  Returns 0 when the frame is on screen but no shell-count
+/// line is visible; returns `None` when the frame isn't on screen.
+pub(crate) fn detect_prompt_shell_count(
+    term: &TermInstance,
+) -> Option<usize> {
+    let rows = prompt_status_rows(term)?;
+    for row in &rows {
+        if let Some(n) = parse_shell_count(row) {
+            return Some(n);
         }
     }
+    Some(0)
+}
 
-    Some(info)
+/// Detect the tracked PR number from Claude Code's status line.
+/// Returns `None` if no `PR #N` indicator is visible (either
+/// because Claude isn't tracking a PR or the frame isn't on screen).
+pub(crate) fn detect_prompt_pr_number(
+    term: &TermInstance,
+) -> Option<u32> {
+    let rows = prompt_status_rows(term)?;
+    rows.iter().find_map(|r| parse_pr_number(r))
 }
 
 /// Check if a row looks like a Claude Code prompt border (10+ '─'

@@ -13,8 +13,9 @@ use futures::SinkExt;
 
 use super::config;
 use super::{
-    detect_prompt_info, AgentStatus, TabEvent, TabSpawnParams,
-    TermEventListener, TermInstance,
+    detect_prompt_pr_number, detect_prompt_shell_count,
+    AgentStatus, TabEvent, TabSpawnParams, TermEventListener,
+    TermInstance,
 };
 use crate::pty;
 use crate::ui::Message;
@@ -355,12 +356,13 @@ pub fn tab_stream(
                             }
                             if is_claude {
                                 let t = term.lock().unwrap();
-                                if let Some(info) =
-                                    detect_prompt_info(&t)
+                                if let Some(count) =
+                                    detect_prompt_shell_count(&t)
                                 {
-                                    bg_tasks = info.shell_count;
-                                    pr_number = info.pr_number;
+                                    bg_tasks = count;
                                 }
+                                pr_number =
+                                    detect_prompt_pr_number(&t);
                             }
                             let _ =
                                 futures::executor::block_on(

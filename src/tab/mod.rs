@@ -11,7 +11,7 @@ pub use grid::logical_line_at;
 pub use stream::{fifo_stream, tab_stream};
 
 pub(crate) use events::TermEventListener;
-pub(crate) use grid::detect_prompt_info;
+pub(crate) use grid::{detect_prompt_pr_number, detect_prompt_shell_count};
 
 use events::{color_to_rgb, new_term, TermColors};
 
