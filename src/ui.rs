@@ -1265,6 +1265,7 @@ fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
     match status {
         AgentStatus::Idle => fg,
         AgentStatus::Working => Color::from_rgb8(0x50, 0xc8, 0x50),
+        AgentStatus::Compacting => Color::from_rgb8(0xb0, 0x80, 0xe0),
         AgentStatus::Blocked => Color::from_rgb8(0xe8, 0xb8, 0x30),
         AgentStatus::NeedsReview => Color::from_rgb8(0x40, 0xa0, 0xe0),
         AgentStatus::Error => Color::from_rgb8(0xe0, 0x40, 0x40),

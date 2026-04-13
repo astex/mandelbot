@@ -40,6 +40,7 @@ pub enum AgentStatus {
     #[default]
     Idle,
     Working,
+    Compacting,
     Blocked,
     NeedsReview,
     Error,
@@ -50,6 +51,7 @@ impl AgentStatus {
         match s {
             "idle" => Some(Self::Idle),
             "working" => Some(Self::Working),
+            "compacting" => Some(Self::Compacting),
             "blocked" => Some(Self::Blocked),
             "needs_review" => Some(Self::NeedsReview),
             "error" => Some(Self::Error),

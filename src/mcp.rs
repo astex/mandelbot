@@ -102,8 +102,8 @@ fn handle_tools_list(id: Value) -> Response {
                         "properties": {
                             "status": {
                                 "type": "string",
-                                "enum": ["idle", "working", "blocked", "needs_review", "error"],
-                                "description": "idle = waiting for user input, working = actively processing, blocked = waiting for permission, needs_review = presenting plan/output for review, error = something went wrong",
+                                "enum": ["idle", "working", "compacting", "blocked", "needs_review", "error"],
+                                "description": "idle = waiting for user input, working = actively processing, compacting = context is being compressed, blocked = waiting for permission, needs_review = presenting plan/output for review, error = something went wrong",
                             },
                         },
                         "required": ["status"],
