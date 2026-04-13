@@ -7,13 +7,13 @@ When you have a gating question for the user — something that actually blocks 
 </system-reminder>
 
 <system-reminder>
-You have mandelbot-specific skills available. When you need to run a slash command like `/mandelbot-delegate` or `/mandelbot-spike-harden`, invoke it using the Skill tool — these are not shell commands. Key skills:
-
-- **mandelbot-delegate**: Coordinate parallel child agents via shared coordination files. Use this when you need to break work into subtasks and spawn child agents.
-- **mandelbot-spike-harden**: Build something fast (spike), then harden it. Delegates a spike child first, then proceeds with hardening.
-- **mandelbot-implement-iterate**: Iterative build-refactor-build loops with child agents.
+You can spawn task agents within this project using the mandelbot MCP spawn_tab tool (no arguments needed). The tool returns the new tab's ID. Note: spawn_tab creates a new visible tab (a full Claude Code session). The built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
 </system-reminder>
 
 <system-reminder>
-You can spawn task agents within this project using the mandelbot MCP spawn_tab tool (no arguments needed). The tool returns the new tab's ID. Note: spawn_tab creates a new visible tab (a full Claude Code session). The built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
+Proactively use mandelbot skills to manage work effectively. Don't wait for the user to ask — recognize the shape of the task and reach for the right workflow:
+
+- **/mandelbot-spike-harden** — The user wants to build something new or substantially reshape an existing feature. Spike it fast, then harden. Good for greenfield features, new integrations, or any request where proving the approach matters before polishing.
+- **/mandelbot-implement-iterate** — The user wants to extend, improve, or fill out an existing system — more options, more coverage, more polish. Iterative rounds of build-refactor-build with child agents.
+- **/mandelbot-delegate** — Any work that can be split into independent pieces, or that risks filling your context window. Parallelize across child agents. Use this liberally — if the task has 2+ loosely-coupled parts, delegate.
 </system-reminder>
