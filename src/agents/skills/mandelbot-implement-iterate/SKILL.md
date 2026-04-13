@@ -1,14 +1,14 @@
 ---
 name: mandelbot-implement-iterate
-description: Use this skill for iterative build-refactor-build loops where a parent agent delegates work to a generation of children, harvests their "ideas" from the coordination logs, and spawns another generation acting on the best ones. Activates when the user wants to "keep improving X", run "another pass", do "iterative refinement", or loop until some fitness signal is met. Not for one-shot feature work — use mandelbot-delegate for that.
-allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab]
+description: Use this skill for iterative build-refactor-build loops where a parent agent delegates work to generation tabs, harvests ideas, and spawns another generation acting on the best ones. Activates when the user wants to "keep improving X", run "another pass", do "iterative refinement", or loop until some fitness signal is met. Not for one-shot feature work — use mandelbot-delegate for that.
+allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab, AskUserQuestion]
 ---
 
 # Implement / Iterate
 
-An iterative loop built on top of `mandelbot-delegate`. The parent spawns a generation of children to do implementation or refactoring work. Children, while they work, drop **ideas** into their coord logs — observations, follow-ups, alternatives, refactors they wish existed. When the generation finishes, the parent reads the accumulated ideas across all children, picks one or a coherent set, and spawns a new generation whose assignments act on those ideas. Repeat until an exit condition is met.
+An iterative loop built on top of `mandelbot-delegate`. The parent spawns one **generation tab** per round, which manages its own implementation children. When the generation finishes, the generation tab writes a summary with collected ideas. The parent reads the summary, optionally checks in with the user, and spawns the next generation acting on the best ideas. Repeat until an exit condition is met.
 
-Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelbot-delegate`'s SKILL.md for the parent workflow. This file only covers what's specific to the iterate loop: the idea convention, the generation cycle, and exit conditions.
+Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol. This file covers the parent's perspective: framing the run, the generation cycle, iteration modes, integration strategies, and exit conditions.
 
 ## When to use
 
@@ -16,89 +16,105 @@ Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelb
 - Build-refactor-build loops: build a working version, harvest observations from the implementers, apply them in the next generation.
 - Any task where first-generation implementers will see things the planner didn't anticipate and you want a structured way to feed those observations back.
 
-Don't use when the work is a one-shot feature with a clear spec (`mandelbot-delegate` directly) or a spike-then-harden flow (`mandelbot-spike-harden`).
-
-## The idea convention
-
-Ideas are append-only log entries in a child's `*.coord.md`, marked with an `idea:` prefix — analogous to `blocked:`:
-
-```
-- [YYYY-MM-DD HH:MM] idea: <one-line summary> — <optional brief rationale>
-```
-
-Rules:
-
-1. **Log entries, not a separate section.** They sit inline with the rest of the log. The watcher wakes on them like any other entry.
-2. **Not a state transition.** Writing `idea:` does not change `**State:**`. The child keeps working.
-3. **One idea per line.** Multiple ideas → multiple lines.
-4. **The idea is the child's, not a directive.** The parent decides whether it becomes next-generation work. Children do not act on their own ideas in the current generation unless their assignment explicitly covers them.
-5. **Scoped to this generation.** Children don't cross-reference prior generations; the parent carries anything worth carrying forward.
-
-Children learn this convention by reading `index.md`'s "How we work" section, where the parent includes it during setup (see step 2 below).
+Don't use when the work is a one-shot feature with a clear spec (`mandelbot-delegate` directly).
 
 ## Flow
 
 ### 1. Frame the run
 
-Write (or reuse) a plan file. In addition to the normal plan content, decide the **exit condition** for the loop (see [Exit conditions](#exit-conditions)) and the **`max_generations`** safety cap (default 5).
+Work out the following with the user before spawning anything:
+
+**Iteration mode** — how the parent decides what goes into the next generation:
+
+- **`human-in-the-loop`** (default) — After each generation, the parent presents the summary and collected ideas to the user via `AskUserQuestion`. The user can add ideas, drop ideas, adjust priorities, or say "continue." The parent incorporates the user's input into gen N+1's assignments.
+- **`autonomous`** — The parent harvests and curates ideas without user input. Useful when there's a clear fitness signal (tests pass, benchmark met, lint clean).
+- **`fixed-count`** — Run N generations autonomously and stop. No inter-generation user interaction.
+
+**Integration strategy** — how generation N's code gets into one place before generation N+1 starts:
+
+- **`human-review`** — Children open draft PRs. The parent creates a merge PR combining all subtask branches. The human merges it before the next generation starts.
+- **`agent-merge`** — The parent reviews gen-N children's code, merges their branches into a working branch between generations. Gen-N+1 children branch off the merged state.
+
+The integration strategy stays fixed across all generations.
+
+**Exit condition** — when to stop (see [Exit conditions](#exit-conditions)).
+
+**`max_generations`** safety cap (default 5) — prevents runaway loops.
+
+Write (or reuse) a plan file. Record the iteration mode, integration strategy, exit condition, and max_generations in the plan.
 
 ### 2. Create the coordination directory
 
-Follow the `mandelbot-delegate` workflow. In `index.md`'s "How we work" section, include:
+```bash
+mkdir -p ~/.mandelbot/coordination/<project>.coord
+```
 
-- The exit condition and the `max_generations` cap.
-- A note that this is a multi-generation iterate run — children should expect their assignments to reference ideas harvested from prior generations.
-- The **merge strategy** for between generations. This is project-specific — some projects require human review before merging, others let the parent review and merge directly. Whatever the rule, state it here so children know what "done" means. If human review is required, tell children to open a PR and wait for it to merge before reporting `done`. See [Integrate generation N](#4½-integrate-generation-n).
-- The idea convention, written for children. Use something like:
-
-> While working, you are encouraged (not required) to drop **ideas** into your log using the `idea:` prefix — analogous to `blocked:`. An idea is anything you noticed that would make the code, the tests, the tooling, or a future generation better: follow-ups, alternative approaches, refactors you wish existed, tooling gaps, smells.
->
-> Format: `- [YYYY-MM-DD HH:MM] idea: <one-line summary> — <optional brief rationale>`
->
-> Ideas are log entries, not a separate section. They are **not** a state change — keep working. One idea per line. Do not implement your own ideas unless your assignment explicitly covers them — log them and the parent decides what gets picked up.
+Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
+- Project name, absolute plan path.
+- **How we work**: include the iteration mode, integration strategy, exit condition, and max_generations. Note that this is a multi-generation iterate run. Children of generation tabs should know about the idea convention — the generation tab will relay this.
+- **Children**: one bullet per generation tab (`gen-1`, `gen-2`, ...).
 
 ### 3. Spawn generation N
 
-Delegate via `mandelbot-delegate`. Name each child file `<label>-g<N>.coord.md` — the generation number keeps files from colliding and gives a visible history in the directory listing.
+Spawn ONE generation tab using `spawn_tab` with `model: "sonnet"` (the generation tab is a coordinator, not an implementer) and a `branch` parameter. Write a `gen-<N>.coord.md` from `child.template.md` before spawning. The assignment should include:
 
-In each child's assignment, include:
+- The **task list** for this generation — what implementation children to create, with detailed assignments for each.
+- Any **ideas harvested from prior generations** that this generation should act on.
+- The **generation number**.
+- The **integration strategy** (so children know whether to open PRs, etc.).
+- Reference to `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol.
+- Reference to the governing plan.
 
-- The work for this generation.
-- Any ideas harvested from prior generations that this child should act on (put these in the assignment text, not as `[DIRECTIVE]` entries — directives are for mid-flight corrections to a running child).
-- The generation number so children know where they are in the loop.
+Prompt:
 
-Children follow the normal plan-review handshake from `_shared/coord.md`. They pick up the idea convention from `index.md`'s "How we work" section.
+> Start by reading `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol. You are a generation tab in the "<project>" iterate run. Your coordination file is at `<absolute path to gen-<N>.coord.md>` — read it first, then read the governing plan at `<path>` in full.
+>
+> You manage generation <N>. Create implementation children from the task list in your assignment, watch them, collect ideas, and write a summary when done.
 
-### 4. Wait for generation N
+### 4. Watch generation N
 
-Standard delegate monitoring — one watcher per child, re-arm until all are `done` or `failed`.
-
-### 4½. Integrate generation N
-
-Generation N+1 children must start from code that includes generation N's changes. Before spawning the next generation, ensure gen-N's branches are merged.
-
-How merging happens depends on the project's merge strategy (defined in "How we work"):
-
-- **Parent reviews and merges directly.** The parent reviews gen-N children's code, merges their branches, and gen-N+1 children branch off the merged state.
-- **Human review required.** Gen-N children open PRs and do not report `done` until their PRs are merged. The parent's normal wait loop (step 4) naturally blocks until integration is complete.
-
-Either way: do not spawn generation N+1 until generation N's code is integrated. Children working on stale code will produce conflicts and wasted work.
-
-### 5. Harvest ideas
-
-Walk each generation-N child file and grep for `idea:` entries:
+Run ONE watcher on `gen-<N>.coord.md`:
 
 ```bash
-grep 'idea:' ~/.mandelbot/coordination/<project>.coord/*-g<N>.coord.md
+bash <plugin-dir>/skills/_shared/watch.sh <absolute path to gen-<N>.coord.md>
 ```
 
-Collect in memory. The ideas live in the child logs — they are the source of truth. Optionally note the harvest count in `index.md`'s "How we work" section for the human reader, e.g. `generation 1: harvested 4 ideas, proceeding with 2`.
+**Do not write your own watcher.** Always use `watch.sh`.
 
-### 6. Check exit condition
+When the watcher wakes:
 
-If the exit condition is met or a safety stop fires (see below): set `index.md` state to `done`, append a short retrospective to "How we work" covering which ideas were picked up, which were dropped, and why. Stop.
+- **`blocked:`** — The generation tab is relaying a block from one of its children (or is itself blocked). Read the question, resolve it. You may write a `[DIRECTIVE]` directly into a grandchild's coord file to unblock it quickly, or answer in the generation tab's file.
+- **`done`** — The generation tab has finished. Proceed to step 5.
+- **Other log entries** — Re-arm the watcher and wait.
 
-Otherwise, pick one idea or a coherent set from the harvest and go to step 3 with N+1.
+### 5. Harvest from generation tab
+
+Read `gen-<N>.coord.md`'s `## Summary` section. The generation tab has already collected ideas from its children and summarized outcomes. Use this as your source of truth for what happened and what ideas emerged.
+
+### 6. Integrate generation N
+
+Per the integration strategy decided in step 1:
+
+- **`human-review`**: Verify children's PRs exist. Create a merge PR combining all subtask branches for this generation. Wait for the human to merge it before proceeding.
+- **`agent-merge`**: Review the generation's code. Merge children's branches into the working branch. Verify the merge is clean.
+
+Do not spawn generation N+1 until generation N's code is integrated. Children working on stale code will produce conflicts and wasted work.
+
+### 7. User checkpoint (if human-in-the-loop)
+
+If the iteration mode is `human-in-the-loop`, present the generation summary and collected ideas to the user via `AskUserQuestion`. Include:
+
+- What was accomplished this generation (per-child outcomes).
+- The collected ideas, attributed by source.
+- Your recommendation for what to pursue next.
+
+The user may add their own ideas, drop ideas, reprioritize, or adjust the remaining work. Incorporate their input into gen N+1's task list.
+
+### 8. Check exit condition
+
+If the exit condition is met or a safety stop fires: wrap up (see below).
+
+Otherwise, pick ideas from the harvest (incorporating user input if applicable) and go to step 3 with N+1.
 
 ### Safety stops
 
@@ -107,9 +123,17 @@ Beyond the parent-defined exit condition, the loop also stops if:
 - **All children in a generation failed.** Escalate to the user rather than spawning on top of a broken base.
 - **`max_generations` reached.** Prevents runaway loops when the exit condition is soft.
 
+### Wrapping up
+
+When the loop ends:
+
+1. Close any remaining generation or child tabs via `close_tab`.
+2. Write a short retrospective in `index.md`'s "How we work" section: which ideas were picked up, which were dropped, and why. Note the final generation count.
+3. Handle any final integration (merge to main, open a final PR, etc.) per the integration strategy.
+
 ## Exit conditions
 
-The parent picks one per run and writes it into `index.md`'s "How we work" section before spawning generation 1:
+The parent picks one per run and records it in step 1:
 
 - **Fixed iteration count.** "Run 3 generations and stop." Simplest.
 - **No new ideas of value.** Parent's judgment after harvesting. Stops when a generation yields only ideas not worth pursuing.
@@ -120,5 +144,5 @@ Always pair with the `max_generations` safety cap. Soft exit conditions without 
 ## Failure modes
 
 - **Generation produces zero ideas.** Not necessarily a failure — the exit condition "no new ideas of value" may now be met. Evaluate and stop or continue.
-- **Ideas are too vague.** Parent appends a `[DIRECTIVE]` asking the child to be more specific before considering the generation done.
+- **Ideas are too vague.** The generation tab should have asked children to be specific. If the summary is still vague, note it for the next generation's assignment.
 - **Idea is out of scope.** Drop it from the harvest with a note in the retrospective. Don't carry dead weight into the next generation.

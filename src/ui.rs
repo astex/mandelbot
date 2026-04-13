@@ -65,7 +65,7 @@ pub enum Message {
     FocusPreviousTab,
     NextIdle,
     PendingInput(PendingKey),
-    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>),
+    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
@@ -169,6 +169,7 @@ impl App {
         parent_id: Option<usize>,
         prompt: Option<String>,
         branch: Option<String>,
+        model_override: Option<String>,
     ) -> (usize, Task<Message>) {
         // Expand any folded ancestors so the new tab is visible.
         if let Some(pid) = parent_id {
@@ -188,11 +189,11 @@ impl App {
             AgentRank::Project => Some(id),
             AgentRank::Task => parent.and_then(|p| p.project_id),
         };
-        let model = match rank {
-            AgentRank::Home => &self.config.models.home,
-            AgentRank::Project => &self.config.models.project,
-            AgentRank::Task => &self.config.models.task,
-        };
+        let model = model_override.unwrap_or_else(|| match rank {
+            AgentRank::Home => self.config.models.home.clone(),
+            AgentRank::Project => self.config.models.project.clone(),
+            AgentRank::Task => self.config.models.task.clone(),
+        });
 
         let mut tab = TerminalTab::new(
             id, rows, cols, is_claude, rank,
@@ -233,7 +234,7 @@ impl App {
             shell: self.config.shell.clone(),
             workflow: self.config.workflow.clone(),
             worktree_location: self.config.worktree_location.clone(),
-            model: model.clone(),
+            model,
             parent_socket: self.parent_socket_path.clone(),
             prompt,
             branch,
@@ -528,7 +529,7 @@ impl App {
                 } else {
                     None
                 };
-                let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, first_run_prompt, None);
+                let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, first_run_prompt, None, None);
                 self.focus_tab(id);
                 if let Some(tab) = self.active_tab_mut() {
                     tab.title = Some("home".into());
@@ -612,7 +613,7 @@ impl App {
                 }
                 Task::none()
             }
-            Message::McpSpawnAgent(requesting_tab_id, working_directory, project_tab_id, prompt, branch) => {
+            Message::McpSpawnAgent(requesting_tab_id, working_directory, project_tab_id, prompt, branch, model_override) => {
                 let requester = self.tabs.iter().find(|t| t.id == requesting_tab_id);
                 let Some(requester) = requester else {
                     self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown tab"}));
@@ -658,7 +659,7 @@ impl App {
                     }
                 };
 
-                let (new_tab_id, task) = self.spawn_tab(true, rank, project_dir, parent_id, prompt, branch);
+                let (new_tab_id, task) = self.spawn_tab(true, rank, project_dir, parent_id, prompt, branch, model_override);
                 self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
                 task
             }
@@ -703,7 +704,7 @@ impl App {
                 Task::none()
             }
             Message::NewTab => {
-                let (id, task) = self.spawn_tab(false, AgentRank::Home, None, None, None, None);
+                let (id, task) = self.spawn_tab(false, AgentRank::Home, None, None, None, None, None);
                 self.focus_tab(id);
                 task
             }
@@ -728,7 +729,7 @@ impl App {
                             .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
                         let project_dir = self.project_dir_for_tab(self.active_tab_id);
                         if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
-                            let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None, None);
+                            let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None, None, None);
                             self.focus_tab(id);
                             task
                         } else {
@@ -756,7 +757,7 @@ impl App {
                     }
                     Some(AgentRank::Project | AgentRank::Task) => {
                         if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
-                            let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None, None);
+                            let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None, None, None);
                             self.focus_tab(id);
                             task
                         } else {
@@ -878,6 +879,7 @@ impl App {
                             AgentRank::Project,
                             Some(canonical),
                             parent_id,
+                            None,
                             None,
                             None,
                         );
@@ -1332,11 +1334,15 @@ fn parent_socket_stream(
                                         .get("branch")
                                         .and_then(|v| v.as_str())
                                         .map(String::from);
+                                    let model = msg
+                                        .get("model")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
                                     let resp_writer = writer.try_clone()
                                         .expect("failed to clone writer for response");
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
-                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt, branch))
+                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt, branch, model))
                                 }
                                 "close_tab" => {
                                     let target_tab_id = msg

@@ -91,6 +91,10 @@ fn handle_tools_list(id: Value) -> Response {
                                 "type": "string",
                                 "description": "Git branch name for the task agent's worktree. Used as the worktree directory name and the branch to create.",
                             },
+                            "model": {
+                                "type": "string",
+                                "description": "Model override for the spawned agent (e.g. 'sonnet', 'opus', 'haiku'). Defaults to the model configured for the agent's rank.",
+                            },
                         },
                     },
                 },
@@ -211,6 +215,9 @@ async fn handle_tools_call(
             let branch = args
                 .and_then(|a| a.get("branch"))
                 .and_then(|v| v.as_str());
+            let model = args
+                .and_then(|a| a.get("model"))
+                .and_then(|v| v.as_str());
 
             let mut msg = serde_json::json!({
                 "type": "spawn_tab",
@@ -227,6 +234,9 @@ async fn handle_tools_call(
             }
             if let Some(b) = branch {
                 msg["branch"] = Value::String(b.to_string());
+            }
+            if let Some(m) = model {
+                msg["model"] = Value::String(m.to_string());
             }
 
             if let Err(e) = send_to_parent(parent_writer, msg).await {
@@ -463,7 +473,7 @@ mod tests {
         // Get a writer to the parent stream so we can send a response back.
         let parent_writer = parent_reader.get_ref().try_clone().unwrap();
 
-        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"spawn_tab","arguments":{"working_directory":"/tmp/test-project"}}}"#;
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"spawn_tab","arguments":{"working_directory":"/tmp/test-project","model":"sonnet"}}}"#;
         child_stdin.write_all(call.as_bytes()).unwrap();
         child_stdin.write_all(b"\n").unwrap();
         child_stdin.flush().unwrap();
@@ -475,6 +485,7 @@ mod tests {
         assert_eq!(parent_msg["type"], "spawn_tab");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["working_directory"], "/tmp/test-project");
+        assert_eq!(parent_msg["model"], "sonnet");
 
         // Parent writes back the new tab ID.
         let mut parent_writer = parent_writer;

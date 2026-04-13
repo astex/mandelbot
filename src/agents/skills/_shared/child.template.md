@@ -1,7 +1,6 @@
 # <label>
 
 **Parent:** ../index.md
-**Plan:** <to be filled in by child after planning>
 **State:** pending
 
 ## Assignment
