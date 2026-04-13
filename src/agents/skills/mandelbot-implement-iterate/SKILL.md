@@ -34,7 +34,7 @@ Work out the following with the user before spawning anything:
 
 **Integration strategy** — how generation N's code gets into one place before generation N+1 starts:
 
-- **`human-review`** — Children open draft PRs. The parent creates a merge PR combining all subtask branches. The human merges it before the next generation starts.
+- **`human-review`** — Children open their own PRs and stay alive in `awaiting_review` (see `_shared/coord.md`). The human reviews and merges each child's PR; the child handles any review feedback in its own tab. The parent maintains a **meta-merge branch** in GitHub that combines all open child PRs — this is the integration point. Generation N+1 branches off the meta-merge branch (not master) and stacks on top of generation N's still-open PRs. The meta-merge branch is rebased as individual PRs land on master.
 - **`agent-merge`** — The parent reviews gen-N children's code, merges their branches into a working branch between generations. Gen-N+1 children branch off the merged state.
 
 The integration strategy stays fixed across all generations.
@@ -99,7 +99,7 @@ Read `gen-<N>.coord.md`'s `## Summary` section. The generation tab has already c
 
 Per the integration strategy decided in step 1:
 
-- **`human-review`**: Verify children's PRs exist. Create a merge PR combining all subtask branches for this generation. Wait for the human to merge it before proceeding.
+- **`human-review`**: Verify children's PRs exist. Children stay alive in `awaiting_review` and the human reviews and merges each PR directly — review feedback flows through each child's own tab, not through you. Update the **meta-merge branch** to include gen-N's PRs (and rebase it as anything has landed on master since the last update). Then spawn gen N+1 with `base: "<meta-merge-branch>"` so its worktree stacks on top of the still-open gen-N PRs. You don't need to wait for any gen-N PR to merge before proceeding.
 - **`agent-merge`**: Review the generation's code. Merge children's branches into the working branch. Verify the merge is clean.
 
 Do not spawn generation N+1 until generation N's code is integrated. When spawning gen N+1's generation tab, pass `base: "<merged-branch>"` to `spawn_tab` so its worktree (and all its children's worktrees) branch off the fully-merged state, not master.

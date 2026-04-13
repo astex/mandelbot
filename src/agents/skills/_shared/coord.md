@@ -33,7 +33,9 @@ Templates live at `<plugin-dir>/skills/_shared/index.template.md` and `child.tem
 
 Used in the `**State:**` header and as the leading word of log entries where applicable:
 
-`pending` · `in_progress` · `blocked` · `done` · `failed`
+`pending` · `in_progress` · `blocked` · `awaiting_review` · `done` · `failed`
+
+`awaiting_review` is only used in projects where humans review subtask PRs before they count as complete — see [The awaiting_review state](#the-awaiting_review-state) below.
 
 ## Log format
 
@@ -74,6 +76,22 @@ Escalation uses the same block/unblock handshake. When a child hits something be
 
 The child does not need to know who ultimately resolves the issue. It blocks, the parent handles it.
 
+## The awaiting_review state
+
+Used when a child has finished implementing and pushed its PR, but the project requires a human to review (and usually merge) the PR before the work counts as complete. The child stays alive as the "PR tab," handling review iterations until the PR is merged.
+
+Activation is project-wide and signaled by the parent in `index.md` under "How we work → Reviews" — for example: *"Reviews are human-in-the-loop: once your PR is open, set `awaiting_review` instead of `done` and stay alive for review feedback."* Children read this from `../index.md` and behave accordingly. If the index doesn't say so, children close on `done` as usual.
+
+The lifecycle:
+
+1. Implementation done, branch pushed, PR opened.
+2. Child appends `- [...] awaiting_review: <PR link>` and sets `**State:** awaiting_review`. **Does not close the tab.**
+3. Child returns control. The tab idles until the human prompts it.
+4. The child stays in `awaiting_review` for the entire review cycle, even while actively addressing review feedback and pushing changes — the parent doesn't need to know whether the agent is mid-edit or idle. **Do not append log entries during the review cycle** — every write to the coord file wakes the parent's watcher, and there's nothing for the parent to do. Stay quiet until the PR is settled.
+5. Once the PR is merged (the human will say so, or instruct the child to do the merge itself), the child appends `- [...] done`, sets `**State:** done`, and closes its tab. (This single write is the parent's signal that the child is fully settled.)
+
+The parent treats `awaiting_review` as terminal-for-its-purposes — the same bucket as `done` for "no further parent action needed right now." The parent's watcher will eventually see `done` when the PR merges. The parent does not append `[DIRECTIVE]` entries to push a review-staying-alive child along; review feedback flows through the tab's chat, not the coord file.
+
 ## The watcher
 
 A single-file watcher script lives at `<plugin-dir>/skills/_shared/watch.sh`. It blocks until the target file changes, prints its contents, then exits. **Always run it in the background** (`run_in_background: true`) so you're free to do other work while waiting.
@@ -97,6 +115,11 @@ After setting `**State:** done` (or `failed`), close your tab:
 ```
 close_tab(tab_id: <your own tab ID>)
 ```
+
+**Two exceptions:**
+
+- Children in `awaiting_review` stay alive — that's the whole point of the state. They close only when their PR merges.
+- A parent tab does **not** close itself if any of its descendants are still alive (e.g. children in `awaiting_review`). Closing a parent tab promotes one of its children to take its place, which disrupts the tab organization. Stay open and idle until your descendants have all settled.
 
 ## Sub-delegation
 
