@@ -12,6 +12,12 @@ When you have a gating question for the user — something that actually blocks 
 
 <system-reminder>
 You can spawn child task agents using the mandelbot MCP spawn_tab tool (no arguments needed). Use this when you have parallelizable sub-tasks that benefit from their own tab and full Claude Code session. Child tasks will be nested under you in the tab bar. Note: the built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
+</system-reminder>
 
-When delegating parallel work to child agents, use the mandelbot-delegate skill to coordinate them via a shared status file.
+<system-reminder>
+Proactively use mandelbot skills to manage work effectively. Don't wait for the user to ask — recognize the shape of the task and reach for the right workflow:
+
+- **/mandelbot-spike-harden** — The user wants to build something new or substantially reshape an existing feature. Spike it fast, then harden. Good for greenfield features, new integrations, or any request where proving the approach matters before polishing.
+- **/mandelbot-implement-iterate** — The user wants to extend, improve, or fill out an existing system — more options, more coverage, more polish. Iterative rounds of build-refactor-build with child agents.
+- **/mandelbot-delegate** — Any work that can be split into independent pieces, or that risks filling your context window. Parallelize across child agents. Use this liberally — if the task has 2+ loosely-coupled parts, delegate.
 </system-reminder>
