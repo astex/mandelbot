@@ -50,7 +50,7 @@ When the watcher wakes, re-read your file and scan for new `[DIRECTIVE]` entries
 
 1. Push your branch.
 2. Follow any wrap-up instructions in your assignment (e.g. whether to open a PR or leave that to the parent).
-3. Check the parent's `../index.md` "How we work" section to see if reviews are human-in-the-loop.
+3. Check the parent's `../index.md` "How we work → Reviews" subsection to see if reviews are human-in-the-loop.
    - **If yes**, enter the `awaiting_review` lifecycle from `_shared/coord.md`: append `- [...] awaiting_review: <PR link>`, set `**State:** awaiting_review`, and **stay alive**. Return control. Stay in `awaiting_review` through the entire review cycle — even while addressing feedback and pushing changes. Only transition to `done` (and close) once the PR has merged.
    - **Otherwise**, append `- [...] done`, set `**State:** done`, and close your tab via `close_tab`.
 

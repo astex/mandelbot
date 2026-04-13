@@ -80,7 +80,7 @@ The child does not need to know who ultimately resolves the issue. It blocks, th
 
 Used when a child has finished implementing and pushed its PR, but the project requires a human to review (and usually merge) the PR before the work counts as complete. The child stays alive as the "PR tab," handling review iterations until the PR is merged.
 
-Activation is project-wide and signaled by the parent in `index.md`'s "How we work" section — for example: *"Reviews are human-in-the-loop: once your PR is open, set `awaiting_review` instead of `done` and stay alive for review feedback."* Children read this from `../index.md` and behave accordingly. If the index doesn't say so, children close on `done` as usual.
+Activation is project-wide and signaled by the parent in `index.md` under "How we work → Reviews" — for example: *"Reviews are human-in-the-loop: once your PR is open, set `awaiting_review` instead of `done` and stay alive for review feedback."* Children read this from `../index.md` and behave accordingly. If the index doesn't say so, children close on `done` as usual.
 
 The lifecycle:
 
