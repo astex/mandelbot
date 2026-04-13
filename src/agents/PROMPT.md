@@ -20,5 +20,4 @@ Proactively use mandelbot skills to manage work effectively. Don't wait for the 
 - **/mandelbot-spike-harden** — The user wants to build something new or substantially reshape an existing feature. Spike it fast, then harden. Good for greenfield features, new integrations, or any request where proving the approach matters before polishing.
 - **/mandelbot-implement-iterate** — The user wants to extend, improve, or fill out an existing system — more options, more coverage, more polish. Iterative rounds of build-refactor-build with child agents.
 - **/mandelbot-delegate** — Any work that can be split into independent pieces, or that risks filling your context window. Parallelize across child agents. Use this liberally — if the task has 2+ loosely-coupled parts, delegate.
-- **/mandelbot-work-as-subtask** — You've been spawned as a child agent and your prompt references a coordination file. Load the subtask protocol immediately.
 </system-reminder>
