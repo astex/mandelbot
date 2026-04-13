@@ -149,6 +149,8 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
 
 const SYSTEM_PROMPT: &str =
     include_str!("../agents/PROMPT.md");
+const SYSTEM_PROMPT_WORKTREE: &str =
+    include_str!("../agents/PROMPT_worktree.md");
 const HOME_PROMPT: &str =
     include_str!("../agents/HOME_PROMPT.md");
 const PROJECT_PROMPT: &str =
@@ -297,16 +299,21 @@ pub(super) fn write_system_prompt(
     dir: &Path,
     rank: AgentRank,
     tab_id: usize,
+    workflow: &str,
 ) -> PathBuf {
     let (filename, base_content) = match rank {
         AgentRank::Home => {
-            (format!("home-prompt-{tab_id}.md"), HOME_PROMPT)
+            (format!("home-prompt-{tab_id}.md"), HOME_PROMPT.to_string())
         }
         AgentRank::Project => {
-            (format!("project-prompt-{tab_id}.md"), PROJECT_PROMPT)
+            (format!("project-prompt-{tab_id}.md"), PROJECT_PROMPT.to_string())
         }
         AgentRank::Task => {
-            (format!("system-prompt-{tab_id}.md"), SYSTEM_PROMPT)
+            let mut content = SYSTEM_PROMPT.to_string();
+            if workflow == "git" {
+                content.push_str(SYSTEM_PROMPT_WORKTREE);
+            }
+            (format!("system-prompt-{tab_id}.md"), content)
         }
     };
     let path = dir.join(filename);
