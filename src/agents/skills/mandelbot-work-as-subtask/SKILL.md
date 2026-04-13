@@ -19,15 +19,14 @@ Read `<plugin-dir>/skills/_shared/coord.md` for the protocol: directory layout, 
 
 ## Worktree and branch
 
-You are running in your own git worktree — an isolated copy of the repository. All repo changes happen inside this worktree. Do not `cd` out. You may also write to `/tmp`, `~/.mandelbot` (only your own coord file), and `~/.claude/plans/`.
+You are running in your own git worktree — an isolated copy of the repository. **All code changes happen inside this worktree. Do not `cd` to another worktree, the main repo, or any sibling's worktree.** Even if a coord file or plan references a path in another worktree, you work on the code *in your own worktree* — those paths are for reading coordination files, not for editing code.
 
-You own exactly one branch. Before any real work:
+You may write to:
+- Files inside your worktree (your code changes).
+- Your own `*.coord.md` (coordination log).
+- `/tmp` (scratch files).
 
-```bash
-git checkout -b <branch-name>   # or: git checkout -b <branch-name> <base>
-```
-
-All your commits go on this branch.
+You own exactly one branch — you are already on it when you start. All your commits go on this branch.
 
 ## Workflow
 

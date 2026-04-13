@@ -95,6 +95,10 @@ fn handle_tools_list(id: Value) -> Response {
                                 "type": "string",
                                 "description": "Model override for the spawned agent (e.g. 'sonnet', 'opus', 'haiku'). Defaults to the model configured for the agent's rank.",
                             },
+                            "base": {
+                                "type": "string",
+                                "description": "Base commit, branch, or ref for the new worktree's branch to start from. Defaults to HEAD of the project.",
+                            },
                         },
                     },
                 },
@@ -218,6 +222,9 @@ async fn handle_tools_call(
             let model = args
                 .and_then(|a| a.get("model"))
                 .and_then(|v| v.as_str());
+            let base = args
+                .and_then(|a| a.get("base"))
+                .and_then(|v| v.as_str());
 
             let mut msg = serde_json::json!({
                 "type": "spawn_tab",
@@ -237,6 +244,9 @@ async fn handle_tools_call(
             }
             if let Some(m) = model {
                 msg["model"] = Value::String(m.to_string());
+            }
+            if let Some(b) = base {
+                msg["base"] = Value::String(b.to_string());
             }
 
             if let Err(e) = send_to_parent(parent_writer, msg).await {

@@ -180,6 +180,7 @@ pub fn tab_stream(
                                     dir,
                                     &params.worktree_location,
                                     params.branch.as_deref(),
+                                    params.base.as_deref(),
                                 );
                             (script, Some(path))
                         } else {

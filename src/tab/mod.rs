@@ -89,6 +89,7 @@ pub struct TabSpawnParams {
     pub parent_socket: PathBuf,
     pub prompt: Option<String>,
     pub branch: Option<String>,
+    pub base: Option<String>,
     pub control_prefix: String,
 }
 

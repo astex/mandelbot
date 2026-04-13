@@ -44,6 +44,8 @@ For each child, call `spawn_tab` with a `branch` parameter and a prompt like:
 >
 > Your job: <one-line summary>.
 
+If your own worktree was branched off a specific base (i.e. the parent passed a `base` parameter when spawning you), pass the same `base` when spawning children so they start from the same integrated state.
+
 Do **not** pass a `model` parameter — children use the default (opus).
 
 ### 3. Watch children

@@ -102,7 +102,7 @@ Per the integration strategy decided in step 1:
 - **`human-review`**: Verify children's PRs exist. Create a merge PR combining all subtask branches for this generation. Wait for the human to merge it before proceeding.
 - **`agent-merge`**: Review the generation's code. Merge children's branches into the working branch. Verify the merge is clean.
 
-Do not spawn generation N+1 until generation N's code is integrated. Children working on stale code will produce conflicts and wasted work.
+Do not spawn generation N+1 until generation N's code is integrated. When spawning gen N+1's generation tab, pass `base: "<merged-branch>"` to `spawn_tab` so its worktree (and all its children's worktrees) branch off the fully-merged state, not master.
 
 ### 7. User checkpoint (if human-in-the-loop)
 
