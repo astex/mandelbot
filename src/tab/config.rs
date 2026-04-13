@@ -123,6 +123,12 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
             "PostToolUseFailure": [{
                 "hooks": [set_status("working")],
             }],
+            "PreCompact": [{
+                "hooks": [set_status("compacting")],
+            }],
+            "PostCompact": [{
+                "hooks": [set_status("idle")],
+            }],
             "Stop": [{
                 "hooks": [set_status("idle")],
             }],
