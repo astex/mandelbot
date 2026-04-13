@@ -8,6 +8,8 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, 
 
 An iterative loop built on top of `mandelbot-delegate`. The parent spawns one **generation tab** per round, which manages its own implementation children. When the generation finishes, the generation tab writes a summary with collected ideas. The parent reads the summary, optionally checks in with the user, and spawns the next generation acting on the best ideas. Repeat until an exit condition is met.
 
+**This project uses git-based VCS isolation.** Each child agent runs in its own worktree on its own branch. Children do not conflict with each other's files — they have full copies of the repo.
+
 Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol. This file covers the parent's perspective: framing the run, the generation cycle, iteration modes, integration strategies, and exit conditions.
 
 ## When to use
@@ -58,18 +60,20 @@ Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
 
 Spawn ONE generation tab using `spawn_tab` with `model: "sonnet"` (the generation tab is a coordinator, not an implementer) and a `branch` parameter. Write a `gen-<N>.coord.md` from `child.template.md` before spawning. The assignment should include:
 
-- The **task list** for this generation — what implementation children to create, with detailed assignments for each.
+- The **goals for this generation** — what needs to happen, described at the level of outcomes, not implementation steps. The generation tab and its children own the implementation details. You own the broad strokes and "how we work."
 - Any **ideas harvested from prior generations** that this generation should act on.
 - The **generation number**.
 - The **integration strategy** (so children know whether to open PRs, etc.).
 - Reference to `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol.
 - Reference to the governing plan.
 
+**Do not write detailed assignments for individual children.** The generation tab reads the governing plan and decides how to split the work. You describe *what* needs to happen; the generation tab decides *who does what* and *how*.
+
 Prompt:
 
 > Start by reading `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol. You are a generation tab in the "<project>" iterate run. Your coordination file is at `<absolute path to gen-<N>.coord.md>` — read it first, then read the governing plan at `<path>` in full.
 >
-> You manage generation <N>. Create implementation children from the task list in your assignment, watch them, collect ideas, and write a summary when done.
+> You manage generation <N>. Read the goals in your assignment, break them into implementation tasks, spawn children, watch them, collect ideas, and write a summary when done.
 
 ### 4. Watch generation N
 

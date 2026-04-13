@@ -176,6 +176,8 @@ const SKILL_MANDELBOT_IMPLEMENT_ITERATE: &str =
     include_str!("../agents/skills/mandelbot-implement-iterate/SKILL.md");
 const SKILL_MANDELBOT_IMPLEMENT_ITERATE_NOGIT: &str =
     include_str!("../agents/skills/mandelbot-implement-iterate/SKILL.nogit.md");
+const SKILL_MANDELBOT_IMPLEMENT_ITERATE_GENERATION: &str =
+    include_str!("../agents/skills/mandelbot-implement-iterate/GENERATION.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -438,10 +440,13 @@ pub(super) fn write_plugin_dir(
         SKILL_MANDELBOT_IMPLEMENT_ITERATE_NOGIT
     };
     let skill_path = implement_iterate_dir.join("SKILL.md");
-    if !skill_path.exists() {
-        std::fs::write(&skill_path, iterate_content)
-            .expect("failed to write mandelbot-implement-iterate skill");
-    }
+    std::fs::write(&skill_path, iterate_content)
+        .expect("failed to write mandelbot-implement-iterate skill");
+    std::fs::write(
+        implement_iterate_dir.join("GENERATION.md"),
+        SKILL_MANDELBOT_IMPLEMENT_ITERATE_GENERATION,
+    )
+    .expect("failed to write mandelbot-implement-iterate generation protocol");
 
     plugin_dir
 }

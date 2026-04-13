@@ -55,18 +55,20 @@ Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
 
 Spawn ONE generation tab using `spawn_tab` with `model: "sonnet"` (the generation tab is a coordinator, not an implementer). Write a `gen-<N>.coord.md` from `child.template.md` before spawning. The assignment should include:
 
-- The **task list** for this generation — what implementation children to create, with detailed assignments for each. Include file-ownership boundaries for each child.
+- The **goals for this generation** — what needs to happen, described at the level of outcomes, not implementation steps. The generation tab and its children own the implementation details. You own the broad strokes and "how we work."
 - Any **ideas harvested from prior generations** that this generation should act on.
 - The **generation number**.
-- A note that the integration strategy is `no-git` — all children share the working directory.
+- A note that the integration strategy is `no-git` — all children share the working directory, so file-ownership boundaries are critical.
 - Reference to `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol.
 - Reference to the governing plan.
+
+**Do not write detailed assignments for individual children.** The generation tab reads the governing plan and decides how to split the work. You describe *what* needs to happen; the generation tab decides *who does what* and *how*.
 
 Prompt:
 
 > Start by reading `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol. You are a generation tab in the "<project>" iterate run. Your coordination file is at `<absolute path to gen-<N>.coord.md>` — read it first, then read the governing plan at `<path>` in full.
 >
-> You manage generation <N>. Create implementation children from the task list in your assignment, watch them, collect ideas, and write a summary when done.
+> You manage generation <N>. Read the goals in your assignment, break them into implementation tasks, spawn children, watch them, collect ideas, and write a summary when done.
 
 ### 4. Watch generation N
 

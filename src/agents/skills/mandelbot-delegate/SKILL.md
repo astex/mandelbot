@@ -8,6 +8,8 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, 
 
 Use this skill to break parallelizable work into subtasks, spawn a child agent for each, and monitor their progress — all via a shared `*.coord/` coordination directory.
 
+**This project uses git-based VCS isolation.** Each child agent runs in its own worktree on its own branch. Children do not conflict with each other's files.
+
 You are the **parent**. Read `<plugin-dir>/skills/_shared/coord.md` for the protocol: directory layout, ownership rules, state vocabulary, log format, `[DIRECTIVE]` marker, block/unblock handshake, watcher usage, tab lifecycle, and sub-delegation. This SKILL file only covers the parent-specific workflow; everything else lives in the shared doc.
 
 ## Workflow
