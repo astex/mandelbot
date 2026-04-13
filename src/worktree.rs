@@ -60,6 +60,7 @@ pub fn setup_script(
     project_dir: &Path,
     worktree_location: &str,
     branch: Option<&str>,
+    base: Option<&str>,
 ) -> (String, PathBuf) {
     let name = worktree_name(branch);
     let wt_path = self::worktree_path(project_dir, worktree_location, &name);
@@ -67,11 +68,16 @@ pub fn setup_script(
     let dir_str = project_dir.to_string_lossy();
 
     let git_add = if branch.is_some_and(|b| !b.is_empty()) {
-        format!(
+        let mut cmd = format!(
             "git worktree add -b {} {}",
             shell_quote(&name),
             shell_quote(&wt_str),
-        )
+        );
+        if let Some(b) = base {
+            cmd.push(' ');
+            cmd.push_str(&shell_quote(b));
+        }
+        cmd
     } else {
         format!("git worktree add -d {}", shell_quote(&wt_str))
     };
