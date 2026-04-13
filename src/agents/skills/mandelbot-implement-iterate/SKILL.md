@@ -41,9 +41,9 @@ The integration strategy stays fixed across all generations.
 
 **Exit condition** — when to stop (see [Exit conditions](#exit-conditions)).
 
-**`max_generations`** safety cap (default 5) — prevents runaway loops.
+**`max_generations`** safety cap (default 5) — prevents runaway loops when running autonomously. Not needed in `human-in-the-loop` mode — the human decides when to stop.
 
-Write (or reuse) a plan file. Record the iteration mode, integration strategy, exit condition, and max_generations in the plan.
+Write (or reuse) a plan file. Record the iteration mode, integration strategy, exit condition, and max_generations (if applicable) in the plan.
 
 ### 2. Create the coordination directory
 
@@ -125,7 +125,7 @@ Otherwise, pick ideas from the harvest (incorporating user input if applicable) 
 Beyond the parent-defined exit condition, the loop also stops if:
 
 - **All children in a generation failed.** Escalate to the user rather than spawning on top of a broken base.
-- **`max_generations` reached.** Prevents runaway loops when the exit condition is soft.
+- **`max_generations` reached** (autonomous/fixed-count modes only). Prevents runaway loops when the exit condition is soft. Does not apply in `human-in-the-loop` mode.
 
 ### Wrapping up
 
