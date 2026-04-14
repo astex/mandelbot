@@ -33,10 +33,7 @@ Create a `*.coord/` directory as in `mandelbot-delegate`. Write `index.md` with:
 
 - The task, verbatim.
 - The round cap.
-
-List one persistent child in `index.md` — `builder` — plus a note that per-round breakers (`breaker-1`, `breaker-2`, ...) are spawned and closed round by round. Update the children list as breakers come and go.
-
-The parent relays all cross-role context through the children's logs — there is no shared doc. See "Exchange" below.
+- A short note in `## How we work` explaining the two roles: one persistent `builder`, and `breaker-1`, `breaker-2`, ... spawned one per round. The parent relays all cross-role context through the children's logs — there is no shared doc. See "Exchange" below.
 
 Spawn the builder once, up front, on a fresh branch off master. The builder tab stays alive for the whole run; the parent drives it via the block/unblock handshake rather than respawning.
 
