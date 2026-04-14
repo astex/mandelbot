@@ -25,6 +25,15 @@ Don't use when the work is straightforward CRUD, UI polish, or anything where "c
 
 That's it. Everything else is defaulted.
 
+## Task shapes
+
+Two shapes work:
+
+- **Build and harden.** The task is "implement X to spec." Round 1 the builder implements from scratch; subsequent rounds fix breaker-reported failures.
+- **Probe and harden.** The task is "find and fix bugs in existing code at `<path>`" — e.g. "probe our <api> for security holes," "shake out the <parser> at `<path>`." Round 1 the builder is a no-op: it spawns on a fresh branch pointing at the existing code, pushes, writes a `## Handoff — Round 1` noting "baseline, no changes," and blocks. The breaker probes the existing code and the loop continues identically from round 2 on.
+
+Same loop in both cases; only round 1's builder behaviour differs. State the shape in the task description so the builder knows which it is.
+
 ## Flow
 
 ### 1. Frame the run
