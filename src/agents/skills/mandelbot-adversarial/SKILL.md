@@ -55,7 +55,7 @@ Spawn the builder with `base: <base branch>` and wait via `watch.sh`.
 Then write `breaker-<N>.coord.md`. The assignment includes:
 
 - The task (verbatim).
-- The builder's branch name, which the breaker will check out.
+- The builder's branch name, used as the base — the breaker's worktree is created on a fresh branch off it, so the builder's code is already in the tree.
 - Instruction to write failing tests — not to patch the code. The breaker produces tests, the builder produces code. Keep the roles separate.
 - Instruction to write a `## Verdict` section in its coord file on completion. Format below.
 - The base branch: the builder's branch from this round.
@@ -96,7 +96,7 @@ Known gaps: <anything the builder is aware of but didn't address — e.g. "does 
 
 ## Breaker's role
 
-Receives: the task, the builder's branch. Checks out the branch into its worktree.
+Receives: the task, the builder's branch as the worktree base (mandelbot creates a fresh `breaker-N` branch off it, so the builder's code is already present — no dual checkout).
 
 Produces: failing tests, committed on its own branch (branched from the builder's). Does not modify the builder's code. If the breaker cannot find anything to break after genuinely trying across the categories relevant to the task, it reports `clean` — with enumerated categories so the parent can judge the honesty of the attempt.
 
