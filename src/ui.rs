@@ -41,15 +41,6 @@ pub enum PendingKey {
     Cancel,
 }
 
-/// Distinguishes the two time-travel flows that share `do_time_travel`.
-/// The difference today is cosmetic (branch name prefix) — PR-3 is where
-/// `Replace` diverges substantively to preserve tab identity in place.
-#[derive(Clone, Copy)]
-enum TimeTravelMode {
-    Replace,
-    Fork,
-}
-
 #[derive(Clone)]
 pub enum DisplayEntry {
     Tab(usize),
@@ -1157,20 +1148,96 @@ impl App {
         }))
     }
 
-    /// Rewind this tab to a prior checkpoint.
+    /// Rewind this tab to a prior checkpoint, in place.
     ///
-    /// Semantics (stable from PR-1 onward): the tab's identity is preserved
-    /// across `replace`. The implementation here still spawns a sibling and
-    /// expects the caller to close itself — that's a PR-1 carryover from
-    /// the spike. PR-3 replaces this with a real in-place PTY restart.
+    /// Preserves the tab's numeric ID, parent/child links, depth, title,
+    /// checkpoint list, and event channel — only the underlying claude
+    /// process + the tab's current session UUID change. The tab thread
+    /// handles the actual PTY teardown and respawn (see
+    /// `TabEvent::RestartClaude` in `tab/stream.rs`).
     fn handle_replace(&mut self, tab_id: usize, ckpt_id: usize) -> Task<Message> {
-        match self.do_time_travel(tab_id, ckpt_id, None, TimeTravelMode::Replace) {
-            Ok(task) => task,
+        match self.do_replace(tab_id, ckpt_id) {
+            Ok(()) => {}
             Err(e) => {
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
-                Task::none()
             }
         }
+        Task::none()
+    }
+
+    fn do_replace(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: usize,
+    ) -> Result<(), checkpoint::TimeTravelError> {
+        use checkpoint::TimeTravelError as E;
+
+        let tab = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        if tab.rank == AgentRank::Home {
+            return Err(E::NotSupportedForRank(tab.rank));
+        }
+        let ckpt = tab
+            .checkpoints
+            .iter()
+            .find(|c| c.id == ckpt_id)
+            .cloned()
+            .ok_or(E::CheckpointNotFound(ckpt_id))?;
+        let worktree = tab.worktree_dir.clone().ok_or(E::NoWorktree)?;
+
+        // Guard: refuse to replace a tab that still has descendants.
+        // Cascade across sub-delegated children is deliberately out of
+        // scope for PR-3 — hardened in a later pass.
+        let children: Vec<usize> = self
+            .tabs
+            .iter()
+            .filter(|t| t.parent_id == Some(tab_id))
+            .map(|t| t.id)
+            .collect();
+        if !children.is_empty() {
+            return Err(E::HasChildren { tab_id, children });
+        }
+
+        // 1. Mint a fresh session UUID and copy-truncate the canonical
+        //    JSONL to it. The canonical file is never touched.
+        let new_session = checkpoint::fresh_session_id_for(tab_id);
+        let src_jsonl = checkpoint::jsonl_path_for(&worktree, &ckpt.session_id);
+        let dst_jsonl = checkpoint::jsonl_path_for(&worktree, &new_session);
+        checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
+            .map_err(E::JsonlCopyFailed)?;
+
+        // 2. Rewind the worktree file state to the checkpoint commit.
+        checkpoint::rewind_worktree(&worktree, &ckpt.shadow_commit).map_err(E::GitFailed)?;
+
+        // 3. Ask the tab thread to kill claude and respawn with --resume.
+        let tab = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        if !tab.restart_claude(new_session.clone(), worktree.clone()) {
+            return Err(E::PtyRestartFailed(
+                "tab event channel closed".into(),
+            ));
+        }
+
+        // 4. Update session_id now so subsequent checkpoints on this tab
+        //    reference the new session. (TabReady from the restarted PTY
+        //    will redundantly set the same value — harmless.)
+        tab.session_id = Some(new_session);
+
+        self.respond_to_tab(
+            tab_id,
+            serde_json::json!({
+                "tab_id": tab_id,
+                "checkpoint_id": ckpt_id,
+                "shadow_commit": ckpt.shadow_commit,
+            }),
+        );
+        Ok(())
     }
 
     fn handle_fork(
@@ -1179,7 +1246,7 @@ impl App {
         ckpt_id: usize,
         prompt: Option<String>,
     ) -> Task<Message> {
-        match self.do_time_travel(tab_id, ckpt_id, prompt, TimeTravelMode::Fork) {
+        match self.do_fork(tab_id, ckpt_id, prompt) {
             Ok(task) => task,
             Err(e) => {
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
@@ -1188,12 +1255,11 @@ impl App {
         }
     }
 
-    fn do_time_travel(
+    fn do_fork(
         &mut self,
         tab_id: usize,
         ckpt_id: usize,
         prompt: Option<String>,
-        mode: TimeTravelMode,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
@@ -1213,12 +1279,8 @@ impl App {
         let rank = tab.rank;
         let src_worktree = tab.worktree_dir.clone();
 
-        let branch_prefix = match mode {
-            TimeTravelMode::Replace => "replace",
-            TimeTravelMode::Fork => "fork",
-        };
         let new_branch = format!(
-            "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}",
+            "fork-t{tab_id}-c{ckpt_id}-{}",
             &ckpt.shadow_commit[..8],
         );
         let wt_path = crate::worktree::worktree_path(

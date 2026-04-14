@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::test::TermSize;
@@ -20,6 +21,82 @@ use super::{
 use crate::pty;
 use crate::ui::Message;
 use crate::worktree;
+
+/// Spawn a detached reader thread that forwards PTY bytes to the main
+/// event loop until EOF.
+fn spawn_reader_thread(
+    mut reader: Box<dyn Read + Send>,
+    tx: mpsc::Sender<TabEvent>,
+) {
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => {
+                    let _ = tx.send(TabEvent::PtyEof);
+                    break;
+                }
+                Ok(n) => {
+                    let _ = tx.send(TabEvent::PtyData(
+                        buf[..n].to_vec(),
+                    ));
+                }
+            }
+        }
+    });
+}
+
+/// SIGTERM the child, wait up to 1.5s, then SIGKILL and reap.
+fn kill_child(child: &mut dyn portable_pty::Child) {
+    let pid = child.process_id();
+    if let Some(pid) = pid {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+        let deadline =
+            Instant::now() + Duration::from_millis(1500);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+    } else {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+/// Build the wrapped shell command for an in-place claude restart.
+/// The worktree already exists (we're replacing in place); we just
+/// mirror settings from the project root and cd into it, then exec
+/// `claude <base_args> --resume <resume_session_id>`.
+fn build_restart_cmd(
+    project_dir: Option<&Path>,
+    worktree_path: &Path,
+    claude_args_base: &str,
+    resume_session_id: &str,
+) -> String {
+    let wt_str = worktree_path.to_string_lossy();
+    let copy = project_dir
+        .map(|dir| worktree::copy_settings_snippet(dir, worktree_path))
+        .unwrap_or_default();
+    let setup = if copy.is_empty() {
+        format!("cd {}", pty::shell_quote(&wt_str))
+    } else {
+        format!("{copy} && cd {}", pty::shell_quote(&wt_str))
+    };
+    let resumed = format!(
+        "{claude_args_base} --resume {}",
+        pty::shell_quote(resume_session_id),
+    );
+    format!("{setup} && exec {resumed}")
+}
 
 /// Read status updates from a FIFO and emit `SetStatus` messages.
 /// Opens the FIFO with O_RDWR to avoid EOF when writers close.
@@ -163,6 +240,11 @@ pub fn tab_stream(
                 let mut env: HashMap<String, String>;
                 let cwd: Option<PathBuf>;
                 let worktree_dir: Option<PathBuf>;
+                // Saved for an in-place PTY restart (PR-3 replace flow).
+                // `claude_args_base` holds everything up through --add-dir,
+                // i.e. the part that doesn't change between the initial
+                // spawn and a later --resume.
+                let mut claude_args_base: String = String::new();
 
                 if is_claude {
                     let shell_parts: Vec<&str> =
@@ -232,6 +314,9 @@ pub fn tab_stream(
                             &mandelbot_dir.to_string_lossy()
                         ),
                     ));
+                    // Snapshot the invocation up to this point so restart
+                    // can reuse it with a fresh --resume.
+                    claude_args_base = claude_args.clone();
                     // SPIKE: pin session-id or resume for time-travel.
                     if let Some(sid) = params.resume_session_id.as_deref() {
                         claude_args.push_str(&format!(
@@ -338,6 +423,9 @@ pub fn tab_stream(
 
                 let args_refs: Vec<&str> =
                     args_owned.iter().map(|s| s.as_str()).collect();
+                // Env saved so restart can reuse it verbatim (same
+                // MANDELBOT_TAB_ID, parent socket, fifo).
+                let base_env = env.clone();
                 let shell_config = pty::ShellConfig {
                     command: &command,
                     args: &args_refs,
@@ -347,7 +435,7 @@ pub fn tab_stream(
                     cols: params.cols as u16,
                 };
 
-                let (master, mut child) =
+                let (mut master, mut child) =
                     pty::spawn_shell(&shell_config)
                         .expect("failed to spawn PTY");
                 let reader = master
@@ -358,27 +446,7 @@ pub fn tab_stream(
                     .expect("failed to take writer");
 
                 // --- Spawn PTY reader thread ---
-                std::thread::spawn(move || {
-                    let mut reader = reader;
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        match reader.read(&mut buf) {
-                            Ok(0) | Err(_) => {
-                                let _ = pty_event_tx
-                                    .send(TabEvent::PtyEof);
-                                break;
-                            }
-                            Ok(n) => {
-                                let _ =
-                                    pty_event_tx.send(
-                                        TabEvent::PtyData(
-                                            buf[..n].to_vec(),
-                                        ),
-                                    );
-                            }
-                        }
-                    }
-                });
+                spawn_reader_thread(reader, pty_event_tx.clone());
 
                 // --- Main event loop ---
                 let mut parser =
@@ -525,6 +593,110 @@ pub fn tab_stream(
                                         ),
                                     ),
                                 );
+                        }
+                        Ok(TabEvent::RestartClaude {
+                            resume_session_id,
+                            worktree_path,
+                        }) => {
+                            if !is_claude {
+                                continue;
+                            }
+                            // 1. Terminate the running claude — SIGTERM,
+                            //    then SIGKILL after a short bounded wait.
+                            //    Reaping the child closes its slave fd,
+                            //    which lets the reader thread EOF.
+                            kill_child(&mut *child);
+
+                            // 2. Drain pending PTY events until EOF so
+                            //    stale bytes from the dead process don't
+                            //    leak into the new session's terminal.
+                            loop {
+                                match event_rx.recv() {
+                                    Ok(TabEvent::PtyEof)
+                                    | Err(_) => break,
+                                    _ => continue,
+                                }
+                            }
+
+                            // 4. Rebuild the wrapped command for --resume.
+                            let rows_now = term
+                                .lock()
+                                .unwrap()
+                                .screen_lines();
+                            let wrapped = build_restart_cmd(
+                                project_dir.as_deref(),
+                                &worktree_path,
+                                &claude_args_base,
+                                &resume_session_id,
+                            );
+                            let args_owned2: Vec<String> = vec![
+                                "-l".into(),
+                                "-i".into(),
+                                "-c".into(),
+                                wrapped,
+                            ];
+                            let args_refs2: Vec<&str> =
+                                args_owned2
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect();
+                            let shell_config =
+                                pty::ShellConfig {
+                                    command: &command,
+                                    args: &args_refs2,
+                                    env: base_env.clone(),
+                                    cwd: project_dir.as_deref(),
+                                    rows: rows_now as u16,
+                                    cols: pty_cols as u16,
+                                };
+                            let (new_master, new_child) =
+                                match pty::spawn_shell(
+                                    &shell_config,
+                                ) {
+                                    Ok(pair) => pair,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "restart spawn failed: {e}"
+                                        );
+                                        pty_alive = false;
+                                        continue;
+                                    }
+                                };
+                            let new_reader = new_master
+                                .try_clone_reader()
+                                .expect(
+                                    "failed to clone reader",
+                                );
+                            master = new_master;
+                            writer = master
+                                .take_writer()
+                                .expect(
+                                    "failed to take writer",
+                                );
+                            child = new_child;
+                            pty_alive = true;
+                            bg_tasks = 0;
+                            pr_number = None;
+                            parser = ansi::Processor::<
+                                ansi::StdSyncHandler,
+                            >::new();
+
+                            spawn_reader_thread(
+                                new_reader,
+                                pty_event_tx.clone(),
+                            );
+
+                            let _ = futures::executor::block_on(
+                                sender.send(Message::TabReady {
+                                    tab_id: id,
+                                    worktree_dir: Some(
+                                        worktree_path,
+                                    ),
+                                    session_id: Some(
+                                        resume_session_id,
+                                    ),
+                                }),
+                            );
                         }
                         Ok(TabEvent::Shutdown) | Err(_) => {
                             if let Some(wt) = &worktree_dir {

@@ -74,6 +74,13 @@ pub enum TabEvent {
     ScrollTo(usize),
     SetSelection(Option<Selection>),
     UpdateSelection(Point, Side),
+    /// Kill the current PTY child and respawn `claude --resume <uuid>` in the
+    /// given worktree. Preserves the tab's ID, terminal state plumbing, and
+    /// event channel — only the underlying process changes.
+    RestartClaude {
+        resume_session_id: String,
+        worktree_path: PathBuf,
+    },
     Shutdown,
 }
 
@@ -275,6 +282,25 @@ impl TerminalTab {
     pub fn write_input(&self, bytes: &[u8]) {
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(TabEvent::Input(bytes.to_vec()));
+        }
+    }
+
+    /// Trigger an in-place PTY restart on this tab, respawning claude with
+    /// `--resume <resume_session_id>` in `worktree_path`. Returns `false` if
+    /// the tab thread channel is gone.
+    pub fn restart_claude(
+        &self,
+        resume_session_id: String,
+        worktree_path: PathBuf,
+    ) -> bool {
+        if let Some(tx) = &self.event_tx {
+            tx.send(TabEvent::RestartClaude {
+                resume_session_id,
+                worktree_path,
+            })
+            .is_ok()
+        } else {
+            false
         }
     }
 
