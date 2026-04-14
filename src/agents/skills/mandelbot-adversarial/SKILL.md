@@ -1,0 +1,160 @@
+---
+name: mandelbot-adversarial
+description: Use this skill when correctness is adversarial — a persistent builder agent writes code while fresh breaker agents each round probe it and report what's broken, looping until the breaker reports clean or a round cap is hit. Good fit for algorithm-heavy, parser, or security-adjacent work where "what could go wrong" is the real risk and a single implementer is likely to miss cases.
+allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab]
+---
+
+# Adversarial loop
+
+A two-role game built on top of `mandelbot-delegate`. A single **builder** child, persistent across rounds, writes code on one branch. Each round, a fresh ephemeral **breaker** child spawns on the builder's current branch tip, probes the code, and reports what's broken in prose. The builder reads the report, writes tests that capture the failures, fixes the code, and blocks again. One branch accumulates the whole run; when the loop ends, the parent takes over and does whatever its own prompting dictates (open a PR, chain into another skill, escalate further up).
+
+Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelbot-delegate`'s SKILL.md for the parent workflow. This file covers only what's specific to the adversarial loop.
+
+## When to use
+
+- The work has adversarial surface area: edge cases, malformed input, concurrency, invariants under load. A single implementer will miss cases a second set of eyes would catch.
+- Eventual correctness is the point, not speed. Adversarial rounds are not cheap.
+- You can state the task precisely enough that a breaker knows what "break it" means. Vague tasks produce vague breaking.
+
+Don't use when the work is straightforward CRUD, UI polish, or anything where "correctness" is mostly a function of taste rather than behaviour. Don't use when a single test suite written up front would catch everything — just write the tests.
+
+## Knobs
+
+- **task** — the task description (required). Must be concrete enough that both roles know when the code meets the spec.
+- **round_cap** — max rounds before the parent declares a partial win (default 3). One round = builder builds or fixes, then a breaker probes.
+
+That's it. Everything else is defaulted.
+
+## Task shapes
+
+Two shapes work:
+
+- **Build and harden.** The task is "implement X to spec." Round 1 the builder implements from scratch; subsequent rounds fix breaker-reported failures.
+- **Probe and harden.** The task is "find and fix bugs in existing code at `<path>`" — e.g. "probe our <api> for security holes," "shake out the <parser> at `<path>`." Round 1 the builder is a no-op: it spawns on a fresh branch pointing at the existing code, pushes, and blocks with a log entry noting "baseline, no changes." The breaker probes the existing code and the loop continues identically from round 2 on.
+
+Same loop in both cases; only round 1's builder behaviour differs. State the shape in the task description so the builder knows which it is.
+
+## Flow
+
+### 1. Frame the run
+
+Create a `*.coord/` directory as in `mandelbot-delegate`. Write `index.md` with:
+
+- The task, verbatim.
+- The round cap.
+- A short note in `## How we work` explaining the two roles: one persistent `builder`, and `breaker-1`, `breaker-2`, ... spawned one per round. The parent relays all cross-role context through the children's logs — there is no shared doc. See "Exchange" below.
+
+Spawn the builder once, up front, on a fresh branch off master. The builder tab stays alive for the whole run; the parent drives it via the block/unblock handshake rather than respawning.
+
+### 2. Round N
+
+One round = one builder action, then one breaker probe. The builder is the same tab every round; the breaker is a new tab every round.
+
+**Builder phase.**
+
+- **Round 1:** the builder implements the task from scratch on its branch, pushes, and blocks with a log entry summarizing what it did: `- [...] blocked: round 1 complete — <one-line summary of what was built>. Known gaps: <...>. Awaiting breaker.`
+- **Round N > 1:** the builder is already blocked from round N-1. The parent appends a `[DIRECTIVE]` with the breaker's verdict — the list of reported failures with inputs, expected, actual. The builder unblocks, writes a regression test for each reported failure, confirms each fails against the current code, fixes the production code, commits (tests and fix — one commit or two, builder's call), pushes, and blocks again with a fresh log entry summarizing round N's changes and any known gaps.
+
+**Breaker phase.** When the builder blocks, spawn a fresh breaker tab (`breaker-<N>`) with its worktree based on the builder's current branch tip. The breaker's assignment in its coord file includes, for N > 1, a prior-round summary the parent has compiled from earlier builder handoffs and breaker verdicts — categories already probed, what came back `clean`, what changed since. For N = 1, no prior context is needed.
+
+The breaker probes the builder's code — runs the existing tests, feeds adversarial inputs to exposed APIs, reads the source for invariant violations, writes throwaway scratch scripts in the worktree to experiment. It does not commit anything; its branch and worktree go away when its tab closes. None of this work is handed over — it's just how the breaker investigates.
+
+Output is its `## Verdict` section, in prose, detailed enough that the builder can reproduce each failure without asking. It sets `**State:** done` and closes its tab.
+
+### 3. Evaluate
+
+Read the breaker's `## Verdict`.
+
+- **Verdict `clean`** — fixpoint. Go to step 4 with outcome "clean". Append a final `[DIRECTIVE] done, close when ready` to the builder and let it finish.
+- **Verdict `failing`** and N < round_cap — append `[DIRECTIVE]` to the builder with the failure list (inputs, expected, actual) and instructions to write regression tests, fix, and push. Loop to step 2 with N+1.
+- **Verdict `failing`** and N == round_cap — go to step 4 with outcome "partial".
+- **Verdict `failed`** (the breaker itself couldn't complete) — escalate; treat as a broken round.
+
+### 4. Declare outcome
+
+The final builder push is the handoff: one branch, back to the parent. The adversarial loop does not prescribe what happens next — opening a PR, feeding the branch into another skill, escalating to the parent's own parent or user — that's determined by the parent's own prompting.
+
+On the way out, the parent notes:
+
+- **Clean.** The branch, the round count, and the categories the breaker enumerated as attempted-and-clean.
+- **Partial.** The branch plus the still-outstanding failures from the last verdict. Flag that fixpoint was not reached; do not paper this over as clean.
+
+Either way, close any remaining child tabs and return control to the parent's prompt.
+
+## Builder's role
+
+Persistent across rounds. Receives the task up front; on round 1, implements from scratch on its branch. On round N > 1, each round begins when the parent appends a `[DIRECTIVE]` listing the breaker's reported failures. The builder:
+
+1. For each reported failure, writes a regression test (unit, integration, or property — whatever matches the existing suite's style) that captures the described input and expected behaviour.
+2. Runs the new tests to confirm they fail against current code. If a test passes unexpectedly, something in the report didn't reproduce — block and let the parent adjudicate.
+3. Fixes the production code until all new tests pass and the existing suite still passes.
+4. Commits and pushes.
+5. Blocks with a log entry summarizing the round: `- [...] blocked: round N complete — <what I changed, one line>. Known gaps: <anything not addressed, e.g. "does not handle UTF-16 input, task didn't require it">. Awaiting breaker.`
+
+If a reported failure contradicts the spec (tests an invariant the task does not require), block with `blocked: breaker-<N> failure X contradicts spec because ...` and let the parent adjudicate — do not silently drop it.
+
+The branch name is set once at spawn and recorded in `index.md`. It does not change across rounds.
+
+## Breaker's role
+
+Ephemeral — one breaker tab per round. Spawned with its worktree based on the builder's current branch tip. Does not commit anything; the worktree and its branch are thrown away when the tab closes.
+
+Produces: a prose `## Verdict` section in its coord file. Does not write tests into the suite, does not modify the builder's code, does not commit, does not push. The worktree is a scratchpad for probing — run existing tests, poke at APIs from a REPL or ad-hoc script, read the source, fuzz inputs. Throwaway scripts can live in the worktree for the duration of the run; they go away with the tab.
+
+If the breaker cannot find anything to break after genuinely trying across the categories relevant to the task, it reports `clean` — with enumerated categories so the parent can judge the honesty of the attempt.
+
+`## Verdict` format in the breaker's coord file:
+
+```markdown
+## Verdict
+
+Result: failing | clean
+
+Categories attempted:
+- <category>: <failing | clean> — <what I tried>
+- ...
+
+Failures (if any):
+- <short label>
+  Category: <category>
+  Input: <concrete input — literal bytes, structured value, or precisely described sequence>
+  Expected: <what the task/spec says should happen>
+  Actual: <what the code actually does — error message, returned value, hang, crash>
+  Reproducer: <one-line instruction, e.g. "parse('<<<<') from an empty registry">
+- ...
+```
+
+Categories are task-dependent — for a parser: malformed input, unicode, size limits, nesting depth; for a cache: eviction, concurrency, TTL boundaries; etc. The breaker enumerates what's relevant. A `clean` verdict with zero categories is a `failed` round in disguise — the parent should treat it as such.
+
+Each failure must be concrete enough for the builder to reproduce without follow-up questions. "Something breaks with big inputs" is not a failure; "parse() returns `Ok` on a 1MB string of `<` when the spec says it should reject inputs over 64KB" is.
+
+## Exchange: how the two roles see each other's work
+
+Children never read each other's coord files, and there is no shared doc. The parent is the relay.
+
+1. **The builder's branch is the substrate.** The breaker's worktree is based on the builder's current tip — everything it sees of the builder is the working tree at that commit. Code is the ground truth.
+2. **Verdicts are prose, not code.** The breaker hands back a description of what's broken; the builder writes the regression tests itself. The builder's branch is the only branch at the end of the run, and it contains only code the builder wrote.
+3. **The parent relays context through the children's logs.** When spawning `breaker-<N>` for N > 1, the parent composes a prior-round summary into the breaker's initial coord-file assignment (earlier verdicts, categories already probed, what's changed since). When handing a new verdict back to the builder, the parent appends a `[DIRECTIVE]` into the builder's log with the failure list. Each child only ever reads its own coord file and `../index.md`.
+4. **The breaker's `## Verdict` section** lives in its own coord file for the parent to read and compose into the next relay. The builder has no equivalent heavyweight section — its per-round summary goes into the block log entry alongside the state change.
+
+## Fixpoint
+
+Fixpoint = a breaker reports `clean` with a non-empty, on-topic category list. The parent treats this as terminal success. Sanity-check the category list against the task before declaring victory: a parser task with no "malformed input" category is a suspect `clean` and warrants a `[DIRECTIVE]` asking the breaker to try harder, or respawning with a broader category hint.
+
+## Round cap
+
+Default 3. When hit with an outstanding `failing` verdict, the outcome is `partial`: the builder's branch is surfaced, but the run did not reach fixpoint. Report honestly — do not paper over a partial as clean. A partial is still usually more correct than a single-shot implementation; the value is in the rounds that did happen, not in the one that didn't.
+
+## Composability
+
+The builder role can itself be a pipeline, tournament, or delegate run — spawn one of those from inside the builder tab. The protocol only cares that a single branch accumulates all the builder's commits and that the builder posts a per-round summary in its log when it blocks. Breakers are short-lived and commit nothing; if a breaker needs to sub-delegate probing work, the sub-tasks must all finish and their findings fold into the single `## Verdict` before the breaker closes.
+
+## Failure modes
+
+- **Breaker writes tests into the suite or hands over a patch.** `[DIRECTIVE]` reminding the breaker that its output is a prose verdict, nothing else. If it's already closed, discard what it left behind and respawn.
+- **Breaker's failure description isn't reproducible** (vague input, missing Actual, hand-wavy category). Builder blocks with `blocked: breaker-<N> failure X not reproducible because ...`. Parent either relays back for clarification or respawns the breaker.
+- **Builder fixes the bug without adding a regression test.** `[DIRECTIVE]` to add the missing test before moving on. The regression tests are the durable artifact of the loop.
+- **Breaker reports `clean` with no categories.** Treat as a failed round. Respawn with a `[DIRECTIVE]` demanding enumerated categories, or escalate.
+- **Builder can't make a test pass.** Block with `blocked: failure X appears impossible because ...`. Parent adjudicates — sometimes the task is under-specified and the report reveals that, which is a valuable outcome.
+- **Endless "almost clean" rounds.** The round cap catches this. Honour it.
+- **Task is too vague.** Both roles will flail. If round 1's verdict is shallow or the builder blocks asking for clarification, fix the task in `index.md` before continuing. Do not keep rounds going on a bad spec.
