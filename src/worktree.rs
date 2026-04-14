@@ -68,16 +68,19 @@ pub fn setup_script(
     let dir_str = project_dir.to_string_lossy();
 
     let git_add = if branch.is_some_and(|b| !b.is_empty()) {
-        let mut cmd = format!(
-            "git worktree add -b {} {}",
-            shell_quote(&name),
-            shell_quote(&wt_str),
-        );
+        let name_q = shell_quote(&name);
+        let wt_q = shell_quote(&wt_str);
+        let mut new_branch_cmd =
+            format!("git worktree add -b {name_q} {wt_q}");
         if let Some(b) = base {
-            cmd.push(' ');
-            cmd.push_str(&shell_quote(b));
+            new_branch_cmd.push(' ');
+            new_branch_cmd.push_str(&shell_quote(b));
         }
-        cmd
+        let existing_cmd = format!("git worktree add {wt_q} {name_q}");
+        format!(
+            "if git show-ref --verify --quiet refs/heads/{name_q}; \
+             then {existing_cmd}; else {new_branch_cmd}; fi"
+        )
     } else {
         format!("git worktree add -d {}", shell_quote(&wt_str))
     };
