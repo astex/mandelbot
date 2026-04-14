@@ -115,6 +115,12 @@ impl App {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
 
+        // Startup GC: no tabs are rehydrated in the current tree, so
+        // every checkpoint file on disk is an orphan from a prior run.
+        // Best-effort: drop each file and its owned JSONLs. If later
+        // PRs add tab rehydration, this gate moves into that path.
+        Self::gc_orphan_checkpoints();
+
         let parent_socket_dir = crate::tab::runtime_dir();
         std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
         let parent_socket_path = parent_socket_dir.join("parent.sock");
@@ -513,6 +519,8 @@ impl App {
         let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return Task::none();
         };
+
+        Self::cleanup_tab_disk_state(&self.tabs[idx]);
 
         let closing_parent_id = self.tabs[idx].parent_id;
         let closing_depth = self.tabs[idx].depth;
@@ -1074,7 +1082,14 @@ impl App {
             Message::TabReady { tab_id, worktree_dir, session_id } => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.worktree_dir = worktree_dir;
+                    let first_assignment = tab.canonical_session_id.is_none();
+                    if first_assignment {
+                        tab.canonical_session_id = session_id.clone();
+                    }
                     tab.session_id = session_id;
+                    if first_assignment && tab.rank != AgentRank::Home {
+                        Self::persist_tab(tab);
+                    }
                 }
                 Task::none()
             }
@@ -1122,7 +1137,15 @@ impl App {
             return Err(E::NotSupportedForRank(tab.rank));
         }
         let shadow = checkpoint::shadow_ref(tab_id);
-        let next_idx = tab.checkpoints.len();
+        // Monotonic: picking by length would collide after pruning drops
+        // the oldest entries.
+        let next_idx = tab
+            .checkpoints
+            .iter()
+            .map(|c| c.id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
         let line_count = checkpoint::count_jsonl_lines(&jsonl);
         let message = format!("checkpoint-{next_idx}");
@@ -1135,17 +1158,120 @@ impl App {
             shadow_commit: shadow_commit.clone(),
             created_at: checkpoint::now(),
         };
+        let retention = self.config.checkpoint_retention;
         let tab = self
             .tabs
             .iter_mut()
             .find(|t| t.id == tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
         tab.checkpoints.push(ckpt);
+        Self::prune_tab(tab, retention, &shadow);
+        Self::persist_tab(tab);
         Ok(serde_json::json!({
             "checkpoint_id": next_idx,
             "shadow_commit": shadow_commit,
             "jsonl_line_count": line_count,
         }))
+    }
+
+    /// Drop the oldest checkpoints until we're at the retention cap, and
+    /// garbage-collect any resources tied to dropped checkpoints that we
+    /// own (resumed-session JSONLs + unreachable shadow commits).
+    fn prune_tab(tab: &mut TerminalTab, retention: usize, shadow_ref: &str) {
+        if retention == 0 || tab.checkpoints.len() <= retention {
+            return;
+        }
+        let drop_count = tab.checkpoints.len() - retention;
+        let dropped: Vec<checkpoint::Checkpoint> =
+            tab.checkpoints.drain(..drop_count).collect();
+
+        // For each dropped checkpoint, the session UUID it references may
+        // be a copy we own (a `replace`/`fork` product). Only delete if:
+        //   (a) it's in `owned_session_ids` (we created the file),
+        //   (b) no retained checkpoint still references it,
+        //   (c) it's not the tab's current live session, and
+        //   (d) it's not the tab's canonical — defense-in-depth for
+        //       forked tabs where the canonical *is* owned.
+        let project_for_jsonl = tab.worktree_dir.clone();
+        let current_session = tab.session_id.clone();
+        let canonical = tab.canonical_session_id.clone();
+        if let Some(project) = project_for_jsonl {
+            for ckpt in &dropped {
+                let sid = &ckpt.session_id;
+                let referenced = tab.checkpoints.iter().any(|c| &c.session_id == sid);
+                let is_current = current_session.as_ref() == Some(sid);
+                let is_canonical = canonical.as_ref() == Some(sid);
+                if tab.owned_session_ids.contains(sid)
+                    && !referenced
+                    && !is_current
+                    && !is_canonical
+                {
+                    crate::checkpoint_store::delete_owned_jsonl(&project, sid);
+                    tab.owned_session_ids.retain(|s| s != sid);
+                }
+            }
+        }
+
+        // Advance the shadow ref to the oldest still-retained commit so
+        // the dropped commits become unreachable.
+        if let (Some(wt), Some(new_tip)) =
+            (tab.worktree_dir.as_deref(), tab.checkpoints.first())
+        {
+            let _ = crate::checkpoint_store::advance_shadow_ref(
+                wt,
+                shadow_ref,
+                &new_tip.shadow_commit,
+            );
+        }
+    }
+
+    /// Drop every checkpoint record on disk plus the resumed-session
+    /// JSONLs each record claims to own. Invoked once at boot.
+    ///
+    /// Today, nothing in the tree rehydrates tabs on startup, so every
+    /// record is orphaned by definition. If a future PR adds rehydration,
+    /// it should subtract its rehydrated UUIDs from this sweep.
+    fn gc_orphan_checkpoints() {
+        let Ok(records) = crate::checkpoint_store::load_all() else {
+            return;
+        };
+        for record in records {
+            if let Some(wt) = &record.worktree_dir {
+                for sid in &record.owned_session_ids {
+                    crate::checkpoint_store::delete_owned_jsonl(wt, sid);
+                }
+            }
+            let _ = crate::checkpoint_store::remove(&record.tab_uuid);
+        }
+    }
+
+    /// On tab close: drop the checkpoint file, owned resumed-session
+    /// JSONLs, and the per-tab shadow branch. The canonical JSONL is
+    /// Claude-Code-native and untouched.
+    fn cleanup_tab_disk_state(tab: &TerminalTab) {
+        let _ = crate::checkpoint_store::remove(&tab.uuid);
+        if let Some(project) = &tab.worktree_dir {
+            for sid in &tab.owned_session_ids {
+                crate::checkpoint_store::delete_owned_jsonl(project, sid);
+            }
+            let shadow = checkpoint::shadow_ref(tab.id);
+            crate::checkpoint_store::delete_shadow_ref(project, &shadow);
+        }
+    }
+
+    /// Write the tab's checkpoint state to disk. Called after any mutation
+    /// to `tab.checkpoints` / `tab.owned_session_ids` / `tab.canonical_session_id`.
+    fn persist_tab(tab: &TerminalTab) {
+        let record = crate::checkpoint_store::TabRecord {
+            tab_uuid: tab.uuid.clone(),
+            canonical_session_id: tab.canonical_session_id.clone(),
+            owned_session_ids: tab.owned_session_ids.clone(),
+            worktree_dir: tab.worktree_dir.clone(),
+            checkpoints: tab.checkpoints.clone(),
+        };
+        if let Err(e) = crate::checkpoint_store::save(&record) {
+            eprintln!("checkpoint_store::save tab {}: {e}", tab.id);
+        }
     }
 
     /// Rewind this tab to a prior checkpoint, in place.
@@ -1227,7 +1353,9 @@ impl App {
         // 4. Update session_id now so subsequent checkpoints on this tab
         //    reference the new session. (TabReady from the restarted PTY
         //    will redundantly set the same value — harmless.)
-        tab.session_id = Some(new_session);
+        tab.session_id = Some(new_session.clone());
+        tab.owned_session_ids.push(new_session);
+        Self::persist_tab(tab);
 
         self.respond_to_tab(
             tab_id,
@@ -1309,9 +1437,18 @@ impl App {
             Some(new_branch),
             None,
             None,
-            Some(new_session),
+            Some(new_session.clone()),
             Some(wt_path.clone()),
         );
+        // The fork's copy-truncated JSONL was created by us — track it
+        // so tab-close cleans it up. canonical_session_id is set later by
+        // the TabReady message (it'll match `new_session`), which also
+        // persists the tab record.
+        if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+            new_tab.owned_session_ids.push(new_session);
+            new_tab.worktree_dir = Some(wt_path.clone());
+            Self::persist_tab(new_tab);
+        }
         self.focus_tab(new_tab_id);
         self.respond_to_tab(
             tab_id,
@@ -1805,6 +1942,88 @@ fn format_shell_title(raw: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_tab() -> TerminalTab {
+        TerminalTab::new(
+            0,
+            10,
+            80,
+            true,
+            AgentRank::Task,
+            None,
+            None,
+            0,
+            None,
+        )
+    }
+
+    fn mk_ckpt(id: usize, session_id: &str) -> checkpoint::Checkpoint {
+        checkpoint::Checkpoint {
+            id,
+            session_id: session_id.into(),
+            jsonl_line_count: 0,
+            shadow_commit: format!("sha-{id}"),
+            created_at: std::time::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn prune_caps_at_retention_and_drops_oldest() {
+        let mut tab = test_tab();
+        tab.canonical_session_id = Some("canon".into());
+        tab.session_id = Some("canon".into());
+        for i in 0..5 {
+            tab.checkpoints.push(mk_ckpt(i, "canon"));
+        }
+        App::prune_tab(&mut tab, 3, "refs/heads/mandelbot-checkpoints/tab-0");
+        assert_eq!(tab.checkpoints.len(), 3);
+        let ids: Vec<usize> = tab.checkpoints.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn prune_below_cap_is_noop() {
+        let mut tab = test_tab();
+        tab.checkpoints.push(mk_ckpt(0, "canon"));
+        tab.checkpoints.push(mk_ckpt(1, "canon"));
+        App::prune_tab(&mut tab, 100, "refs/heads/x");
+        assert_eq!(tab.checkpoints.len(), 2);
+    }
+
+    #[test]
+    fn prune_protects_canonical_session_from_jsonl_delete() {
+        // Put canonical in owned_session_ids (as fork would) and prune
+        // everything — the protection checks must stop the owned-list
+        // cleanup from shrinking on a canonical UUID.
+        let mut tab = test_tab();
+        tab.canonical_session_id = Some("canon".into());
+        tab.session_id = Some("canon".into());
+        tab.owned_session_ids.push("canon".into());
+        for i in 0..5 {
+            tab.checkpoints.push(mk_ckpt(i, "canon"));
+        }
+        App::prune_tab(&mut tab, 2, "refs/heads/x");
+        assert!(tab.owned_session_ids.contains(&"canon".to_string()));
+    }
+
+    #[test]
+    fn prune_drops_owned_jsonl_when_fully_orphaned() {
+        // Session "old" was owned, referenced only by dropped checkpoints,
+        // and is neither canonical nor current. After prune, it should
+        // be removed from owned_session_ids (JSONL deletion is best-
+        // effort and not observable without filesystem setup).
+        let mut tab = test_tab();
+        tab.canonical_session_id = Some("canon".into());
+        tab.session_id = Some("canon".into());
+        tab.owned_session_ids.push("old".into());
+        tab.worktree_dir = Some(std::env::temp_dir());
+        tab.checkpoints.push(mk_ckpt(0, "old"));
+        tab.checkpoints.push(mk_ckpt(1, "old"));
+        tab.checkpoints.push(mk_ckpt(2, "canon"));
+        tab.checkpoints.push(mk_ckpt(3, "canon"));
+        App::prune_tab(&mut tab, 2, "refs/heads/x");
+        assert!(!tab.owned_session_ids.contains(&"old".to_string()));
+    }
 
     #[test]
     fn format_shell_title_idle() {

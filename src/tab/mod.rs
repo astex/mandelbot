@@ -113,6 +113,10 @@ pub struct TabSpawnParams {
 
 pub struct TerminalTab {
     pub id: usize,
+    /// Stable per-tab UUID. Unlike the numeric `id`, this survives across
+    /// mandelbot restarts when a tab's durable state is rehydrated.
+    /// Used as the on-disk key for `checkpoint_store`.
+    pub uuid: String,
     pub is_claude: bool,
     pub rank: AgentRank,
     pub project_dir: Option<PathBuf>,
@@ -124,8 +128,18 @@ pub struct TerminalTab {
     pub background_tasks: usize,
     pub pr_number: Option<u32>,
     pub pending_input: Option<String>,
-    /// Claude session UUID for this tab (if `is_claude`).
+    /// Claude session UUID for this tab (if `is_claude`). Changes on
+    /// `replace`; initial value is captured as `canonical_session_id`.
     pub session_id: Option<String>,
+    /// First session UUID assigned to this tab. Never mutated after first
+    /// assignment. The canonical JSONL at
+    /// `~/.claude/projects/<slug>/<canonical>.jsonl` is owned by Claude
+    /// Code itself and must not be deleted by pruning.
+    pub canonical_session_id: Option<String>,
+    /// Session UUIDs we created via `replace` / `fork` (copies-truncated).
+    /// Safe to delete on prune — the canonical UUID is deliberately NOT
+    /// in this list.
+    pub owned_session_ids: Vec<String>,
     /// Worktree path (if task+git spawn).
     pub worktree_dir: Option<PathBuf>,
     /// Time-travel checkpoints taken on this tab.
@@ -150,6 +164,7 @@ impl TerminalTab {
         let (term, listener) = new_term(cols, rows);
         Self {
             id,
+            uuid: crate::checkpoint::uuid_v4(),
             is_claude,
             rank,
             project_dir,
@@ -162,6 +177,8 @@ impl TerminalTab {
             pr_number: None,
             pending_input: None,
             session_id: None,
+            canonical_session_id: None,
+            owned_session_ids: Vec::new(),
             worktree_dir: None,
             checkpoints: Vec::new(),
             term: Arc::new(Mutex::new(term)),

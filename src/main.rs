@@ -1,5 +1,6 @@
 mod animation;
 mod checkpoint;
+mod checkpoint_store;
 mod config;
 mod keys;
 mod links;

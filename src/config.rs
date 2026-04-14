@@ -65,6 +65,10 @@ fn default_auto_checkpoint() -> bool {
     true
 }
 
+fn default_checkpoint_retention() -> usize {
+    100
+}
+
 #[derive(Deserialize)]
 pub struct Models {
     #[serde(default = "default_home_model")]
@@ -121,6 +125,9 @@ pub struct Config {
 
     #[serde(default = "default_auto_checkpoint")]
     pub auto_checkpoint: bool,
+
+    #[serde(default = "default_checkpoint_retention")]
+    pub checkpoint_retention: usize,
 }
 
 impl Default for Config {
@@ -137,6 +144,7 @@ impl Default for Config {
             worktree_location: default_worktree_location(),
             models: Models::default(),
             auto_checkpoint: default_auto_checkpoint(),
+            checkpoint_retention: default_checkpoint_retention(),
         }
     }
 }
