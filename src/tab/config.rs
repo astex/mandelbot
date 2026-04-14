@@ -74,8 +74,53 @@ pub(super) fn write_mcp_config() -> PathBuf {
     dir
 }
 
+const STOP_HOOK_SH: &str = r#"#!/bin/sh
+# Stop-hook handler for mandelbot time-travel.
+#
+# The Stop hook fires before Claude Code flushes the final JSONL line of
+# the turn (empirically 50-100ms ahead of the write). If mandelbot
+# captures line count at that moment, a later fork from the checkpoint
+# loses the trailing assistant message. Fix: record the line count at
+# hook entry, then wait until the transcript grows past it before
+# emitting `checkpoint` to the FIFO.
+#
+# Bounded at 2s; if the line never appears (e.g. StopFailure path that
+# never writes a final message) we still emit `checkpoint` so the
+# checkpoint handler runs and logs a best-effort count.
+input=$(cat)
+echo status:idle > "$MANDELBOT_FIFO"
+transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+start_lines=$(wc -l < "$transcript" 2>/dev/null | tr -d ' ')
+: "${start_lines:=0}"
+(
+  i=0
+  while [ $i -lt 40 ]; do
+    cur=$(wc -l < "$transcript" 2>/dev/null | tr -d ' ')
+    : "${cur:=0}"
+    if [ "$cur" -gt "$start_lines" ]; then
+      break
+    fi
+    i=$((i+1))
+    sleep 0.05
+  done
+  echo checkpoint > "$MANDELBOT_FIFO"
+) &
+"#;
+
 pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
     let path = dir.join("hooks-settings.json");
+    let stop_hook_path = dir.join("stop-hook.sh");
+    std::fs::write(&stop_hook_path, STOP_HOOK_SH)
+        .expect("failed to write stop-hook.sh");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&stop_hook_path)
+            .expect("stat stop-hook.sh")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&stop_hook_path, perms)
+            .expect("chmod stop-hook.sh");
+    }
 
     let set_status = |status: &str| -> serde_json::Value {
         serde_json::json!({
@@ -130,7 +175,10 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
                 "hooks": [set_status("idle")],
             }],
             "Stop": [{
-                "hooks": [set_status("idle")],
+                "hooks": [{
+                    "type": "command",
+                    "command": stop_hook_path.to_string_lossy().into_owned(),
+                }],
             }],
             "StopFailure": [{
                 "hooks": [set_status("error")],
