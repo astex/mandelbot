@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::SinkExt;
 
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Task, Theme};
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
@@ -48,7 +48,7 @@ pub enum DisplayEntry {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    TabOutput(usize, usize),
+    TabOutput(usize, usize, Option<u32>),
     ShellExited(usize, Option<u32>),
     PtyInput(Vec<u8>),
     Scroll(i32),
@@ -76,6 +76,7 @@ pub enum Message {
     FoldTab,
     UnfoldTab(usize),
     ClipboardLoadResult(usize, Option<String>),
+    OpenPr(usize),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -558,10 +559,11 @@ impl App {
                 }
                 Task::none()
             }
-            Message::TabOutput(tab_id, bg_tasks) => {
+            Message::TabOutput(tab_id, bg_tasks, pr_number) => {
                 let mut tasks: Vec<Task<Message>> = Vec::new();
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.background_tasks = bg_tasks;
+                    tab.pr_number = pr_number;
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
                             tab.title = Some(title);
@@ -1024,6 +1026,17 @@ impl App {
                 }
                 Task::none()
             }
+            Message::OpenPr(tab_id) => {
+                if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+                    if let (Some(pr), Some(dir)) = (tab.pr_number, &tab.project_dir) {
+                        if let Some(slug) = crate::links::github_slug_for_dir(dir) {
+                            let url = format!("https://github.com/{slug}/pull/{pr}");
+                            let _ = open::that(url);
+                        }
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
@@ -1084,39 +1097,69 @@ impl App {
 
             let label = container(label).width(Fill).clip(true);
 
-            let mut suffix = row![].align_y(Alignment::Center);
+            // Equal spacing between all suffix items (PR icon, bg
+            // task count, status dot, tab number).
+            const SUFFIX_SPACING: f32 = 6.0;
+            let mut suffix = row![]
+                .align_y(Alignment::Center)
+                .spacing(SUFFIX_SPACING);
+
+            if tab.is_claude && tab.pr_number.is_some() {
+                let muted_fg = Color { a: 0.7, ..fg };
+                let pr_icon = text("⎇")
+                    .size(self.config.font_size)
+                    .font(Font::MONOSPACE)
+                    .color(muted_fg);
+                let pr_btn = button(pr_icon)
+                    .on_press(Message::OpenPr(tab_id))
+                    .padding(0)
+                    .style(move |_theme, _status| button::Style {
+                        background: Some(bg.into()),
+                        border: Border::default(),
+                        ..Default::default()
+                    });
+                suffix = suffix.push(pr_btn);
+            }
             if tab.is_claude && tab.background_tasks > 0 {
                 let bg_label = format!("+{}", tab.background_tasks);
-                suffix = suffix
-                    .push(text(bg_label).size(self.config.font_size * 0.75).font(Font::MONOSPACE).color(self.terminal_theme.cyan))
-                    .push(Space::new().width(6));
+                suffix = suffix.push(
+                    text(bg_label)
+                        .size(self.config.font_size * 0.75)
+                        .font(Font::MONOSPACE)
+                        .color(self.terminal_theme.cyan),
+                );
             }
             {
                 let dot_size = self.config.font_size * 0.6;
                 let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
                 let dot_color = status_dot_color(tab.status, fg);
-                suffix = suffix
-                    .push(text(dot_char).size(dot_size).color(dot_color))
-                    .push(Space::new().width(4));
+                suffix = suffix.push(text(dot_char).size(dot_size).color(dot_color));
             }
             let suffix = suffix.push(number);
 
             let content = row![Space::new().width(PADDING), label, suffix, Space::new().width(PADDING)]
                 .align_y(Alignment::Center);
 
-            let btn = button(content)
-                .on_press(Message::SelectTab(tab_id))
+            // Match iced button's default padding so the tab keeps
+            // its usual dimensions now that we render as a plain
+            // container instead of a button.
+            let styled = container(content)
                 .width(TAB_BAR_WIDTH - indent)
-                .style(move |_theme, _status| button::Style {
+                .padding([5, 10])
+                .style(move |_theme: &Theme| container::Style {
                     background: Some(bg.into()),
                     border: Border::default(),
                     ..Default::default()
                 });
 
+            let tab_elem: Element<'_, Message> = mouse_area(styled)
+                .on_press(Message::SelectTab(tab_id))
+                .into();
+
             if indent > 0.0 {
-                row![Space::new().width(indent), btn].width(TAB_BAR_WIDTH).into()
+                row![Space::new().width(indent), tab_elem].width(TAB_BAR_WIDTH).into()
             } else {
-                Element::from(btn)
+                tab_elem
             }
         };
 

@@ -96,11 +96,10 @@ fn row_text(term: &TermInstance, line: Line) -> String {
     text.trim_end().to_string()
 }
 
-/// Detect Claude Code's prompt frame and read the background shell
-/// count.
-pub(crate) fn detect_prompt_shell_count(
-    term: &TermInstance,
-) -> Option<usize> {
+/// Return the row texts that sit below Claude Code's prompt frame,
+/// or `None` if the frame isn't on screen.  Used by the per-field
+/// scrapers below.
+fn prompt_status_rows(term: &TermInstance) -> Option<Vec<String>> {
     let grid = term.grid();
     let screen_lines = grid.screen_lines();
     let cursor_line = grid.cursor.point.line.0;
@@ -130,13 +129,32 @@ pub(crate) fn detect_prompt_shell_count(
         return None;
     };
 
-    for i in (bot_border + 1)..rows.len() {
-        if let Some(n) = parse_shell_count(&rows[i]) {
+    Some(rows.into_iter().skip(bot_border + 1).collect())
+}
+
+/// Detect Claude Code's prompt frame and read the background shell
+/// count.  Returns 0 when the frame is on screen but no shell-count
+/// line is visible; returns `None` when the frame isn't on screen.
+pub(crate) fn detect_prompt_shell_count(
+    term: &TermInstance,
+) -> Option<usize> {
+    let rows = prompt_status_rows(term)?;
+    for row in &rows {
+        if let Some(n) = parse_shell_count(row) {
             return Some(n);
         }
     }
-
     Some(0)
+}
+
+/// Detect the tracked PR number from Claude Code's status line.
+/// Returns `None` if no `PR #N` indicator is visible (either
+/// because Claude isn't tracking a PR or the frame isn't on screen).
+pub(crate) fn detect_prompt_pr_number(
+    term: &TermInstance,
+) -> Option<u32> {
+    let rows = prompt_status_rows(term)?;
+    rows.iter().find_map(|r| parse_pr_number(r))
 }
 
 /// Check if a row looks like a Claude Code prompt border (10+ '─'
@@ -174,5 +192,40 @@ fn parse_shell_count(text: &str) -> Option<usize> {
         Some(n)
     } else {
         None
+    }
+}
+
+/// Parse a tracked PR number from a status line.  Matches the
+/// Claude Code `PR #<number>` indicator that appears below the
+/// prompt frame.
+fn parse_pr_number(text: &str) -> Option<u32> {
+    let idx = text.find("PR #")?;
+    let after = &text[idx + "PR #".len()..];
+    let digits: String =
+        after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pr_number_from_statusline() {
+        let line =
+            "‣‣ accept edits on (shift+tab to cycle) · PR #28045";
+        assert_eq!(parse_pr_number(line), Some(28045));
+    }
+
+    #[test]
+    fn no_pr_number_when_absent() {
+        let line = "‣‣ accept edits on (shift+tab to cycle)";
+        assert_eq!(parse_pr_number(line), None);
+    }
+
+    #[test]
+    fn ignores_pr_without_hash() {
+        let line = "PR 123 is cool";
+        assert_eq!(parse_pr_number(line), None);
     }
 }

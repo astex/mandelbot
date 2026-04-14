@@ -11,7 +11,7 @@ pub use grid::logical_line_at;
 pub use stream::{fifo_stream, tab_stream};
 
 pub(crate) use events::TermEventListener;
-pub(crate) use grid::detect_prompt_shell_count;
+pub(crate) use grid::{detect_prompt_pr_number, detect_prompt_shell_count};
 
 use events::{color_to_rgb, new_term, TermColors};
 
@@ -106,6 +106,7 @@ pub struct TerminalTab {
     pub title: Option<String>,
     pub status: AgentStatus,
     pub background_tasks: usize,
+    pub pr_number: Option<u32>,
     pub pending_input: Option<String>,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
@@ -136,6 +137,7 @@ impl TerminalTab {
             title: None,
             status: AgentStatus::default(),
             background_tasks: 0,
+            pr_number: None,
             pending_input: None,
             term: Arc::new(Mutex::new(term)),
             listener,
