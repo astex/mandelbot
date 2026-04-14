@@ -32,7 +32,7 @@ Write an `index.md` for your children. In "How we work," include:
 - Reference to the governing plan.
 - The idea convention (see below).
 - A note that children start implementing immediately — no plan-review handshake.
-- Tab lifecycle: children close themselves when done.
+- Tab lifecycle: children close themselves when done. **If the integration strategy is `human-review`,** also tell children to stay alive in `awaiting_review` once their PR is up (see `_shared/coord.md`) and only close after the PR merges.
 
 Write a `<child>.coord.md` for each implementation task from your assignment.
 
@@ -60,21 +60,21 @@ When a watcher wakes:
 
 - **`blocked: <question>`** — If you can answer it, append `- [...] [DIRECTIVE] <answer>` in the child's file. If you cannot (it requires the iterate parent's input), relay it: append `- [...] blocked: <child-label> asks: <question>` in **your own** coord file. When the parent answers in your file, forward the answer to the child.
 - **`idea:` entry** — Note it. Do not act on it; you'll collect all ideas at the end.
-- **`done` or `failed`** — Note the outcome. When all children have finished, proceed to step 4.
+- **`awaiting_review`, `done`, or `failed`** — Settled. Note the outcome. When all children have settled, proceed to step 4.
 
 Re-arm each watcher after handling.
 
 ### 4. Summarize and finish
 
-When all children are `done` or `failed`, write a `## Summary` section in your own `*.coord.md` (append it before the `## Log`). Include:
+When all children have settled — `done`, `awaiting_review`, or `failed` — write a `## Summary` section in your own `*.coord.md` (append it before the `## Log`). Include:
 
-- **Per-child outcomes**: one line per child — label, status (done/failed), brief description of what was accomplished or why it failed.
+- **Per-child outcomes**: one line per child — label, status (`done` / `awaiting_review` / `failed`), PR link if applicable, brief description of what was accomplished or why it failed.
 - **Collected ideas**: all `idea:` entries from children, attributed by child label. Include every idea — the parent decides what to carry forward.
 - **Integration notes**: any observations about merge conflicts, dependency ordering, or issues the parent should know about before integrating.
 
 Then:
 1. Append `- [...] done` and set `**State:** done`.
-2. Close yourself and all your children: call `close_tab` with your own tab ID (this also closes descendants).
+2. **If all your children are `done` or `failed`** (no one is in `awaiting_review`), close your tab via `close_tab` — this also closes descendants. **Otherwise stay open**: any `awaiting_review` children need their tabs alive for the human to drive review feedback, and closing your tab would promote one of them, disrupting the tab organization. Just go idle once you've summarized.
 
 ## The idea convention
 

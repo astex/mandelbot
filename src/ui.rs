@@ -304,8 +304,9 @@ impl App {
     /// Returns a mapping `tab_id -> number` (0..=9) for which visible tabs
     /// get digit shortcuts. The 10 slots follow the active tab's neighborhood:
     /// Home + first shell + ancestors + active tab's siblings, then filled
-    /// outward by rank order. Numbers are always assigned in display order
-    /// top-to-bottom.
+    /// outward by depth (projects, then tasks, then subtasks, ...) with
+    /// display order as the tiebreak, and shells last. Numbers are always
+    /// assigned in display order top-to-bottom.
     fn tab_number_assignments(&self) -> HashMap<usize, usize> {
         let display_order = self.tab_display_order();
         let visible: Vec<usize> = display_order.iter()
@@ -363,18 +364,21 @@ impl App {
             }
         }
 
-        // 5. Everything else in rank order: Home, Project, Task, then shells.
-        //    Within each rank, visit in display order.
-        for rank in [AgentRank::Home, AgentRank::Project, AgentRank::Task] {
+        // 5. Everything else by (depth, display order): projects first, then
+        //    tasks, then subtasks, and so on. Shell tabs go last.
+        let mut claude_by_depth: Vec<(usize, usize)> = visible.iter()
+            .filter_map(|&id| {
+                self.tabs.iter()
+                    .find(|t| t.id == id)
+                    .filter(|t| t.is_claude)
+                    .map(|t| (t.depth, id))
+            })
+            .collect();
+        // Stable sort preserves display order within equal depth.
+        claude_by_depth.sort_by_key(|&(depth, _)| depth);
+        for (_, id) in claude_by_depth {
             if eligible.len() >= 10 { break; }
-            for &id in &visible {
-                if eligible.len() >= 10 { break; }
-                if let Some(t) = self.tabs.iter().find(|t| t.id == id) {
-                    if t.is_claude && t.rank == rank {
-                        eligible.insert(id);
-                    }
-                }
-            }
+            eligible.insert(id);
         }
         for &id in &visible {
             if eligible.len() >= 10 { break; }
