@@ -41,6 +41,12 @@ pub enum PendingKey {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum TimelineMode {
+    Replace,
+    Fork,
+}
+
 #[derive(Clone)]
 pub enum DisplayEntry {
     Tab(usize),
@@ -83,6 +89,9 @@ pub enum Message {
     UnfoldTab(usize),
     ClipboardLoadResult(usize, Option<String>),
     OpenPr(usize),
+    ToggleTimeline(usize),
+    TimelineScrub(usize, i32),
+    TimelineActivate(usize, TimelineMode),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -1109,6 +1118,45 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ToggleTimeline(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.timeline_visible = !tab.timeline_visible;
+                    if tab.timeline_visible {
+                        tab.timeline_cursor = tab.checkpoints.len().saturating_sub(1);
+                    }
+                }
+                Task::none()
+            }
+            Message::TimelineScrub(tab_id, delta) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    if tab.checkpoints.is_empty() {
+                        tab.timeline_cursor = 0;
+                    } else {
+                        let max = tab.checkpoints.len() - 1;
+                        let current = tab.timeline_cursor.min(max) as i32;
+                        let next = (current + delta).clamp(0, max as i32) as usize;
+                        tab.timeline_cursor = next;
+                    }
+                }
+                Task::none()
+            }
+            Message::TimelineActivate(tab_id, mode) => {
+                let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                    return Task::none();
+                };
+                if tab.checkpoints.is_empty() {
+                    return Task::none();
+                }
+                let cursor = tab.timeline_cursor.min(tab.checkpoints.len() - 1);
+                let ckpt_id = tab.checkpoints[cursor].id;
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.timeline_visible = false;
+                }
+                match mode {
+                    TimelineMode::Replace => self.handle_replace(tab_id, ckpt_id),
+                    TimelineMode::Fork => self.handle_fork(tab_id, ckpt_id, None),
+                }
+            }
         }
     }
 
@@ -1708,7 +1756,19 @@ impl App {
                 ..Default::default()
             });
 
-        row![tab_bar, terminal_pane]
+        let show_timeline = self
+            .active_tab()
+            .map(|t| t.timeline_visible && t.is_claude)
+            .unwrap_or(false);
+        let right_pane: Element<'_, Message> = if show_timeline {
+            let tab = self.active_tab().unwrap();
+            let timeline = crate::widget::timeline::view(tab, &self.config, &self.terminal_theme);
+            column![terminal_pane, timeline].width(Fill).height(Fill).into()
+        } else {
+            terminal_pane.into()
+        };
+
+        row![tab_bar, right_pane]
             .width(Fill)
             .height(Fill)
             .into()

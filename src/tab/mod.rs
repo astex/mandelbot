@@ -144,6 +144,11 @@ pub struct TerminalTab {
     pub worktree_dir: Option<PathBuf>,
     /// Time-travel checkpoints taken on this tab.
     pub checkpoints: Vec<crate::checkpoint::Checkpoint>,
+    /// Whether the time-travel timeline strip is visible for this tab.
+    pub timeline_visible: bool,
+    /// Index into `checkpoints` pointing at the currently-focused marker
+    /// when the timeline is visible. Clamped whenever the strip opens.
+    pub timeline_cursor: usize,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
@@ -181,6 +186,8 @@ impl TerminalTab {
             owned_session_ids: Vec::new(),
             worktree_dir: None,
             checkpoints: Vec::new(),
+            timeline_visible: false,
+            timeline_cursor: 0,
             term: Arc::new(Mutex::new(term)),
             listener,
             event_tx: None,

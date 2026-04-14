@@ -743,6 +743,50 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     return;
                 }
 
+                // Timeline bindings (only when this tab has the strip open).
+                // These override PTY input while the timeline is visible, so
+                // arrow keys scrub and Enter/Shift+Enter activate the marker
+                // instead of being sent to claude.
+                if self.tab.timeline_visible {
+                    use crate::ui::TimelineMode;
+                    let only_shift = *modifiers == keyboard::Modifiers::SHIFT;
+                    let no_mods = modifiers.is_empty();
+                    match &key {
+                        keyboard::Key::Named(Named::ArrowLeft) if no_mods => {
+                            shell.publish(Message::TimelineScrub(self.tab.id, -1));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::ArrowRight) if no_mods => {
+                            shell.publish(Message::TimelineScrub(self.tab.id, 1));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::Enter) if no_mods => {
+                            shell.publish(Message::TimelineActivate(
+                                self.tab.id,
+                                TimelineMode::Replace,
+                            ));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::Enter) if only_shift => {
+                            shell.publish(Message::TimelineActivate(
+                                self.tab.id,
+                                TimelineMode::Fork,
+                            ));
+                            shell.capture_event();
+                            return;
+                        }
+                        keyboard::Key::Named(Named::Escape) if no_mods => {
+                            shell.publish(Message::ToggleTimeline(self.tab.id));
+                            shell.capture_event();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Pending tab: route input to PendingInput messages.
                 if self.tab.is_pending() {
                     use crate::ui::PendingKey;
