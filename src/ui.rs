@@ -1000,14 +1000,15 @@ impl App {
             let base_bg = if is_active { active_bg } else { inactive_bg };
             let bg = self.bell_flashes.blend(tab_id, base_bg, self.terminal_theme.yellow);
 
+            let cw = self.config.char_width();
+            let avail = TAB_BAR_WIDTH - indent - PADDING * 2.0 - cw * 3.0;
+            let max_label_chars = (avail / cw) as usize;
+
             let label_text: String = if tab.is_pending() {
                 "new project...".into()
             } else if let Some(title) = &tab.title {
                 if !tab.is_claude {
-                    let cw = self.config.char_width();
-                    let avail = TAB_BAR_WIDTH - indent - PADDING * 2.0 - cw * 3.0;
-                    let max_chars = (avail / cw) as usize;
-                    format_shell_title(title, max_chars)
+                    format_shell_title(title, max_label_chars)
                 } else {
                     title.clone()
                 }
@@ -1030,6 +1031,7 @@ impl App {
                 None => " ".into(),
             };
 
+            let label_len = label_text.len();
             let label = text(label_text)
                 .size(self.config.font_size)
                 .font(Font::MONOSPACE)
@@ -1070,6 +1072,15 @@ impl App {
             let mut suffix = row![]
                 .align_y(Alignment::Center)
                 .spacing(SUFFIX_SPACING);
+            if label_len + 2 >= max_label_chars {
+                let muted_fg = Color { a: 0.4, ..fg };
+                suffix = suffix.push(
+                    text("|")
+                        .size(self.config.font_size)
+                        .font(Font::MONOSPACE)
+                        .color(muted_fg),
+                );
+            }
 
             if tab.is_claude && tab.pr_number.is_some() {
                 let muted_fg = Color { a: 0.7, ..fg };
