@@ -16,7 +16,6 @@ use crate::animation::FlashState;
 use crate::config::Config;
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
-use crate::widget::fold_placeholder::FoldPlaceholderWidget;
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
@@ -38,12 +37,6 @@ pub enum PendingKey {
     Backspace,
     Submit,
     Cancel,
-}
-
-#[derive(Clone)]
-pub enum DisplayEntry {
-    Tab(usize),
-    Fold { parent_id: usize, count: usize, depth: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +66,7 @@ pub enum Message {
     UpdateSelection(GridPoint, Side),
     Bell(usize),
     BellTick,
-    FoldTab,
-    UnfoldTab(usize),
+    ToggleFoldTab(usize),
     ClipboardLoadResult(usize, Option<String>),
     OpenPr(usize),
 }
@@ -101,7 +93,6 @@ pub struct App {
     response_writers: ResponseWriters,
     bell_flashes: FlashState,
     folded_tabs: HashSet<usize>,
-    active_fold: Option<usize>,
 }
 
 impl App {
@@ -136,7 +127,6 @@ impl App {
             response_writers,
             bell_flashes: FlashState::default(),
             folded_tabs: HashSet::new(),
-            active_fold: None,
         };
 
         (app, listen_task)
@@ -155,7 +145,6 @@ impl App {
         if let Some(pid) = self.tabs.iter().find(|t| t.id == id).and_then(|t| t.parent_id) {
             self.unfold_ancestors(pid);
         }
-        self.active_fold = None;
         if id != self.active_tab_id {
             self.prev_active_tab_id = Some(self.active_tab_id);
         }
@@ -281,21 +270,21 @@ impl App {
             .map(|t| t.id)
     }
 
-    /// Returns display entries in tree order: Home, then projects with their
-    /// tasks nested underneath (recursively), then shell tabs. Folded subtrees
-    /// are replaced with a single `DisplayEntry::Fold` placeholder.
-    fn tab_display_order(&self) -> Vec<DisplayEntry> {
+    /// Returns tab IDs in tree display order: Home, then projects with their
+    /// tasks nested underneath (recursively), then shell tabs. Descendants of
+    /// folded tabs are omitted.
+    fn tab_display_order(&self) -> Vec<usize> {
         let mut order = Vec::new();
 
         // Home agent first, then its descendants depth-first.
         if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
-            order.push(DisplayEntry::Tab(home.id));
+            order.push(home.id);
             self.collect_children(home.id, &mut order);
         }
 
         // Shell tabs at the end.
         for tab in self.tabs.iter().filter(|t| !t.is_claude) {
-            order.push(DisplayEntry::Tab(tab.id));
+            order.push(tab.id);
         }
 
         order
@@ -308,13 +297,7 @@ impl App {
     /// display order as the tiebreak, and shells last. Numbers are always
     /// assigned in display order top-to-bottom.
     fn tab_number_assignments(&self) -> HashMap<usize, usize> {
-        let display_order = self.tab_display_order();
-        let visible: Vec<usize> = display_order.iter()
-            .filter_map(|e| match e {
-                DisplayEntry::Tab(id) => Some(*id),
-                _ => None,
-            })
-            .collect();
+        let visible = self.tab_display_order();
         let is_visible = |id: usize| visible.contains(&id);
 
         let mut eligible: HashSet<usize> = HashSet::new();
@@ -402,31 +385,17 @@ impl App {
         assignments
     }
 
-    fn collect_children(&self, parent_id: usize, order: &mut Vec<DisplayEntry>) {
+    fn collect_children(&self, parent_id: usize, order: &mut Vec<usize>) {
         for tab in self.tabs.iter().filter(|t| t.parent_id == Some(parent_id) && t.is_claude) {
-            order.push(DisplayEntry::Tab(tab.id));
-            if self.folded_tabs.contains(&tab.id) {
-                let count = self.count_descendants(tab.id);
-                if count > 0 {
-                    order.push(DisplayEntry::Fold {
-                        parent_id: tab.id,
-                        count,
-                        depth: tab.depth + 1,
-                    });
-                }
-            } else {
+            order.push(tab.id);
+            if !self.folded_tabs.contains(&tab.id) {
                 self.collect_children(tab.id, order);
             }
         }
     }
 
-    fn count_descendants(&self, parent_id: usize) -> usize {
-        let mut count = 0;
-        for tab in self.tabs.iter().filter(|t| t.parent_id == Some(parent_id) && t.is_claude) {
-            count += 1;
-            count += self.count_descendants(tab.id);
-        }
-        count
+    fn has_claude_children(&self, parent_id: usize) -> bool {
+        self.tabs.iter().any(|t| t.parent_id == Some(parent_id) && t.is_claude)
     }
 
     /// Remove the given tab and all its ancestors from the folded set.
@@ -437,24 +406,6 @@ impl App {
                 Some(pid) => id = pid,
                 None => break,
             }
-        }
-        self.active_fold = None;
-    }
-
-    fn select_display_entry(&mut self, entry: &DisplayEntry) {
-        match entry {
-            DisplayEntry::Tab(id) => self.focus_tab(*id),
-            DisplayEntry::Fold { parent_id, .. } => {
-                self.active_fold = Some(*parent_id);
-            }
-        }
-    }
-
-    fn current_display_index(&self, order: &[DisplayEntry]) -> Option<usize> {
-        if let Some(fold_parent) = self.active_fold {
-            order.iter().position(|e| matches!(e, DisplayEntry::Fold { parent_id, .. } if *parent_id == fold_parent))
-        } else {
-            order.iter().position(|e| matches!(e, DisplayEntry::Tab(id) if *id == self.active_tab_id))
         }
     }
 
@@ -777,11 +728,10 @@ impl App {
             }
             Message::NavigateSibling(delta) => {
                 let order = self.tab_display_order();
-                if let Some(idx) = self.current_display_index(&order) {
+                if let Some(idx) = order.iter().position(|&id| id == self.active_tab_id) {
                     let new_idx = (idx as i32 + delta)
                         .rem_euclid(order.len() as i32) as usize;
-                    let entry = order[new_idx].clone();
-                    self.select_display_entry(&entry);
+                    self.focus_tab(order[new_idx]);
                 }
                 Task::none()
             }
@@ -811,17 +761,14 @@ impl App {
             }
             Message::NextIdle => {
                 let order = self.tab_display_order();
-                let cur = self.current_display_index(&order).unwrap_or(0);
+                let cur = order.iter().position(|&id| id == self.active_tab_id).unwrap_or(0);
 
-                // Search order rotated to start after current tab (only real tabs).
+                // Search order rotated to start after current tab.
                 let candidates: Vec<usize> = order.iter()
+                    .copied()
                     .cycle()
                     .skip(cur + 1)
                     .take(order.len())
-                    .filter_map(|e| match e {
-                        DisplayEntry::Tab(id) => Some(*id),
-                        DisplayEntry::Fold { .. } => None,
-                    })
                     .collect();
 
                 let status_of = |id: usize| -> Option<(AgentStatus, AgentRank)> {
@@ -987,22 +934,17 @@ impl App {
                 }
                 Task::none()
             }
-            Message::FoldTab => {
-                let tab_id = self.active_tab_id;
-                if self.tabs.iter().any(|t| t.parent_id == Some(tab_id) && t.is_claude) {
-                    self.folded_tabs.insert(tab_id);
+            Message::ToggleFoldTab(tab_id) => {
+                let foldable = self.tabs.iter()
+                    .find(|t| t.id == tab_id)
+                    .is_some_and(|t| t.is_claude && t.rank != AgentRank::Home);
+                if !foldable {
+                    return Task::none();
                 }
-                Task::none()
-            }
-            Message::UnfoldTab(parent_id) => {
-                self.folded_tabs.remove(&parent_id);
-                self.active_fold = None;
-                // Focus the first child of the unfolded tab.
-                if let Some(first_child) = self.tabs.iter()
-                    .find(|t| t.parent_id == Some(parent_id) && t.is_claude)
-                    .map(|t| t.id)
-                {
-                    self.focus_tab(first_child);
+                if self.folded_tabs.contains(&tab_id) {
+                    self.folded_tabs.remove(&tab_id);
+                } else if self.has_claude_children(tab_id) {
+                    self.folded_tabs.insert(tab_id);
                 }
                 Task::none()
             }
@@ -1048,10 +990,12 @@ impl App {
         let mut tab_col = column![];
         let display_order = self.tab_display_order();
 
-        let active_fold = self.active_fold;
         let tab_button = |tab: &TerminalTab, display_number: Option<usize>, active_tab_id: usize, indent: f32| {
-            let is_active = tab.id == active_tab_id && active_fold.is_none();
+            let is_active = tab.id == active_tab_id;
             let tab_id = tab.id;
+            let is_foldable = tab.is_claude && tab.rank != AgentRank::Home;
+            let has_children = is_foldable && self.has_claude_children(tab_id);
+            let is_folded = self.folded_tabs.contains(&tab_id);
 
             let base_bg = if is_active { active_bg } else { inactive_bg };
             let bg = self.bell_flashes.blend(tab_id, base_bg, self.terminal_theme.yellow);
@@ -1097,6 +1041,29 @@ impl App {
 
             let label = container(label).width(Fill).clip(true);
 
+            // Fold toggle: "-" for expanded, "+" for collapsed. Claude tabs
+            // always reserve the slot (even leaves) so labels align. The
+            // clickable area is widened with padding so the glyph is easy
+            // to hit.
+            let toggle_slot_width = self.config.char_width() + 8.0;
+            let toggle: Element<'_, Message> = if has_children {
+                let icon = if is_folded { "+" } else { "-" };
+                let icon_text = text(icon)
+                    .size(self.config.font_size)
+                    .font(Font::MONOSPACE)
+                    .color(fg);
+                let icon_container = container(icon_text)
+                    .width(toggle_slot_width)
+                    .align_x(Alignment::Center);
+                mouse_area(icon_container)
+                    .on_press(Message::ToggleFoldTab(tab_id))
+                    .into()
+            } else if is_foldable {
+                Space::new().width(toggle_slot_width).into()
+            } else {
+                Space::new().width(0).into()
+            };
+
             // Equal spacing between all suffix items (PR icon, bg
             // task count, status dot, tab number).
             const SUFFIX_SPACING: f32 = 6.0;
@@ -1137,7 +1104,15 @@ impl App {
             }
             let suffix = suffix.push(number);
 
-            let content = row![Space::new().width(PADDING), label, suffix, Space::new().width(PADDING)]
+            let toggle_gap = if is_foldable { PADDING } else { 0.0 };
+            let content = row![
+                Space::new().width(PADDING),
+                toggle,
+                Space::new().width(toggle_gap),
+                label,
+                suffix,
+                Space::new().width(PADDING),
+            ]
                 .align_y(Alignment::Center);
 
             // Match iced button's default padding so the tab keeps
@@ -1180,68 +1155,28 @@ impl App {
         };
 
         let indent_step = 20.0_f32;
-        let fold_button = |parent_id: usize, count: usize, depth: usize| -> Element<'_, Message> {
-            let is_active = active_fold == Some(parent_id);
-            let bg = if is_active { active_bg } else { inactive_bg };
-            let indent = depth as f32 * indent_step;
-
-            let label_text = format!("... {} tabs ...", count);
-            let muted_fg = Color { a: 0.5, ..fg };
-
-            let label = text(label_text)
-                .size(self.config.font_size)
-                .font(Font::MONOSPACE)
-                .color(muted_fg);
-            let label = container(label).width(Fill).clip(true);
-
-            let content = row![Space::new().width(PADDING), label, Space::new().width(PADDING)]
-                .align_y(Alignment::Center);
-
-            let btn = button(content)
-                .on_press(Message::UnfoldTab(parent_id))
-                .width(TAB_BAR_WIDTH - indent)
-                .style(move |_theme, _status| button::Style {
-                    background: Some(bg.into()),
-                    border: Border::default(),
-                    ..Default::default()
-                });
-
-            if indent > 0.0 {
-                row![Space::new().width(indent), btn].width(TAB_BAR_WIDTH).into()
-            } else {
-                Element::from(btn)
-            }
-        };
 
         let number_assignments = self.tab_number_assignments();
 
         // Agent tree: Home → Projects → Tasks.
         tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
-        for entry in display_order.iter() {
-            match entry {
-                DisplayEntry::Tab(tab_id) => {
-                    let Some(tab) = self.tabs.iter().find(|t| t.id == *tab_id) else { continue };
-                    if !tab.is_claude { continue; }
-                    if show_separators && tab.rank == AgentRank::Project {
-                        tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
-                        tab_col = tab_col.push(separator());
-                        tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
-                    }
-                    let indent = tab.depth as f32 * indent_step;
-                    let num = number_assignments.get(&tab.id).copied();
-                    tab_col = tab_col.push(tab_button(tab, num, self.active_tab_id, indent));
-                }
-                DisplayEntry::Fold { parent_id, count, depth } => {
-                    tab_col = tab_col.push(fold_button(*parent_id, *count, *depth));
-                }
+        for &tab_id in display_order.iter() {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
+            if !tab.is_claude { continue; }
+            if show_separators && tab.rank == AgentRank::Project {
+                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+                tab_col = tab_col.push(separator());
+                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
             }
+            let indent = tab.depth as f32 * indent_step;
+            let num = number_assignments.get(&tab.id).copied();
+            tab_col = tab_col.push(tab_button(tab, num, self.active_tab_id, indent));
         }
 
         // Shell tabs (flat).
         let mut first_shell = true;
-        for entry in display_order.iter() {
-            let DisplayEntry::Tab(tab_id) = entry else { continue };
-            let Some(tab) = self.tabs.iter().find(|t| t.id == *tab_id) else { continue };
+        for &tab_id in display_order.iter() {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else { continue };
             if tab.is_claude { continue; }
             if first_shell {
                 first_shell = false;
@@ -1265,15 +1200,7 @@ impl App {
                 ..Default::default()
             });
 
-        let terminal_content: Element<'_, Message> = if let Some(fold_parent_id) = self.active_fold {
-            let fold_count = display_order.iter()
-                .find_map(|e| match e {
-                    DisplayEntry::Fold { parent_id, count, .. } if *parent_id == fold_parent_id => Some(*count),
-                    _ => None,
-                })
-                .unwrap_or(0);
-            FoldPlaceholderWidget::new(fold_parent_id, fold_count, &self.config).into()
-        } else if let Some(tab) = self.active_tab() {
+        let terminal_content: Element<'_, Message> = if let Some(tab) = self.active_tab() {
             TerminalWidget::new(tab, &self.config).into()
         } else {
             Space::new().width(Fill).height(Fill).into()
