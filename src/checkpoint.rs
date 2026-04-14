@@ -1,24 +1,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::tab::AgentRank;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Checkpoint {
-    pub id: usize,
-    pub session_id: String,
-    pub jsonl_line_count: usize,
-    pub shadow_commit: String,
-    #[serde(with = "systime_serde")]
-    pub created_at: SystemTime,
-    #[serde(default)]
-    pub title: Option<String>,
-}
 
 #[derive(Debug)]
 pub enum TimeTravelError {
@@ -26,7 +12,7 @@ pub enum TimeTravelError {
     NoWorktree,
     NoSessionId,
     NoProjectDir,
-    CheckpointNotFound(usize),
+    CheckpointNotFound(String),
     GitFailed(String),
     JsonlCopyFailed(String),
     Io(std::io::Error),
@@ -59,10 +45,6 @@ impl From<std::io::Error> for TimeTravelError {
     }
 }
 
-pub fn shadow_ref(tab_id: usize) -> String {
-    format!("refs/heads/mandelbot-checkpoints/tab-{tab_id}")
-}
-
 /// Translate a filesystem path into Claude Code's project slug.
 /// Both `/` and `.` map to `-`, matching Claude Code's own slug logic,
 /// so e.g. `/home/x/.mandelbot/p` -> `-home-x--mandelbot-p`.
@@ -83,7 +65,7 @@ pub fn jsonl_path_for(project_path: &Path, session_id: &str) -> PathBuf {
         .join(format!("{session_id}.jsonl"))
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     git_envs(cwd, &[], args)
 }
 
@@ -104,10 +86,13 @@ fn git_envs(cwd: &Path, envs: &[(&str, &str)], args: &[&str]) -> Result<String, 
 
 /// Create a shadow-branch commit of the full worktree state (tracked
 /// + untracked + modified) without touching HEAD or the real index.
-/// Returns the commit hash.
+/// The new commit is parented on `parent_commit` (falling back to HEAD
+/// when `None`) and the new ref `new_ref` is pointed at it so the commit
+/// stays reachable for git gc. Returns the new commit's hash.
 pub fn snapshot_worktree(
     worktree_path: &Path,
-    shadow_ref: &str,
+    parent_commit: Option<&str>,
+    new_ref: &str,
     message: &str,
 ) -> Result<String, String> {
     // Use a temp index so we don't disturb the live one.
@@ -124,15 +109,16 @@ pub fn snapshot_worktree(
     git_envs(worktree_path, &idx_env, &["add", "-A"])?;
     let tree = git_envs(worktree_path, &idx_env, &["write-tree"])?;
 
-    // Parent: either the current shadow tip, or HEAD for the first commit.
-    let parent = git(worktree_path, &["rev-parse", "--verify", shadow_ref])
-        .or_else(|_| git(worktree_path, &["rev-parse", "HEAD"]))?;
+    let parent = match parent_commit {
+        Some(p) => p.to_string(),
+        None => git(worktree_path, &["rev-parse", "HEAD"])?,
+    };
 
     let commit = git(
         worktree_path,
         &["commit-tree", &tree, "-p", &parent, "-m", message],
     )?;
-    git(worktree_path, &["update-ref", shadow_ref, &commit])?;
+    git(worktree_path, &["update-ref", new_ref, &commit])?;
 
     let _ = std::fs::remove_file(&tmp_index);
     Ok(commit)
@@ -217,28 +203,6 @@ pub fn count_jsonl_lines(path: &Path) -> std::io::Result<usize> {
     Ok(n)
 }
 
-mod systime_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-    pub fn serialize<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
-        let secs = t
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        s.serialize_u64(secs)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SystemTime, D::Error> {
-        let secs = u64::deserialize(d)?;
-        Ok(UNIX_EPOCH + Duration::from_secs(secs))
-    }
-}
-
-pub fn now() -> SystemTime {
-    SystemTime::now()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,13 +234,14 @@ mod tests {
         // Checkpoint 1: modify a.txt, add untracked u1.
         std::fs::write(dir.join("a.txt"), "v2").unwrap();
         std::fs::write(dir.join("u1.txt"), "untracked").unwrap();
-        let shadow = "refs/heads/mandelbot-checkpoints/tab-99";
-        let c1 = snapshot_worktree(&dir, shadow, "c1").unwrap();
+        let ref1 = "refs/heads/mandelbot-checkpoints/ckpt-c1";
+        let c1 = snapshot_worktree(&dir, None, ref1, "c1").unwrap();
 
-        // Checkpoint 2: further modify.
+        // Checkpoint 2: further modify, parented on c1.
         std::fs::write(dir.join("a.txt"), "v3").unwrap();
         std::fs::remove_file(dir.join("u1.txt")).unwrap();
-        let c2 = snapshot_worktree(&dir, shadow, "c2").unwrap();
+        let ref2 = "refs/heads/mandelbot-checkpoints/ckpt-c2";
+        let c2 = snapshot_worktree(&dir, Some(&c1), ref2, "c2").unwrap();
         assert_ne!(c1, c2);
 
         // Fork c2 into a new worktree.
@@ -306,28 +271,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&fork_path);
     }
 
-    #[test]
-    fn checkpoint_roundtrip_serde() {
-        let c = Checkpoint {
-            id: 7,
-            session_id: "abc-1".into(),
-            jsonl_line_count: 42,
-            shadow_commit: "deadbeef".into(),
-            created_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-            title: Some("my tab".into()),
-        };
-        let s = serde_json::to_string(&c).unwrap();
-        let back: Checkpoint = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.id, c.id);
-        assert_eq!(back.session_id, c.session_id);
-        assert_eq!(back.jsonl_line_count, c.jsonl_line_count);
-        assert_eq!(back.shadow_commit, c.shadow_commit);
-        assert_eq!(back.created_at, c.created_at);
-        assert_eq!(back.title, c.title);
-
-        // Records from before this field existed still deserialize.
-        let older = r#"{"id":1,"session_id":"s","jsonl_line_count":0,"shadow_commit":"x","created_at":0}"#;
-        let parsed: Checkpoint = serde_json::from_str(older).unwrap();
-        assert_eq!(parsed.title, None);
-    }
 }

@@ -146,7 +146,7 @@ fn handle_tools_list(id: Value) -> Response {
                         "type": "object",
                         "properties": {
                             "checkpoint_id": {
-                                "type": "integer",
+                                "type": "string",
                                 "description": "The checkpoint_id returned by a prior checkpoint call.",
                             },
                         },
@@ -160,7 +160,7 @@ fn handle_tools_list(id: Value) -> Response {
                         "type": "object",
                         "properties": {
                             "checkpoint_id": {
-                                "type": "integer",
+                                "type": "string",
                                 "description": "The checkpoint_id to fork from.",
                             },
                             "prompt": {
@@ -379,7 +379,7 @@ async fn handle_tools_call(
                     let text = if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
                         format!("checkpoint failed: {err}")
                     } else {
-                        let cid = resp.get("checkpoint_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let cid = resp.get("checkpoint_id").and_then(|v| v.as_str()).unwrap_or("");
                         let commit = resp.get("commit").and_then(|v| v.as_str()).unwrap_or("");
                         let lc = resp.get("jsonl_line_count").and_then(|v| v.as_u64()).unwrap_or(0);
                         format!("checkpoint_id={cid} commit={commit} jsonl_lines={lc}")
@@ -396,8 +396,9 @@ async fn handle_tools_call(
             let ckpt_id = params
                 .get("arguments")
                 .and_then(|a| a.get("checkpoint_id"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let msg = serde_json::json!({
                 "type": "replace",
                 "tab_id": tab_id,
@@ -427,8 +428,9 @@ async fn handle_tools_call(
             let args = params.get("arguments");
             let ckpt_id = args
                 .and_then(|a| a.get("checkpoint_id"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let prompt = args
                 .and_then(|a| a.get("prompt"))
                 .and_then(|v| v.as_str())
