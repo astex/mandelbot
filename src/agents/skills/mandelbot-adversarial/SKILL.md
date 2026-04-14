@@ -6,7 +6,7 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, 
 
 # Adversarial loop
 
-A two-role game built on top of `mandelbot-delegate`. A single **builder** child, persistent across rounds, writes code on one branch. Each round, a fresh ephemeral **breaker** child spawns on the builder's current branch tip, probes the code, and reports what's broken in prose. The builder reads the report, writes tests that capture the failures, fixes the code, and blocks again. One branch accumulates the whole run and is the PR.
+A two-role game built on top of `mandelbot-delegate`. A single **builder** child, persistent across rounds, writes code on one branch. Each round, a fresh ephemeral **breaker** child spawns on the builder's current branch tip, probes the code, and reports what's broken in prose. The builder reads the report, writes tests that capture the failures, fixes the code, and blocks again. One branch accumulates the whole run; when the loop ends, the parent takes over and does whatever its own prompting dictates (open a PR, chain into another skill, escalate further up).
 
 Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelbot-delegate`'s SKILL.md for the parent workflow. This file covers only what's specific to the adversarial loop.
 
@@ -63,12 +63,14 @@ Read the breaker's `## Verdict`.
 
 ### 4. Declare outcome
 
-The builder's branch is the only artifact either way. One branch, one PR.
+The final builder push is the handoff: one branch, back to the parent. The adversarial loop does not prescribe what happens next — opening a PR, feeding the branch into another skill, escalating to the parent's own parent or user — that's determined by the parent's own prompting.
 
-- **Clean.** Report the branch, the round count, and the categories the breaker enumerated as attempted-and-clean.
-- **Partial.** Surface the branch plus the still-outstanding failures from the last verdict (not yet fixed). Hand off to the user — the code is closer than it started but not done. Do not pretend otherwise.
+On the way out, the parent notes:
 
-Close any remaining child tabs.
+- **Clean.** The branch, the round count, and the categories the breaker enumerated as attempted-and-clean.
+- **Partial.** The branch plus the still-outstanding failures from the last verdict. Flag that fixpoint was not reached; do not paper this over as clean.
+
+Either way, close any remaining child tabs and return control to the parent's prompt.
 
 ## Builder's role
 
@@ -132,7 +134,7 @@ Each failure must be concrete enough for the builder to reproduce without follow
 Children never read each other's coord files, and there is no shared doc. The parent is the relay.
 
 1. **The builder's branch is the substrate.** The breaker's worktree is based on the builder's current tip — everything it sees of the builder is the working tree at that commit. Code is the ground truth.
-2. **Verdicts are prose, not code.** The breaker hands back a description of what's broken; the builder writes the regression tests itself. Only one branch exists at the end of the run, and it contains only code the builder wrote.
+2. **Verdicts are prose, not code.** The breaker hands back a description of what's broken; the builder writes the regression tests itself. The builder's branch is the only branch at the end of the run, and it contains only code the builder wrote.
 3. **The parent relays context through the children's logs.** When spawning `breaker-<N>` for N > 1, the parent composes a prior-round summary into the breaker's initial coord-file assignment (earlier verdicts, categories already probed, what's changed since). When handing a new verdict back to the builder, the parent appends a `[DIRECTIVE]` into the builder's log with the failure list. Each child only ever reads its own coord file and `../index.md`.
 4. **Per-child `## Handoff` / `## Verdict` sections** live in each child's own coord file for the parent to read and compose into the next relay.
 
