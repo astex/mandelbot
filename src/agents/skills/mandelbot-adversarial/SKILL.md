@@ -60,7 +60,7 @@ It writes failing test files, runs them to confirm they fail, then captures them
 git diff -- <test paths> > <coord-dir>/breaker-<N>.patch
 ```
 
-It writes `## Verdict` to its coord file referencing the patch path, sets `**State:** done`, and closes its tab. The parent deletes any ephemeral branch the worktree was spawned on.
+It writes `## Verdict` to its coord file referencing the patch path, sets `**State:** done`, and closes its tab.
 
 ### 3. Evaluate
 
