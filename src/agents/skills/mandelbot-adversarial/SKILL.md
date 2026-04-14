@@ -30,7 +30,7 @@ That's it. Everything else is defaulted.
 Two shapes work:
 
 - **Build and harden.** The task is "implement X to spec." Round 1 the builder implements from scratch; subsequent rounds fix breaker-reported failures.
-- **Probe and harden.** The task is "find and fix bugs in existing code at `<path>`" — e.g. "probe our <api> for security holes," "shake out the <parser> at `<path>`." Round 1 the builder is a no-op: it spawns on a fresh branch pointing at the existing code, pushes, writes a `## Handoff — Round 1` noting "baseline, no changes," and blocks. The breaker probes the existing code and the loop continues identically from round 2 on.
+- **Probe and harden.** The task is "find and fix bugs in existing code at `<path>`" — e.g. "probe our <api> for security holes," "shake out the <parser> at `<path>`." Round 1 the builder is a no-op: it spawns on a fresh branch pointing at the existing code, pushes, and blocks with a log entry noting "baseline, no changes." The breaker probes the existing code and the loop continues identically from round 2 on.
 
 Same loop in both cases; only round 1's builder behaviour differs. State the shape in the task description so the builder knows which it is.
 
@@ -52,8 +52,8 @@ One round = one builder action, then one breaker probe. The builder is the same 
 
 **Builder phase.**
 
-- **Round 1:** the builder implements the task from scratch on its branch, pushes, writes a `## Handoff — Round 1` section to its coord file, and blocks: `- [...] blocked: round 1 complete, awaiting breaker`.
-- **Round N > 1:** the builder is already blocked from round N-1. The parent appends a `[DIRECTIVE]` with the breaker's verdict — the list of reported failures with inputs, expected, actual. The builder unblocks, writes a regression test for each reported failure, confirms each fails against the current code, fixes the production code, commits (tests and fix — one commit or two, builder's call), pushes, writes `## Handoff — Round N`, and blocks again.
+- **Round 1:** the builder implements the task from scratch on its branch, pushes, and blocks with a log entry summarizing what it did: `- [...] blocked: round 1 complete — <one-line summary of what was built>. Known gaps: <...>. Awaiting breaker.`
+- **Round N > 1:** the builder is already blocked from round N-1. The parent appends a `[DIRECTIVE]` with the breaker's verdict — the list of reported failures with inputs, expected, actual. The builder unblocks, writes a regression test for each reported failure, confirms each fails against the current code, fixes the production code, commits (tests and fix — one commit or two, builder's call), pushes, and blocks again with a fresh log entry summarizing round N's changes and any known gaps.
 
 **Breaker phase.** When the builder blocks, spawn a fresh breaker tab (`breaker-<N>`) with its worktree based on the builder's current branch tip. The breaker's assignment in its coord file includes, for N > 1, a prior-round summary the parent has compiled from earlier builder handoffs and breaker verdicts — categories already probed, what came back `clean`, what changed since. For N = 1, no prior context is needed.
 
@@ -89,19 +89,9 @@ Persistent across rounds. Receives the task up front; on round 1, implements fro
 2. Runs the new tests to confirm they fail against current code. If a test passes unexpectedly, something in the report didn't reproduce — block and let the parent adjudicate.
 3. Fixes the production code until all new tests pass and the existing suite still passes.
 4. Commits and pushes.
-5. Appends a fresh `## Handoff — Round N` section to its coord file.
-6. Blocks with `- [...] blocked: round N complete, awaiting breaker`.
+5. Blocks with a log entry summarizing the round: `- [...] blocked: round N complete — <what I changed, one line>. Known gaps: <anything not addressed, e.g. "does not handle UTF-16 input, task didn't require it">. Awaiting breaker.`
 
 If a reported failure contradicts the spec (tests an invariant the task does not require), block with `blocked: breaker-<N> failure X contradicts spec because ...` and let the parent adjudicate — do not silently drop it.
-
-`## Handoff — Round N` format, appended to the builder's coord file (one section per round):
-
-```markdown
-## Handoff — Round N
-
-What I changed: <one or two lines>
-Known gaps: <anything the builder is aware of but didn't address — e.g. "does not handle UTF-16 input, task didn't require it">
-```
 
 The branch name is set once at spawn and recorded in `index.md`. It does not change across rounds.
 
@@ -145,7 +135,7 @@ Children never read each other's coord files, and there is no shared doc. The pa
 1. **The builder's branch is the substrate.** The breaker's worktree is based on the builder's current tip — everything it sees of the builder is the working tree at that commit. Code is the ground truth.
 2. **Verdicts are prose, not code.** The breaker hands back a description of what's broken; the builder writes the regression tests itself. The builder's branch is the only branch at the end of the run, and it contains only code the builder wrote.
 3. **The parent relays context through the children's logs.** When spawning `breaker-<N>` for N > 1, the parent composes a prior-round summary into the breaker's initial coord-file assignment (earlier verdicts, categories already probed, what's changed since). When handing a new verdict back to the builder, the parent appends a `[DIRECTIVE]` into the builder's log with the failure list. Each child only ever reads its own coord file and `../index.md`.
-4. **Per-child `## Handoff` / `## Verdict` sections** live in each child's own coord file for the parent to read and compose into the next relay.
+4. **The breaker's `## Verdict` section** lives in its own coord file for the parent to read and compose into the next relay. The builder has no equivalent heavyweight section — its per-round summary goes into the block log entry alongside the state change.
 
 ## Fixpoint
 
@@ -157,7 +147,7 @@ Default 3. When hit with an outstanding `failing` verdict, the outcome is `parti
 
 ## Composability
 
-The builder role can itself be a pipeline, tournament, or delegate run — spawn one of those from inside the builder tab. The protocol only cares that a single branch accumulates all the builder's commits and that the builder writes `## Handoff — Round N` per round. Breakers are short-lived and commit nothing; if a breaker needs to sub-delegate probing work, the sub-tasks must all finish and their findings fold into the single `## Verdict` before the breaker closes.
+The builder role can itself be a pipeline, tournament, or delegate run — spawn one of those from inside the builder tab. The protocol only cares that a single branch accumulates all the builder's commits and that the builder posts a per-round summary in its log when it blocks. Breakers are short-lived and commit nothing; if a breaker needs to sub-delegate probing work, the sub-tasks must all finish and their findings fold into the single `## Verdict` before the breaker closes.
 
 ## Failure modes
 
