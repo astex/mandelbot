@@ -80,6 +80,7 @@ pub enum Message {
     McpCheckpoint(usize),
     McpReplace(usize, usize),
     McpFork(usize, usize, Option<String>),
+    AutoCheckpoint(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
@@ -1095,6 +1096,12 @@ impl App {
             }
             Message::McpFork(requesting_tab_id, ckpt_id, prompt) => {
                 self.handle_fork(requesting_tab_id, ckpt_id, prompt)
+            }
+            Message::AutoCheckpoint(tab_id) => {
+                if self.config.auto_checkpoint {
+                    let _ = self.do_checkpoint(tab_id);
+                }
+                Task::none()
             }
         }
     }

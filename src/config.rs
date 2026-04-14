@@ -61,6 +61,10 @@ fn default_task_model() -> String {
     "opus".to_string()
 }
 
+fn default_auto_checkpoint() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 pub struct Models {
     #[serde(default = "default_home_model")]
@@ -114,6 +118,9 @@ pub struct Config {
 
     #[serde(default)]
     pub models: Models,
+
+    #[serde(default = "default_auto_checkpoint")]
+    pub auto_checkpoint: bool,
 }
 
 impl Default for Config {
@@ -129,6 +136,7 @@ impl Default for Config {
             workflow: default_workflow(),
             worktree_location: default_worktree_location(),
             models: Models::default(),
+            auto_checkpoint: default_auto_checkpoint(),
         }
     }
 }
