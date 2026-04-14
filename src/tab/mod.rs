@@ -93,6 +93,13 @@ pub struct TabSpawnParams {
     pub branch: Option<String>,
     pub base: Option<String>,
     pub control_prefix: String,
+    /// Fresh session UUID to pass via `--session-id` when launching claude.
+    pub session_id: Option<String>,
+    /// If set, resume this existing session (pre-placed jsonl) instead of
+    /// starting a fresh one. Used for fork/rewind.
+    pub resume_session_id: Option<String>,
+    /// SPIKE: if set, skip worktree setup (caller pre-created it) and cd here.
+    pub existing_worktree: Option<PathBuf>,
 }
 
 pub struct TerminalTab {
@@ -108,6 +115,12 @@ pub struct TerminalTab {
     pub background_tasks: usize,
     pub pr_number: Option<u32>,
     pub pending_input: Option<String>,
+    /// SPIKE: claude session UUID for this tab (if is_claude).
+    pub session_id: Option<String>,
+    /// SPIKE: worktree path (if task+git spawn).
+    pub worktree_dir: Option<PathBuf>,
+    /// SPIKE: time-travel checkpoints taken on this tab.
+    pub checkpoints: Vec<crate::checkpoint::Checkpoint>,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
@@ -139,6 +152,9 @@ impl TerminalTab {
             background_tasks: 0,
             pr_number: None,
             pending_input: None,
+            session_id: None,
+            worktree_dir: None,
+            checkpoints: Vec::new(),
             term: Arc::new(Mutex::new(term)),
             listener,
             event_tx: None,

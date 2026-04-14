@@ -131,6 +131,46 @@ fn handle_tools_list(id: Value) -> Response {
                         "required": ["tab_id"],
                     },
                 },
+                {
+                    "name": "checkpoint",
+                    "description": "SPIKE: Snapshot this tab's worktree state + current conversation position. Returns a checkpoint_id to pass to rewind/fork.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+                {
+                    "name": "rewind",
+                    "description": "SPIKE: Spawn a sibling tab with the worktree restored to a prior checkpoint and the conversation resumed from that point. The caller should close_tab(self) afterward.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "checkpoint_id": {
+                                "type": "integer",
+                                "description": "The checkpoint_id returned by a prior checkpoint call.",
+                            },
+                        },
+                        "required": ["checkpoint_id"],
+                    },
+                },
+                {
+                    "name": "fork",
+                    "description": "SPIKE: Spawn a sibling tab at a prior checkpoint, optionally with a new prompt. Caller keeps running.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "checkpoint_id": {
+                                "type": "integer",
+                                "description": "The checkpoint_id to fork from.",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Optional new initial prompt for the forked tab.",
+                            },
+                        },
+                        "required": ["checkpoint_id"],
+                    },
+                },
             ],
         }),
     )
@@ -326,6 +366,101 @@ async fn handle_tools_call(
                 Err(e) => Response::err(id, -32000, e),
             }
         }
+        "checkpoint" => {
+            let msg = serde_json::json!({
+                "type": "checkpoint",
+                "tab_id": tab_id,
+            });
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let text = if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+                        format!("checkpoint failed: {err}")
+                    } else {
+                        let cid = resp.get("checkpoint_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let commit = resp.get("commit").and_then(|v| v.as_str()).unwrap_or("");
+                        let lc = resp.get("jsonl_line_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        format!("checkpoint_id={cid} commit={commit} jsonl_lines={lc}")
+                    };
+                    Response::ok(
+                        id,
+                        serde_json::json!({"content": [{"type": "text", "text": text}]}),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
+        "rewind" => {
+            let ckpt_id = params
+                .get("arguments")
+                .and_then(|a| a.get("checkpoint_id"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let msg = serde_json::json!({
+                "type": "rewind",
+                "tab_id": tab_id,
+                "checkpoint_id": ckpt_id,
+            });
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let text = if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+                        format!("rewind failed: {err}")
+                    } else {
+                        let ntid = resp.get("new_tab_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let wt = resp.get("worktree").and_then(|v| v.as_str()).unwrap_or("");
+                        format!("rewound into new tab {ntid} at {wt}")
+                    };
+                    Response::ok(
+                        id,
+                        serde_json::json!({"content": [{"type": "text", "text": text}]}),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
+        "fork" => {
+            let args = params.get("arguments");
+            let ckpt_id = args
+                .and_then(|a| a.get("checkpoint_id"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let prompt = args
+                .and_then(|a| a.get("prompt"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let mut msg = serde_json::json!({
+                "type": "fork",
+                "tab_id": tab_id,
+                "checkpoint_id": ckpt_id,
+            });
+            if let Some(p) = prompt {
+                msg["prompt"] = Value::String(p);
+            }
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let text = if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+                        format!("fork failed: {err}")
+                    } else {
+                        let ntid = resp.get("new_tab_id").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let wt = resp.get("worktree").and_then(|v| v.as_str()).unwrap_or("");
+                        format!("forked into new tab {ntid} at {wt}")
+                    };
+                    Response::ok(
+                        id,
+                        serde_json::json!({"content": [{"type": "text", "text": text}]}),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
 }
@@ -464,6 +599,9 @@ mod tests {
         assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
         assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
         assert_eq!(resp["result"]["tools"][3]["name"], "close_tab");
+        assert_eq!(resp["result"]["tools"][4]["name"], "checkpoint");
+        assert_eq!(resp["result"]["tools"][5]["name"], "rewind");
+        assert_eq!(resp["result"]["tools"][6]["name"], "fork");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;

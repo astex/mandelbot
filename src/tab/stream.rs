@@ -171,7 +171,16 @@ pub fn tab_stream(
 
                     let setup_script;
                     (setup_script, worktree_dir) =
-                        if rank == super::AgentRank::Task
+                        if let Some(existing) = params.existing_worktree.clone() {
+                            // SPIKE: fork/rewind — worktree was pre-created by
+                            // the checkpoint module; just cd into it.
+                            let wt_str = existing.to_string_lossy();
+                            let script = format!(
+                                "cd {}",
+                                pty::shell_quote(&wt_str),
+                            );
+                            (script, Some(existing))
+                        } else if rank == super::AgentRank::Task
                             && workflow == "git"
                             && let Some(dir) =
                                 project_dir.as_ref()
@@ -203,6 +212,18 @@ pub fn tab_stream(
                             &mandelbot_dir.to_string_lossy()
                         ),
                     ));
+                    // SPIKE: pin session-id or resume for time-travel.
+                    if let Some(sid) = params.resume_session_id.as_deref() {
+                        claude_args.push_str(&format!(
+                            " --resume {}",
+                            pty::shell_quote(sid),
+                        ));
+                    } else if let Some(sid) = params.session_id.as_deref() {
+                        claude_args.push_str(&format!(
+                            " --session-id {}",
+                            pty::shell_quote(sid),
+                        ));
+                    }
                     if !prompt_flag.is_empty() {
                         claude_args.push_str(" -- ");
                         claude_args.push_str(
@@ -277,6 +298,22 @@ pub fn tab_stream(
                             .into_owned(),
                     );
                     cwd = None;
+                }
+
+                // SPIKE: tell the UI about the worktree + session so
+                // checkpoint/rewind/fork can find the jsonl + repo.
+                if is_claude {
+                    let session_id = params
+                        .resume_session_id
+                        .clone()
+                        .or_else(|| params.session_id.clone());
+                    let _ = futures::executor::block_on(sender.send(
+                        Message::TabReady {
+                            tab_id: id,
+                            worktree_dir: worktree_dir.clone(),
+                            session_id,
+                        },
+                    ));
                 }
 
                 let args_refs: Vec<&str> =
