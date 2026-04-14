@@ -1,12 +1,12 @@
 ---
 name: mandelbot-tournament
-description: Use this skill when you want multiple attempts at the same task and will pick the best one. Spawns N contestant agents in parallel, then a judge agent scores their outputs against user-supplied criteria and picks a winner. Good fit when the right approach is unclear or when model/prompt variation might change the outcome.
+description: Use this skill when you want multiple attempts at the same task and will pick the best one. Spawns N contestant agents in parallel, then a judge agent scores their outputs against user-supplied criteria and picks a winner. Good fit when the right approach is unclear and you'd rather try several in parallel than commit to one up front.
 allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab, AskUserQuestion]
 ---
 
 # Tournament
 
-A parallel-and-select delegation flow. The parent spawns N **contestant** children on the same task — varied by model, prompt, or approach — and then spawns a **judge** child that scores them against user-supplied criteria and picks a winner. The winner's branch is surfaced to the user; losers' branches stay pushed but unused.
+A parallel-and-select delegation flow. The parent spawns N **contestant** children on the same task — each with a different approach — and then spawns a **judge** child that scores them against user-supplied criteria and picks a winner. The winner's branch is surfaced to the user; losers' branches stay pushed but unused.
 
 **This project uses git-based VCS isolation.** Each contestant runs in its own worktree on its own branch. Contestants do not share code or see each other during the run.
 
@@ -29,12 +29,7 @@ Work out with the user:
 - **The task.** Same description every contestant gets.
 - **Judging criteria.** Concrete, scorable properties — "passes the existing test suite," "compiles without warnings," "fewer than 200 lines of diff," "doesn't touch module X." Vague criteria ("is clean," "feels right") produce vague verdicts. Aim for 3–5 criteria the judge can check by reading code and running commands.
 - **N** (number of contestants, default 3). Odd numbers are fine; the judge picks one winner regardless.
-- **Variation strategy** — how contestants differ from each other. Pick one:
-  - **model** — same prompt, different models (e.g. Opus, Sonnet, Haiku).
-  - **prompt** — same model, different framing of the task (e.g. "minimize diff," "prioritize test coverage," "use pattern X").
-  - **approach** — same model and prompt, different high-level strategies named up front (e.g. "refactor in place," "add a new module," "extend the existing abstraction").
-
-  Default: **prompt** variation, using three framings the parent picks based on the task. If nothing distinguishes the contestants, you're running the same attempt N times — pick a variation axis or don't use this skill.
+- **Approaches** — the distinct strategy each contestant takes. This can be a high-level named strategy ("refactor in place" vs "add a new module" vs "extend the existing abstraction") or a different framing/emphasis ("minimize diff" vs "prioritize test coverage" vs "use pattern X"). Pick N approaches up front based on the task. If nothing distinguishes the contestants, you're running the same attempt N times — pick distinct approaches or don't use this skill.
 
 ### 2. Create the coordination directory
 
@@ -45,11 +40,11 @@ mkdir -p ~/.mandelbot/coordination/<project>.coord
 Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. In "How we work":
 
 - Note that this is a tournament run.
-- State the task, the judging criteria, the variation strategy, and N.
+- State the task, the judging criteria, the per-contestant approaches, and N.
 - Include the [contestant framing](#contestant-framing) so contestants know to write a `## Summary`.
 - List the children: `contestant-1` … `contestant-N`, plus `judge` (spawned later, but named in advance so the structure is visible).
 
-Write `contestant-<i>.coord.md` for each contestant from `child.template.md`. Each gets the same `## Assignment` task text, plus the variation applied to that contestant (different model noted in the spawn call, different prompt framing in the assignment, or different named approach in the assignment).
+Write `contestant-<i>.coord.md` for each contestant from `child.template.md`. Each gets the same `## Assignment` task text, plus the approach assigned to that contestant.
 
 Do not write the judge's coord file yet — the judge is spawned after contestants settle and its assignment depends on their outputs.
 
@@ -60,8 +55,6 @@ Spawn all N contestants in a single round via `spawn_tab`, each with its own `br
 > Start by running `/mandelbot-work-as-subtask` to load the subtask protocol. You are a contestant agent in the "<project>" tournament. Your coordination file is at `<absolute path to contestant-<i>.coord.md>` — read it first, then read the governing plan at `<path>` in full.
 >
 > You are contestant <i> of <N>. Your job: <one-line task summary>. Write a `## Summary` section in your coord file before marking `done` — the judge will read it.
-
-If the variation strategy is `model`, pass the model via `spawn_tab`'s model parameter.
 
 ### 4. Watch contestants
 
@@ -170,5 +163,5 @@ You do not open PRs, merge branches, or modify contestants' code. Your output is
 
 - **Some contestants fail.** The run still has a winner as long as at least one contestant reaches `done`. If every contestant failed, escalate to the user — the task framing or criteria are probably wrong.
 - **Judge can't pick a winner.** The criteria didn't discriminate. The judge writes the verdict anyway with notes on what went wrong; the parent surfaces this to the user and asks for sharper criteria or a rerun.
-- **All contestants produce the same solution.** The variation strategy was too weak — usually happens with `prompt` variation where the framings were too similar. Note this to the user and suggest a stronger axis (different models, or distinct named approaches) if they want to rerun.
+- **All contestants produce the same solution.** The approaches were too similar. Note this to the user and suggest more distinct approaches if they want to rerun.
 - **Judge is biased by summary quality.** A contestant with a well-written summary can out-market a contestant with better code. The judge framing tells the judge to prefer code evidence, but watch for this when reading the verdict — if the rationale leans on summary prose rather than diffs or test results, push back via `[DIRECTIVE]`.
