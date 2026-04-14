@@ -53,6 +53,22 @@ pub fn worktree_path(project_dir: &Path, worktree_location: &str, name: &str) ->
     base.join(name)
 }
 
+/// Shell snippet that copies `<project>/.claude/settings.local.json` into
+/// `<worktree>/.claude/settings.local.json`, if the source exists. Used by
+/// both the fresh-worktree flow (`setup_script`) and the time-travel flow
+/// (`replace` / `fork` spawn into a pre-existing worktree) so both inherit
+/// the project's local Claude settings.
+pub fn copy_settings_snippet(project_dir: &Path, worktree_path: &Path) -> String {
+    let dir_str = project_dir.to_string_lossy();
+    let wt_str = worktree_path.to_string_lossy();
+    format!(
+        "if [ -f {src} ]; then mkdir -p {dst_dir} && cp {src} {dst}; fi",
+        src = shell_quote(&format!("{dir_str}/.claude/settings.local.json")),
+        dst_dir = shell_quote(&format!("{wt_str}/.claude")),
+        dst = shell_quote(&format!("{wt_str}/.claude/settings.local.json")),
+    )
+}
+
 /// Build a shell script that creates a git worktree, copies
 /// `.claude/settings.local.json`, and `cd`s into it. Returns the script
 /// and the worktree path.
@@ -65,7 +81,6 @@ pub fn setup_script(
     let name = worktree_name(branch);
     let wt_path = self::worktree_path(project_dir, worktree_location, &name);
     let wt_str = wt_path.to_string_lossy();
-    let dir_str = project_dir.to_string_lossy();
 
     let git_add = if branch.is_some_and(|b| !b.is_empty()) {
         let mut cmd = format!(
@@ -82,12 +97,7 @@ pub fn setup_script(
         format!("git worktree add -d {}", shell_quote(&wt_str))
     };
 
-    let copy_settings = format!(
-        "if [ -f {src} ]; then mkdir -p {dst_dir} && cp {src} {dst}; fi",
-        src = shell_quote(&format!("{dir_str}/.claude/settings.local.json")),
-        dst_dir = shell_quote(&format!("{wt_str}/.claude")),
-        dst = shell_quote(&format!("{wt_str}/.claude/settings.local.json")),
-    );
+    let copy_settings = copy_settings_snippet(project_dir, &wt_path);
 
     let script = format!(
         "{git_add} && {copy_settings} && cd {}",
