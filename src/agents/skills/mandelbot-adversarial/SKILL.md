@@ -6,7 +6,7 @@ allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, 
 
 # Adversarial loop
 
-A two-role game built on top of `mandelbot-delegate`. A single **builder** child, persistent across rounds, writes code on one branch. Each round, a fresh ephemeral **breaker** child detaches HEAD at the builder's current tip, probes the code, and reports what's broken in prose. The builder reads the report, writes tests that capture the failures, fixes the code, and blocks again. One branch accumulates the whole run and is the PR.
+A two-role game built on top of `mandelbot-delegate`. A single **builder** child, persistent across rounds, writes code on one branch. Each round, a fresh ephemeral **breaker** child spawns on the builder's current branch tip, probes the code, and reports what's broken in prose. The builder reads the report, writes tests that capture the failures, fixes the code, and blocks again. One branch accumulates the whole run and is the PR.
 
 Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelbot-delegate`'s SKILL.md for the parent workflow. This file covers only what's specific to the adversarial loop.
 
@@ -48,13 +48,7 @@ One round = one builder action, then one breaker probe. The builder is the same 
 
 **Breaker phase.** When the builder blocks, spawn a fresh breaker tab (`breaker-<N>`) with its worktree based on the builder's current branch tip. The breaker's assignment in its coord file includes, for N > 1, a prior-round summary the parent has compiled from earlier builder handoffs and breaker verdicts — categories already probed, what came back `clean`, what changed since. For N = 1, no prior context is needed.
 
-The breaker's first step is to detach HEAD so nothing it does leaves a persistent branch behind:
-
-```bash
-git checkout --detach HEAD
-```
-
-It probes the builder's code — runs the existing tests, feeds adversarial inputs to exposed APIs, reads the source for invariant violations, writes throwaway scratch scripts in the worktree to experiment. None of this is handed over; it's just how the breaker investigates.
+The breaker probes the builder's code — runs the existing tests, feeds adversarial inputs to exposed APIs, reads the source for invariant violations, writes throwaway scratch scripts in the worktree to experiment. It does not commit anything; its branch and worktree go away when its tab closes. None of this work is handed over — it's just how the breaker investigates.
 
 Output is its `## Verdict` section, in prose, detailed enough that the builder can reproduce each failure without asking. It sets `**State:** done` and closes its tab.
 
@@ -102,7 +96,7 @@ The branch name is set once at spawn and recorded in `index.md`. It does not cha
 
 ## Breaker's role
 
-Ephemeral — one breaker tab per round. Spawned with its worktree based on the builder's current branch tip. First step: `git checkout --detach HEAD` so nothing the breaker does leaves a committed branch behind.
+Ephemeral — one breaker tab per round. Spawned with its worktree based on the builder's current branch tip. Does not commit anything; the worktree and its branch are thrown away when the tab closes.
 
 Produces: a prose `## Verdict` section in its coord file. Does not write tests into the suite, does not modify the builder's code, does not commit, does not push. The worktree is a scratchpad for probing — run existing tests, poke at APIs from a REPL or ad-hoc script, read the source, fuzz inputs. Throwaway scripts can live in the worktree for the duration of the run; they go away with the tab.
 
@@ -137,7 +131,7 @@ Each failure must be concrete enough for the builder to reproduce without follow
 
 Children never read each other's coord files, and there is no shared doc. The parent is the relay.
 
-1. **The builder's branch is the substrate.** The breaker's worktree sits on the builder's current tip in detached HEAD — everything it sees of the builder is the working tree at that commit. Code is the ground truth.
+1. **The builder's branch is the substrate.** The breaker's worktree is based on the builder's current tip — everything it sees of the builder is the working tree at that commit. Code is the ground truth.
 2. **Verdicts are prose, not code.** The breaker hands back a description of what's broken; the builder writes the regression tests itself. Only one branch exists at the end of the run, and it contains only code the builder wrote.
 3. **The parent relays context through the children's logs.** When spawning `breaker-<N>` for N > 1, the parent composes a prior-round summary into the breaker's initial coord-file assignment (earlier verdicts, categories already probed, what's changed since). When handing a new verdict back to the builder, the parent appends a `[DIRECTIVE]` into the builder's log with the failure list. Each child only ever reads its own coord file and `../index.md`.
 4. **Per-child `## Handoff` / `## Verdict` sections** live in each child's own coord file for the parent to read and compose into the next relay.
@@ -152,7 +146,7 @@ Default 3. When hit with an outstanding `failing` verdict, the outcome is `parti
 
 ## Composability
 
-The builder role can itself be a pipeline, tournament, or delegate run — spawn one of those from inside the builder tab. The protocol only cares that a single branch accumulates all the builder's commits and that the builder writes `## Handoff — Round N` per round. Breakers are short-lived and detached; if a breaker needs to sub-delegate probing work, the sub-tasks must all finish and their findings fold into the single `## Verdict` before the breaker closes.
+The builder role can itself be a pipeline, tournament, or delegate run — spawn one of those from inside the builder tab. The protocol only cares that a single branch accumulates all the builder's commits and that the builder writes `## Handoff — Round N` per round. Breakers are short-lived and commit nothing; if a breaker needs to sub-delegate probing work, the sub-tasks must all finish and their findings fold into the single `## Verdict` before the breaker closes.
 
 ## Failure modes
 
