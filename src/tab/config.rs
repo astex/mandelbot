@@ -186,6 +186,10 @@ const SKILL_MANDELBOT_IMPLEMENT_ITERATE_NOGIT: &str =
     include_str!("../agents/skills/mandelbot-implement-iterate/SKILL.nogit.md");
 const SKILL_MANDELBOT_IMPLEMENT_ITERATE_GENERATION: &str =
     include_str!("../agents/skills/mandelbot-implement-iterate/GENERATION.md");
+const SKILL_MANDELBOT_TOURNAMENT: &str =
+    include_str!("../agents/skills/mandelbot-tournament/SKILL.md");
+const SKILL_MANDELBOT_ADVERSARIAL: &str =
+    include_str!("../agents/skills/mandelbot-adversarial/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -460,6 +464,28 @@ pub(super) fn write_plugin_dir(
         SKILL_MANDELBOT_IMPLEMENT_ITERATE_GENERATION,
     )
     .expect("failed to write mandelbot-implement-iterate generation protocol");
+
+    if workflow == "git" {
+        let tournament_dir =
+            plugin_dir.join("skills").join("mandelbot-tournament");
+        std::fs::create_dir_all(&tournament_dir)
+            .expect("failed to create mandelbot-tournament skill dir");
+        std::fs::write(
+            tournament_dir.join("SKILL.md"),
+            SKILL_MANDELBOT_TOURNAMENT,
+        )
+        .expect("failed to write mandelbot-tournament skill");
+
+        let adversarial_dir =
+            plugin_dir.join("skills").join("mandelbot-adversarial");
+        std::fs::create_dir_all(&adversarial_dir)
+            .expect("failed to create mandelbot-adversarial skill dir");
+        std::fs::write(
+            adversarial_dir.join("SKILL.md"),
+            SKILL_MANDELBOT_ADVERSARIAL,
+        )
+        .expect("failed to write mandelbot-adversarial skill");
+    }
 
     plugin_dir
 }
