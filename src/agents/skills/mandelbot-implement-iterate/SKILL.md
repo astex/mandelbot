@@ -34,8 +34,8 @@ Work out the following with the user before spawning anything:
 
 **Integration strategy** — how generation N's code gets into one place before generation N+1 starts:
 
-- **`human-review`** — Children open their own PRs and stay alive in `awaiting_review` (see `_shared/coord.md`). The human reviews and merges each child's PR; the child handles any review feedback in its own tab. The parent maintains a **meta-merge branch** in GitHub that combines all open child PRs — this is the integration point. Generation N+1 branches off the meta-merge branch (not master) and stacks on top of generation N's still-open PRs. The meta-merge branch is rebased as individual PRs land on master.
-- **`agent-merge`** — The parent reviews gen-N children's code, merges their branches into a working branch between generations. Gen-N+1 children branch off the merged state.
+- **`human-review`** (default) — Children open their own PRs and stay alive in `awaiting_review` (see `_shared/coord.md`). The human reviews and merges each child's PR; the child handles any review feedback in its own tab. The parent maintains a **meta-merge branch** in GitHub that combines all open child PRs — this is the integration point. Generation N+1 branches off the meta-merge branch (not master) and stacks on top of generation N's still-open PRs. The meta-merge branch is rebased as individual PRs land on master.
+- **`agent-merge`** — The parent reviews gen-N children's code, merges their branches into a working branch between generations. Gen-N+1 children branch off the merged state. Opt in explicitly — this skips human review of generation-N code before generation N+1 builds on top of it.
 
 The integration strategy stays fixed across all generations.
 

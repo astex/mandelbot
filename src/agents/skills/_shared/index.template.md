@@ -10,7 +10,7 @@
 
 ### Reviews
 
-<default: child closes on `done` once its work is pushed. If reviews are human-in-the-loop (a human reviews and merges each child's PR before it counts as complete), say so explicitly — e.g. "Reviews are human-in-the-loop: once your PR is open, set `awaiting_review` instead of `done` and stay alive for review feedback." See the awaiting_review section in `_shared/coord.md`.>
+<default: reviews are human-in-the-loop — once your PR is open, set `awaiting_review` instead of `done` and stay alive for review feedback. Only override if this project explicitly wants autonomous merging — e.g. "Reviews are autonomous: children close on `done` without human review." See the awaiting_review section in `_shared/coord.md`.>
 
 ## Children
 
