@@ -26,7 +26,7 @@ mkdir -p ~/.mandelbot/coordination/<project>.coord
 
 Write `index.md` from `<plugin-dir>/skills/_shared/index.template.md`. Fill in:
 - Project name, absolute plan path.
-- **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan. Add anything flow-specific — for example, whether children should open their own PRs or leave that to you, branching conventions, file-ownership boundaries, etc. **If reviews are human-in-the-loop** (a human reviews and merges each child's PR before it counts as complete), say so explicitly here — children will use the `awaiting_review` state instead of closing on `done`. See the awaiting_review section in `_shared/coord.md`.
+- **How we work**: a short "tech lead memo" for this batch. At minimum, point children at the governing plan. Add anything flow-specific — for example, whether children should open their own PRs or leave that to you, branching conventions, file-ownership boundaries, etc. **Reviews default to human-in-the-loop**: children open PRs, set `awaiting_review`, and stay alive for the human to review and merge. Only override if this project explicitly wants autonomous merging (children closing on `done`). See the awaiting_review section in `_shared/coord.md`.
 - **Children**: one bullet per child.
 
 Then for each child, write `<child>.coord.md` from `child.template.md`:
@@ -65,6 +65,6 @@ Then re-arm that child's watcher in the background. (See `_shared/coord.md` for 
 
 ### 5. Finalize
 
-When every child has reached a settled state — `done`, `failed`, or (in human-in-the-loop projects) `awaiting_review` — handle failures (retry, reassign, or escalate) and wrap up however is appropriate for this project: merge branches, open PRs, report results, etc.
+When every child has reached a settled state — `awaiting_review` (the default), `done` (in autonomous-review projects), or `failed` — handle failures (retry, reassign, or escalate) and wrap up however is appropriate for this project: merge branches, open PRs, report results, etc.
 
 Children in `awaiting_review` are mid-PR-review and will close themselves once their PRs merge — leave their tabs alone. Close any other remaining child tabs via `close_tab`.
