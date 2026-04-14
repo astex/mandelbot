@@ -33,9 +33,10 @@ Create a `*.coord/` directory as in `mandelbot-delegate`. Write `index.md` with:
 
 - The task, verbatim.
 - The round cap.
-- A `## Exchange` section, initially empty. The parent appends a one-line summary per round so future breakers can see prior-round history without reading each other's coord files.
 
 List one persistent child in `index.md` — `builder` — plus a note that per-round breakers (`breaker-1`, `breaker-2`, ...) are spawned and closed round by round. Update the children list as breakers come and go.
+
+The parent relays all cross-role context through the children's logs — there is no shared doc. See "Exchange" below.
 
 Spawn the builder once, up front, on a fresh branch off master. The builder tab stays alive for the whole run; the parent drives it via the block/unblock handshake rather than respawning.
 
@@ -48,7 +49,9 @@ One round = one builder action, then one breaker probe. The builder is the same 
 - **Round 1:** the builder implements the task from scratch on its branch, pushes, writes a `## Handoff — Round 1` section to its coord file, and blocks: `- [...] blocked: round 1 complete, awaiting breaker`.
 - **Round N > 1:** the builder is already blocked from round N-1. The parent appends a `[DIRECTIVE]` naming `<coord-dir>/breaker-<N-1>.patch` with instructions to apply it, make the tests pass, commit, push, write `## Handoff — Round N`, and re-block. The builder unblocks, does the work, and blocks again.
 
-**Breaker phase.** When the builder blocks, spawn a fresh breaker tab (`breaker-<N>`) with its worktree based on the builder's current branch tip. The breaker's first step is to detach HEAD so nothing it does leaves a persistent branch behind:
+**Breaker phase.** When the builder blocks, spawn a fresh breaker tab (`breaker-<N>`) with its worktree based on the builder's current branch tip. The breaker's assignment in its coord file includes, for N > 1, a prior-round summary the parent has compiled from earlier builder handoffs and breaker verdicts — categories already probed, what came back `clean`, what changed since. For N = 1, no prior context is needed.
+
+The breaker's first step is to detach HEAD so nothing it does leaves a persistent branch behind:
 
 ```bash
 git checkout --detach HEAD
@@ -64,10 +67,10 @@ It writes `## Verdict` to its coord file referencing the patch path, sets `**Sta
 
 ### 3. Evaluate
 
-Read the breaker's `## Verdict`. Append `### Round N — breaker` to `index.md`'s `## Exchange` with the verdict, patch path (if any), and one-line summary.
+Read the breaker's `## Verdict`.
 
 - **Verdict `clean`** — fixpoint. Go to step 4 with outcome "clean". Append a final `[DIRECTIVE] done, close when ready` to the builder and let it finish.
-- **Verdict `failing`** and N < round_cap — append `[DIRECTIVE] apply <coord-dir>/breaker-<N>.patch, make it pass, push` to the builder, loop to step 2 with N+1.
+- **Verdict `failing`** and N < round_cap — append `[DIRECTIVE] apply <coord-dir>/breaker-<N>.patch, make it pass, push` to the builder, with a one-line summary of what the breaker found. Loop to step 2 with N+1.
 - **Verdict `failing`** and N == round_cap — go to step 4 with outcome "partial".
 - **Verdict `failed`** (the breaker itself couldn't complete) — escalate; treat as a broken round.
 
@@ -133,12 +136,12 @@ Categories are task-dependent — for a parser: malformed input, unicode, size l
 
 ## Exchange: how the two roles see each other's work
 
-Children never read each other's coord files. What they do share:
+Children never read each other's coord files, and there is no shared doc. The parent is the relay.
 
 1. **The builder's branch is the substrate.** The breaker's worktree sits on the builder's current tip in detached HEAD — everything it sees of the builder is the working tree at that commit. Code is the ground truth.
 2. **Patches are the test handoff.** The breaker's failing tests come back to the builder as a patch file in the coord directory, not via a branch. The builder applies it into its own branch as its own commit. Only one branch exists at the end of the run.
-3. **`index.md`'s `## Exchange` section is the cross-round log.** The parent appends a round-by-round summary. Each new breaker reads `../index.md` and picks up prior-round context without touching other children's files.
-4. **Per-child `## Handoff` / `## Verdict` sections** live in each child's own coord file for the parent to read and relay.
+3. **The parent relays context through the children's logs.** When spawning `breaker-<N>` for N > 1, the parent composes a prior-round summary into the breaker's initial coord-file assignment (earlier verdicts, categories already probed, what's changed since). When handing a new verdict back to the builder, the parent appends a `[DIRECTIVE]` into the builder's log naming the patch and summarizing what the breaker found. Each child only ever reads its own coord file and `../index.md`.
+4. **Per-child `## Handoff` / `## Verdict` sections** live in each child's own coord file for the parent to read and compose into the next relay.
 
 ## Fixpoint
 
