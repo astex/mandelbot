@@ -1,17 +1,13 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::tab::AgentRank;
 
-/// Per-tab checkpoint metadata.
-///
-/// PR-4 will serialize these to disk; the derives are in place now so that
-/// the shape is locked from PR-1 onward.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub id: usize,
@@ -20,16 +16,10 @@ pub struct Checkpoint {
     pub shadow_commit: String,
     #[serde(with = "systime_serde")]
     pub created_at: SystemTime,
-    /// Tab title at the moment the checkpoint was taken, so a `fork`
-    /// (or future `replace`) can restore the label a reader will expect.
     #[serde(default)]
     pub title: Option<String>,
 }
 
-/// Typed errors for the time-travel handlers.
-///
-/// These surface through the MCP response body as a readable message —
-/// callers rely on `Display`, not `Debug`.
 #[derive(Debug)]
 pub enum TimeTravelError {
     UnknownTab(usize),
@@ -67,14 +57,6 @@ impl From<std::io::Error> for TimeTravelError {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
     }
-}
-
-/// Mint a new session UUID for use by `replace` / `fork` flows. Threading
-/// through this helper (rather than raw `Uuid::new_v4()`) keeps the
-/// "canonical JSONL never truncated" invariant legible: every replace/fork
-/// writes to a fresh UUID, leaving the source file intact.
-pub fn fresh_session_id_for(_tab_id: usize) -> String {
-    Uuid::new_v4().to_string()
 }
 
 pub fn shadow_ref(tab_id: usize) -> String {
@@ -137,12 +119,9 @@ pub fn snapshot_worktree(
     let idx_str = tmp_index.to_string_lossy().to_string();
     let idx_env = [("GIT_INDEX_FILE", idx_str.as_str())];
 
-    // Seed the temp index from HEAD.
     git_envs(worktree_path, &idx_env, &["read-tree", "HEAD"])?;
-    // Stage adds + modifies.
+    // `add -A` covers adds, modifications, and deletions in one pass.
     git_envs(worktree_path, &idx_env, &["add", "-A"])?;
-    // Stage deletions.
-    git_envs(worktree_path, &idx_env, &["add", "-u"])?;
     let tree = git_envs(worktree_path, &idx_env, &["write-tree"])?;
 
     // Parent: either the current shadow tip, or HEAD for the first commit.
@@ -161,11 +140,8 @@ pub fn snapshot_worktree(
 
 /// Restore the worktree's file state to a given shadow commit, without
 /// moving HEAD. Destroys any untracked/uncommitted changes.
-///
-/// Kept available for PR-3, which wires real in-place `replace`.
 #[allow(dead_code)]
 pub fn rewind_worktree(worktree_path: &Path, commit: &str) -> Result<(), String> {
-    // Nuke untracked + tracked changes, then read the target tree.
     git(worktree_path, &["clean", "-fdx"])?;
     git(worktree_path, &["read-tree", "-u", "--reset", commit])?;
     Ok(())
@@ -217,23 +193,37 @@ pub fn copy_truncated_jsonl(
         .map_err(|e| format!("mkdir {parent:?}: {e}"))?;
     let infile = std::fs::File::open(src)
         .map_err(|e| format!("open {src:?}: {e}"))?;
-    let reader = BufReader::new(infile);
+    let mut reader = BufReader::new(infile);
     let mut outfile = std::fs::File::create(dst)
         .map_err(|e| format!("create {dst:?}: {e}"))?;
-    for (i, line) in reader.lines().enumerate() {
-        if i >= line_count {
+    let mut buf = Vec::with_capacity(8 * 1024);
+    for _ in 0..line_count {
+        buf.clear();
+        let n = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
             break;
         }
-        let line = line.map_err(|e| format!("read: {e}"))?;
-        writeln!(outfile, "{line}").map_err(|e| format!("write: {e}"))?;
+        outfile.write_all(&buf).map_err(|e| format!("write: {e}"))?;
     }
     Ok(())
 }
 
-pub fn count_jsonl_lines(path: &Path) -> usize {
-    let Ok(f) = std::fs::File::open(path) else { return 0 };
+pub fn count_jsonl_lines(path: &Path) -> std::io::Result<usize> {
     use std::io::BufRead;
-    std::io::BufReader::new(f).lines().count()
+    let f = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(f);
+    let mut buf = Vec::with_capacity(8 * 1024);
+    let mut n = 0;
+    loop {
+        buf.clear();
+        if reader.read_until(b'\n', &mut buf)? == 0 {
+            break;
+        }
+        n += 1;
+    }
+    Ok(n)
 }
 
 mod systime_serde {
@@ -254,17 +244,8 @@ mod systime_serde {
     }
 }
 
-/// Convenience for the handlers: current UTC time as `SystemTime`.
 pub fn now() -> SystemTime {
     SystemTime::now()
-}
-
-/// Convenience: format a `SystemTime` as unix seconds for log/display.
-#[allow(dead_code)]
-pub fn to_unix_secs(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -332,7 +313,7 @@ mod tests {
         let dst = dir.join("transcript-out.jsonl");
         copy_truncated_jsonl(&src, &dst, 2).unwrap();
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "l1\nl2\n");
-        assert_eq!(count_jsonl_lines(&src), 4);
+        assert_eq!(count_jsonl_lines(&src).unwrap(), 4);
 
         // Cleanup.
         let _ = std::process::Command::new("git")
@@ -350,7 +331,7 @@ mod tests {
             session_id: "abc-1".into(),
             jsonl_line_count: 42,
             shadow_commit: "deadbeef".into(),
-            created_at: UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            created_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
             title: Some("my tab".into()),
         };
         let s = serde_json::to_string(&c).unwrap();

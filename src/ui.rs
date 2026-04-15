@@ -41,19 +41,10 @@ pub enum PendingKey {
     Cancel,
 }
 
-/// Distinguishes the two time-travel flows that share `do_time_travel`.
-/// The difference today is cosmetic (branch name prefix) — PR-3 is where
-/// `Replace` diverges substantively to preserve tab identity in place.
 #[derive(Clone, Copy)]
 enum TimeTravelMode {
     Replace,
     Fork,
-}
-
-#[derive(Clone)]
-pub enum DisplayEntry {
-    Tab(usize),
-    Fold { parent_id: usize, count: usize, depth: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -1076,7 +1067,7 @@ impl App {
         let shadow = checkpoint::shadow_ref(tab_id);
         let next_idx = tab.checkpoints.len();
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
-        let line_count = checkpoint::count_jsonl_lines(&jsonl);
+        let line_count = checkpoint::count_jsonl_lines(&jsonl)?;
         let message = format!("checkpoint-{next_idx}");
         let shadow_commit =
             checkpoint::snapshot_worktree(&wt, &shadow, &message).map_err(E::GitFailed)?;
@@ -1101,12 +1092,6 @@ impl App {
         }))
     }
 
-    /// Rewind this tab to a prior checkpoint.
-    ///
-    /// Semantics (stable from PR-1 onward): the tab's identity is preserved
-    /// across `replace`. The implementation here still spawns a sibling and
-    /// expects the caller to close itself — that's a PR-1 carryover from
-    /// the spike. PR-3 replaces this with a real in-place PTY restart.
     fn handle_replace(&mut self, tab_id: usize, ckpt_id: usize) -> Task<Message> {
         match self.do_time_travel(tab_id, ckpt_id, None, TimeTravelMode::Replace) {
             Ok(task) => task,
@@ -1178,7 +1163,7 @@ impl App {
         checkpoint::fork_worktree(&project_dir, &wt_path, &new_branch, &ckpt.shadow_commit)
             .map_err(E::GitFailed)?;
 
-        let new_session = checkpoint::fresh_session_id_for(tab_id);
+        let new_session = Uuid::new_v4().to_string();
         let src_jsonl = checkpoint::jsonl_path_for(
             src_worktree.as_ref().unwrap_or(&wt_path),
             &ckpt.session_id,
@@ -1199,9 +1184,6 @@ impl App {
             Some(new_session),
             Some(wt_path.clone()),
         );
-        // Carry the checkpoint's title forward so the fork is recognizable
-        // at a glance. Claude Code will overwrite this via `set_title` once
-        // it starts emitting on the new session.
         if let Some(title) = ckpt.title.clone() {
             if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
                 new_tab.title = Some(title);

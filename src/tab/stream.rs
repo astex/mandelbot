@@ -222,7 +222,6 @@ pub fn tab_stream(
                             &mandelbot_dir.to_string_lossy()
                         ),
                     ));
-                    // SPIKE: pin session-id or resume for time-travel.
                     if let Some(sid) = params.resume_session_id.as_deref() {
                         claude_args.push_str(&format!(
                             " --resume {}",
