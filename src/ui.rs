@@ -562,9 +562,7 @@ impl App {
                 let mut tasks: Vec<Task<Message>> = Vec::new();
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.background_tasks = bg_tasks;
-                    if !tab.pr_override {
-                        tab.pr_number = pr_number;
-                    }
+                    tab.pr_scraped = pr_number;
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
                             tab.title = Some(title);
@@ -680,8 +678,7 @@ impl App {
             }
             Message::SetPr(tab_id, pr) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                    tab.pr_number = pr;
-                    tab.pr_override = pr.is_some();
+                    tab.pr_override = pr;
                 }
                 Task::none()
             }
@@ -1027,7 +1024,7 @@ impl App {
             }
             Message::OpenPr(tab_id) => {
                 if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
-                    if let (Some(pr), Some(dir)) = (tab.pr_number, &tab.project_dir) {
+                    if let (Some(pr), Some(dir)) = (tab.pr_number(), &tab.project_dir) {
                         if let Some(slug) = crate::links::github_slug_for_dir(dir) {
                             let url = format!("https://github.com/{slug}/pull/{pr}");
                             let _ = open::that(url);
@@ -1342,7 +1339,7 @@ impl App {
                 );
             }
 
-            if tab.is_claude && tab.pr_number.is_some() {
+            if tab.is_claude && tab.pr_number().is_some() {
                 let muted_fg = Color { a: 0.7, ..fg };
                 let pr_icon = text("⎇")
                     .size(self.config.font_size)

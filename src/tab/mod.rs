@@ -115,11 +115,13 @@ pub struct TerminalTab {
     pub title: Option<String>,
     pub status: AgentStatus,
     pub background_tasks: usize,
-    pub pr_number: Option<u32>,
-    /// When true, `pr_number` was set explicitly by an agent via the
-    /// `set_pr` MCP tool and the status-line scraper must not overwrite
-    /// it. Cleared when the agent unsets the PR.
-    pub pr_override: bool,
+    /// PR number detected by the status-line scraper. Written on every
+    /// Claude output tick. Use `pr_number()` to read, not this field —
+    /// the agent-set override wins when present.
+    pub pr_scraped: Option<u32>,
+    /// PR number set explicitly by an agent via the `set_pr` MCP tool.
+    /// When `Some`, this wins over whatever the scraper sees.
+    pub pr_override: Option<u32>,
     pub pending_input: Option<String>,
     /// Claude session UUID for this tab (if `is_claude`).
     pub session_id: Option<String>,
@@ -156,8 +158,8 @@ impl TerminalTab {
             title: None,
             status: AgentStatus::default(),
             background_tasks: 0,
-            pr_number: None,
-            pr_override: false,
+            pr_scraped: None,
+            pr_override: None,
             pending_input: None,
             session_id: None,
             worktree_dir: None,
@@ -198,6 +200,12 @@ impl TerminalTab {
 
     pub fn is_pending(&self) -> bool {
         self.pending_input.is_some()
+    }
+
+    /// The effective PR number for this tab: the agent-set override
+    /// if present, otherwise whatever the status-line scraper saw.
+    pub fn pr_number(&self) -> Option<u32> {
+        self.pr_override.or(self.pr_scraped)
     }
 
     pub(crate) fn lock_term(
