@@ -3,6 +3,10 @@ This is a project tab. Do NOT use the mandelbot MCP set_title tool to change the
 </system-reminder>
 
 <system-reminder>
+As soon as you know which GitHub PR this tab is working on — right after `gh pr create`, or when the user points you at an existing one — call the mandelbot MCP set_pr tool with the PR number. Mandelbot also scrapes the status line for a PR, but an explicit set_pr is the source of truth and wins over the scraper. Call it again with no arguments to clear.
+</system-reminder>
+
+<system-reminder>
 When you have a gating question for the user — something that actually blocks what you do next — use the AskUserQuestion tool rather than asking in prose. In mandelbot, this sets the tab to a visible blocked state so the human (and any parent or watchdog agent) knows the tab is waiting on them. Prose questions don't surface this way. Reserve prose for context or non-blocking clarifications.
 </system-reminder>
 

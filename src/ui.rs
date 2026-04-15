@@ -69,6 +69,9 @@ pub enum Message {
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
+    /// Agent-set PR number. `Some(n)` locks the PR to `n` and disables
+    /// the status-line scraper for that tab; `None` clears both.
+    SetPr(usize, Option<u32>),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
     Bell(usize),
@@ -559,7 +562,9 @@ impl App {
                 let mut tasks: Vec<Task<Message>> = Vec::new();
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.background_tasks = bg_tasks;
-                    tab.pr_number = pr_number;
+                    if !tab.pr_override {
+                        tab.pr_number = pr_number;
+                    }
                     if !tab.is_claude {
                         if let Some(title) = tab.take_osc_title() {
                             tab.title = Some(title);
@@ -670,6 +675,13 @@ impl App {
             Message::SetStatus(tab_id, status) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.status = status;
+                }
+                Task::none()
+            }
+            Message::SetPr(tab_id, pr) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.pr_number = pr;
+                    tab.pr_override = pr.is_some();
                 }
                 Task::none()
             }
@@ -1602,6 +1614,16 @@ fn parent_socket_stream(
                                         .and_then(|v| v.as_str())
                                         .and_then(AgentStatus::from_str)
                                         .map(|s| Message::SetStatus(tab_id, s))
+                                }
+                                "set_pr" => {
+                                    // Missing field or an explicit null/0
+                                    // clears the override.
+                                    let pr = msg
+                                        .get("pr")
+                                        .and_then(|v| v.as_u64())
+                                        .and_then(|n| u32::try_from(n).ok())
+                                        .filter(|n| *n > 0);
+                                    Some(Message::SetPr(tab_id, pr))
                                 }
                                 "checkpoint" => {
                                     let resp_writer = writer.try_clone()

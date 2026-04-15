@@ -116,6 +116,10 @@ pub struct TerminalTab {
     pub status: AgentStatus,
     pub background_tasks: usize,
     pub pr_number: Option<u32>,
+    /// When true, `pr_number` was set explicitly by an agent via the
+    /// `set_pr` MCP tool and the status-line scraper must not overwrite
+    /// it. Cleared when the agent unsets the PR.
+    pub pr_override: bool,
     pub pending_input: Option<String>,
     /// Claude session UUID for this tab (if `is_claude`).
     pub session_id: Option<String>,
@@ -153,6 +157,7 @@ impl TerminalTab {
             status: AgentStatus::default(),
             background_tasks: 0,
             pr_number: None,
+            pr_override: false,
             pending_input: None,
             session_id: None,
             worktree_dir: None,
