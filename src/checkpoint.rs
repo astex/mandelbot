@@ -95,9 +95,13 @@ pub fn shadow_ref(tab_id: usize) -> String {
 }
 
 /// Translate a filesystem path into Claude Code's project slug.
-/// e.g. `/home/x/project` -> `-home-x-project`.
+/// Both `/` and `.` map to `-`, matching Claude Code's own slug logic,
+/// so e.g. `/home/x/.mandelbot/p` -> `-home-x--mandelbot-p`.
 pub fn project_slug(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "-")
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect()
 }
 
 pub fn jsonl_path_for(project_path: &Path, session_id: &str) -> PathBuf {

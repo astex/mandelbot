@@ -17,7 +17,8 @@ REPO="$TMP/repo"
 FORK="$TMP/fork"
 SESSION="a0000000-b000-4000-8000-00000000ffff"
 CLAUDE_SLUG_FOR() {
-    echo "$HOME/.claude/projects/$(echo "$1" | tr '/' '-')"
+    # Claude Code converts both `/` and `.` in the project path to `-`.
+    echo "$HOME/.claude/projects/$(echo "$1" | tr '/.' '-')"
 }
 
 echo "=== setup temp repo at $REPO ==="
