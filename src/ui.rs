@@ -1122,7 +1122,13 @@ impl App {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.timeline_visible = !tab.timeline_visible;
                     if tab.timeline_visible {
-                        tab.timeline_cursor = tab.checkpoints.len().saturating_sub(1);
+                        // Focus the newest checkpoint by id.
+                        tab.timeline_cursor = tab
+                            .checkpoints
+                            .iter()
+                            .map(|c| c.id)
+                            .max()
+                            .unwrap_or(0);
                     }
                 }
                 Task::none()
@@ -1132,10 +1138,22 @@ impl App {
                     if tab.checkpoints.is_empty() {
                         tab.timeline_cursor = 0;
                     } else {
-                        let max = tab.checkpoints.len() - 1;
-                        let current = tab.timeline_cursor.min(max) as i32;
-                        let next = (current + delta).clamp(0, max as i32) as usize;
-                        tab.timeline_cursor = next;
+                        // Scrub along the currently-focused row only — spec
+                        // says left/right never crosses between branches.
+                        let entries: Vec<(usize, Option<usize>)> = tab
+                            .checkpoints
+                            .iter()
+                            .map(|c| (c.id, c.parent_id))
+                            .collect();
+                        let rows = crate::widget::timeline::compute_rows(&entries);
+                        let (r, c) = crate::widget::timeline::locate(
+                            &rows,
+                            tab.timeline_cursor,
+                        )
+                        .unwrap_or((0, rows[0].ids.len() - 1));
+                        let row_len = rows[r].ids.len() as i32;
+                        let next = ((c as i32) + delta).clamp(0, row_len - 1) as usize;
+                        tab.timeline_cursor = rows[r].ids[next];
                     }
                 }
                 Task::none()
@@ -1147,8 +1165,12 @@ impl App {
                 if tab.checkpoints.is_empty() {
                     return Task::none();
                 }
-                let cursor = tab.timeline_cursor.min(tab.checkpoints.len() - 1);
-                let ckpt_id = tab.checkpoints[cursor].id;
+                // Cursor is already a checkpoint id; validate it still exists.
+                let ckpt_id = if tab.checkpoints.iter().any(|c| c.id == tab.timeline_cursor) {
+                    tab.timeline_cursor
+                } else {
+                    tab.checkpoints.last().map(|c| c.id).unwrap()
+                };
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.timeline_visible = false;
                 }
@@ -1194,6 +1216,17 @@ impl App {
             .max()
             .map(|m| m + 1)
             .unwrap_or(0);
+        // Parent resolution:
+        //   - empty list → root (`None`);
+        //   - post-replace (`pending_branch_parent` set) → that id;
+        //   - otherwise → previously-most-recent checkpoint id.
+        let parent_id = if tab.checkpoints.is_empty() {
+            None
+        } else if let Some(p) = tab.pending_branch_parent {
+            Some(p)
+        } else {
+            tab.checkpoints.iter().map(|c| c.id).max()
+        };
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
         let line_count = checkpoint::count_jsonl_lines(&jsonl);
         let message = format!("checkpoint-{next_idx}");
@@ -1205,6 +1238,7 @@ impl App {
             jsonl_line_count: line_count,
             shadow_commit: shadow_commit.clone(),
             created_at: checkpoint::now(),
+            parent_id,
         };
         let retention = self.config.checkpoint_retention;
         let tab = self
@@ -1213,6 +1247,7 @@ impl App {
             .find(|t| t.id == tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
         tab.checkpoints.push(ckpt);
+        tab.pending_branch_parent = None;
         Self::prune_tab(tab, retention, &shadow);
         Self::persist_tab(tab);
         Ok(serde_json::json!({
@@ -1403,6 +1438,10 @@ impl App {
         //    will redundantly set the same value — harmless.)
         tab.session_id = Some(new_session.clone());
         tab.owned_session_ids.push(new_session);
+        // Mark the next auto-checkpoint to branch off this target so the
+        // timeline renders the rewind as a new row rather than appending
+        // linearly. Ephemeral — not persisted.
+        tab.pending_branch_parent = Some(ckpt_id);
         Self::persist_tab(tab);
 
         self.respond_to_tab(
@@ -2024,6 +2063,7 @@ mod tests {
             jsonl_line_count: 0,
             shadow_commit: format!("sha-{id}"),
             created_at: std::time::UNIX_EPOCH,
+            parent_id: None,
         }
     }
 

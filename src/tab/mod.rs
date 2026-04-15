@@ -146,9 +146,21 @@ pub struct TerminalTab {
     pub checkpoints: Vec<crate::checkpoint::Checkpoint>,
     /// Whether the time-travel timeline strip is visible for this tab.
     pub timeline_visible: bool,
-    /// Index into `checkpoints` pointing at the currently-focused marker
-    /// when the timeline is visible. Clamped whenever the strip opens.
+    /// Checkpoint id of the currently-focused marker when the timeline is
+    /// visible. Stored as an id (not a `Vec` index) so that rendering and
+    /// scrubbing can work with the branching DAG — a single marker can
+    /// sit on different rows depending on which branch holds it, and the
+    /// row layout is not index-stable across inserts. Clamped to the
+    /// newest checkpoint whenever the strip opens.
     pub timeline_cursor: usize,
+    /// "This tab's next auto-checkpoint should branch off checkpoint X,
+    /// not the most recent one." Set by `do_replace` to the id that was
+    /// replaced to; consumed (cleared) by the next `do_checkpoint`. Fork
+    /// deliberately does not set this — fork creates a sibling tab with
+    /// its own empty checkpoint list, so branching within a single tab
+    /// is a replace-only phenomenon. Ephemeral (not persisted); naturally
+    /// resets on restart.
+    pub pending_branch_parent: Option<usize>,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
@@ -188,6 +200,7 @@ impl TerminalTab {
             checkpoints: Vec::new(),
             timeline_visible: false,
             timeline_cursor: 0,
+            pending_branch_parent: None,
             term: Arc::new(Mutex::new(term)),
             listener,
             event_tx: None,

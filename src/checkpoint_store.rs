@@ -180,6 +180,7 @@ mod tests {
                     jsonl_line_count: 17,
                     shadow_commit: "deadbeef".into(),
                     created_at: UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+                    parent_id: None,
                 }],
             };
             save(&record).unwrap();
@@ -224,6 +225,7 @@ mod tests {
                     jsonl_line_count: 0,
                     shadow_commit: "c".into(),
                     created_at: t,
+                    parent_id: None,
                 }],
             };
             save(&record).unwrap();

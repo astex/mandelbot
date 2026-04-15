@@ -20,6 +20,11 @@ pub struct Checkpoint {
     pub shadow_commit: String,
     #[serde(with = "systime_serde")]
     pub created_at: SystemTime,
+    /// Parent in the branching history DAG. `None` means "root" — either
+    /// the very first checkpoint on a tab, or an older on-disk record
+    /// written before this field existed (treat as linear predecessor).
+    #[serde(default)]
+    pub parent_id: Option<usize>,
 }
 
 /// Typed errors for the time-travel handlers.
@@ -375,6 +380,7 @@ mod tests {
             jsonl_line_count: 42,
             shadow_commit: "deadbeef".into(),
             created_at: UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            parent_id: Some(6),
         };
         let s = serde_json::to_string(&c).unwrap();
         let back: Checkpoint = serde_json::from_str(&s).unwrap();
@@ -383,5 +389,22 @@ mod tests {
         assert_eq!(back.jsonl_line_count, c.jsonl_line_count);
         assert_eq!(back.shadow_commit, c.shadow_commit);
         assert_eq!(back.created_at, c.created_at);
+        assert_eq!(back.parent_id, c.parent_id);
+    }
+
+    #[test]
+    fn checkpoint_parent_id_serde_default_is_none() {
+        // On-disk records from PR-4 predate `parent_id`; they must still
+        // deserialize (into `None`) under the new struct shape.
+        let legacy = serde_json::json!({
+            "id": 3,
+            "session_id": "s",
+            "jsonl_line_count": 0,
+            "shadow_commit": "c",
+            "created_at": 1_700_000_000u64,
+        });
+        let back: Checkpoint = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.parent_id, None);
+        assert_eq!(back.id, 3);
     }
 }
