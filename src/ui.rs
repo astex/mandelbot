@@ -41,12 +41,6 @@ pub enum PendingKey {
     Cancel,
 }
 
-#[derive(Clone, Copy)]
-enum TimeTravelMode {
-    Replace,
-    Fork,
-}
-
 #[derive(Debug, Clone)]
 pub enum Message {
     TabOutput(usize, usize, Option<u32>),
@@ -177,7 +171,7 @@ impl App {
     ) -> (usize, Task<Message>) {
         self.spawn_tab_full(
             is_claude, rank, project_dir, parent_id, prompt,
-            branch, model_override, base, None, None,
+            branch, model_override, base, None, None, None,
         )
     }
 
@@ -193,6 +187,7 @@ impl App {
         base: Option<String>,
         resume_session_id: Option<String>,
         existing_worktree: Option<PathBuf>,
+        insert_position: Option<usize>,
     ) -> (usize, Task<Message>) {
         // Expand any folded ancestors so the new tab is visible.
         if let Some(pid) = parent_id {
@@ -228,10 +223,19 @@ impl App {
         let pty_tx = event_tx.clone();
         tab.set_event_tx(event_tx);
 
-        self.tabs.push(tab);
+        let inserted_idx = match insert_position {
+            Some(pos) if pos <= self.tabs.len() => {
+                self.tabs.insert(pos, tab);
+                pos
+            }
+            _ => {
+                self.tabs.push(tab);
+                self.tabs.len() - 1
+            }
+        };
 
         // Initialize colors and window size for OSC query responses.
-        if let Some(tab) = self.tabs.last() {
+        if let Some(tab) = self.tabs.get(inserted_idx) {
             tab.set_colors(
                 self.terminal_theme.fg,
                 self.terminal_theme.bg,
@@ -1107,7 +1111,7 @@ impl App {
     }
 
     fn handle_replace(&mut self, tab_id: usize, ckpt_id: usize) -> Task<Message> {
-        match self.do_time_travel(tab_id, ckpt_id, None, TimeTravelMode::Replace) {
+        match self.do_replace(tab_id, ckpt_id) {
             Ok(task) => task,
             Err(e) => {
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
@@ -1122,7 +1126,7 @@ impl App {
         ckpt_id: usize,
         prompt: Option<String>,
     ) -> Task<Message> {
-        match self.do_time_travel(tab_id, ckpt_id, prompt, TimeTravelMode::Fork) {
+        match self.do_fork(tab_id, ckpt_id, prompt) {
             Ok(task) => task,
             Err(e) => {
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
@@ -1131,19 +1135,32 @@ impl App {
         }
     }
 
-    fn do_time_travel(
+    /// Replace is just fork-then-close-self. The old tab's worktree and JSONL
+    /// stay on disk — future branching-conversation navigation will be able
+    /// to return to them.
+    fn do_replace(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: usize,
+    ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
+        let task = self.do_fork(tab_id, ckpt_id, None)?;
+        let _ = self.close_tab(tab_id);
+        Ok(task)
+    }
+
+    fn do_fork(
         &mut self,
         tab_id: usize,
         ckpt_id: usize,
         prompt: Option<String>,
-        mode: TimeTravelMode,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
-        let tab = self
+        let (idx, tab) = self
             .tabs
             .iter()
-            .find(|t| t.id == tab_id)
+            .enumerate()
+            .find(|(_, t)| t.id == tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
         let ckpt = tab
             .checkpoints
@@ -1152,20 +1169,15 @@ impl App {
             .cloned()
             .ok_or(E::CheckpointNotFound(ckpt_id))?;
         let project_dir = tab.project_dir.clone().ok_or(E::NoProjectDir)?;
-        let parent_id = tab.parent_id;
         let rank = tab.rank;
         let src_worktree = tab.worktree_dir.clone();
 
-        let branch_prefix = match mode {
-            TimeTravelMode::Replace => "replace",
-            TimeTravelMode::Fork => "fork",
-        };
         // A random suffix keeps the branch (and derived worktree path) unique
         // when the same (tab, checkpoint) is forked more than once — otherwise
         // `git worktree add -b` hits `fatal: a branch named ... already exists`.
         let suffix = &Uuid::new_v4().simple().to_string()[..6];
         let new_branch = format!(
-            "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}-{}",
+            "fork-t{tab_id}-c{ckpt_id}-{}-{}",
             &ckpt.shadow_commit[..8],
             suffix,
         );
@@ -1186,17 +1198,21 @@ impl App {
         checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
             .map_err(E::JsonlCopyFailed)?;
 
+        // Fork hangs under the tab it branched from — this gives us a true
+        // tree of branching conversations (and lets do_replace just
+        // close-self afterward and ride close_tab's first-child promotion).
         let (new_tab_id, task) = self.spawn_tab_full(
             true,
             rank,
             Some(project_dir),
-            parent_id,
+            Some(tab_id),
             prompt,
             Some(new_branch),
             None,
             None,
             Some(new_session),
             Some(wt_path.clone()),
+            Some(idx + 1),
         );
         if let Some(title) = ckpt.title.clone() {
             if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {

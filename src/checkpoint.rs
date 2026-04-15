@@ -138,15 +138,6 @@ pub fn snapshot_worktree(
     Ok(commit)
 }
 
-/// Restore the worktree's file state to a given shadow commit, without
-/// moving HEAD. Destroys any untracked/uncommitted changes.
-#[allow(dead_code)]
-pub fn rewind_worktree(worktree_path: &Path, commit: &str) -> Result<(), String> {
-    git(worktree_path, &["clean", "-fdx"])?;
-    git(worktree_path, &["read-tree", "-u", "--reset", commit])?;
-    Ok(())
-}
-
 /// Create a fresh worktree at a branch pointing to the checkpoint commit.
 pub fn fork_worktree(
     project_dir: &Path,
@@ -287,15 +278,6 @@ mod tests {
         std::fs::remove_file(dir.join("u1.txt")).unwrap();
         let c2 = snapshot_worktree(&dir, shadow, "c2").unwrap();
         assert_ne!(c1, c2);
-
-        // Dirty change after c2 (should be nuked by rewind).
-        std::fs::write(dir.join("dirty.txt"), "x").unwrap();
-
-        // Rewind to c1.
-        rewind_worktree(&dir, &c1).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v2");
-        assert_eq!(std::fs::read_to_string(dir.join("u1.txt")).unwrap(), "untracked");
-        assert!(!dir.join("dirty.txt").exists());
 
         // Fork c2 into a new worktree.
         let fork_path = dir.parent().unwrap().join(format!(
