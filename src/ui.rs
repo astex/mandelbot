@@ -1039,12 +1039,7 @@ impl App {
             }
             Message::AutoCheckpoint(tab_id) => {
                 if self.config.auto_checkpoint {
-                    // Auto-checkpoints record one line below the live
-                    // transcript so that a later revert lands *before*
-                    // the turn that just completed. Reverting to the
-                    // most recent turn would leave the tab at its
-                    // current state, which is never useful.
-                    let _ = self.do_checkpoint(tab_id, 1);
+                    let _ = self.do_checkpoint(tab_id);
                 }
                 Task::none()
             }
@@ -1052,17 +1047,23 @@ impl App {
     }
 
     fn handle_checkpoint(&mut self, tab_id: usize) {
-        let response = match self.do_checkpoint(tab_id, 0) {
+        let response = match self.do_checkpoint(tab_id) {
             Ok(v) => v,
             Err(e) => serde_json::json!({"error": e.to_string()}),
         };
         self.respond_to_tab(tab_id, response);
     }
 
+    // Checkpoints always record one line below the live transcript.
+    // Reverting to the most recently flushed line would leave the tab
+    // at (or near) its current state, which is never useful — and for
+    // manual checkpoints fired mid-turn (e.g. Claude calling the MCP
+    // tool as part of a reasoning step) there is no reliable way to
+    // identify a "better" truncation point without parsing transcript
+    // internals. A constant one-line offset is defensible and simple.
     fn do_checkpoint(
         &mut self,
         tab_id: usize,
-        line_count_offset: usize,
     ) -> Result<serde_json::Value, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
@@ -1080,8 +1081,7 @@ impl App {
         let shadow = checkpoint::shadow_ref(tab_id);
         let next_idx = tab.checkpoints.len();
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
-        let line_count = checkpoint::count_jsonl_lines(&jsonl)?
-            .saturating_sub(line_count_offset);
+        let line_count = checkpoint::count_jsonl_lines(&jsonl)?.saturating_sub(1);
         let message = format!("checkpoint-{next_idx}");
         let shadow_commit =
             checkpoint::snapshot_worktree(&wt, &shadow, &message).map_err(E::GitFailed)?;
