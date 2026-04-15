@@ -4,7 +4,7 @@ use iced::widget::{container, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Font, Length, Theme};
 
 use crate::config::Config;
-use crate::tab::TerminalTab;
+use crate::tab::{AgentRank, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::ui::{Message, TimelineMode};
 
@@ -22,7 +22,15 @@ pub fn view<'a>(
     let muted = Color { a: 0.55, ..fg };
 
     if tab.checkpoints.is_empty() {
-        let label = text("no checkpoints yet — the Stop hook creates one after each turn")
+        let message = match tab.rank {
+            AgentRank::Task => {
+                "no checkpoints yet — the Stop hook creates one after each turn"
+            }
+            AgentRank::Home | AgentRank::Project => {
+                "checkpoints are only created in task tabs (claude running in a worktree)"
+            }
+        };
+        let label = text(message)
             .size(config.font_size * 0.85)
             .font(Font::MONOSPACE)
             .color(muted);
