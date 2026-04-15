@@ -1167,20 +1167,6 @@ impl App {
         let rank = tab_snapshot.rank;
         let preserved_title = tab_snapshot.title.clone();
 
-        // Guard: refuse replace on a tab with open descendants. Cascade is
-        // deliberately out of scope for PR-3 — a later hardening pass will
-        // decide whether descendants should be rewound, re-parented, or torn
-        // down.
-        let children: Vec<usize> = self
-            .tabs
-            .iter()
-            .filter(|t| t.parent_id == Some(tab_id))
-            .map(|t| t.id)
-            .collect();
-        if !children.is_empty() {
-            return Err(E::HasChildren { tab_id, children });
-        }
-
         // Mint a fresh session UUID and copy-truncate the canonical JSONL
         // into it. The canonical file at the old UUID is never touched.
         let new_session = Uuid::new_v4().to_string();

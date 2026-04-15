@@ -31,10 +31,6 @@ pub enum TimeTravelError {
     JsonlCopyFailed(String),
     Io(std::io::Error),
     NotSupportedForRank(AgentRank),
-    HasChildren {
-        tab_id: usize,
-        children: Vec<usize>,
-    },
 }
 
 impl fmt::Display for TimeTravelError {
@@ -51,11 +47,6 @@ impl fmt::Display for TimeTravelError {
             Self::NotSupportedForRank(r) => {
                 write!(f, "time-travel is not supported for {r:?} tabs")
             }
-            Self::HasChildren { tab_id, children } => write!(
-                f,
-                "tab {tab_id} has open descendant tabs ({children:?}); \
-                 replace across descendants is not yet supported"
-            ),
         }
     }
 }
