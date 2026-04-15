@@ -130,7 +130,13 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
                 "hooks": [set_status("idle")],
             }],
             "Stop": [{
-                "hooks": [set_status("idle")],
+                "hooks": [
+                    set_status("idle"),
+                    {
+                        "type": "command",
+                        "command": "echo checkpoint > $MANDELBOT_FIFO",
+                    },
+                ],
             }],
             "StopFailure": [{
                 "hooks": [set_status("error")],

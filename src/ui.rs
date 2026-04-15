@@ -71,6 +71,7 @@ pub enum Message {
     McpCheckpoint(usize),
     McpReplace(usize, usize),
     McpFork(usize, usize, Option<String>),
+    AutoCheckpoint(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
@@ -1036,6 +1037,12 @@ impl App {
             Message::McpFork(requesting_tab_id, ckpt_id, prompt) => {
                 self.handle_fork(requesting_tab_id, ckpt_id, prompt)
             }
+            Message::AutoCheckpoint(tab_id) => {
+                if self.config.auto_checkpoint {
+                    let _ = self.do_checkpoint(tab_id);
+                }
+                Task::none()
+            }
         }
     }
 
@@ -1047,6 +1054,13 @@ impl App {
         self.respond_to_tab(tab_id, response);
     }
 
+    // Checkpoints always record one line below the live transcript.
+    // Reverting to the most recently flushed line would leave the tab
+    // at (or near) its current state, which is never useful — and for
+    // manual checkpoints fired mid-turn (e.g. Claude calling the MCP
+    // tool as part of a reasoning step) there is no reliable way to
+    // identify a "better" truncation point without parsing transcript
+    // internals. A constant one-line offset is defensible and simple.
     fn do_checkpoint(
         &mut self,
         tab_id: usize,
@@ -1067,7 +1081,7 @@ impl App {
         let shadow = checkpoint::shadow_ref(tab_id);
         let next_idx = tab.checkpoints.len();
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
-        let line_count = checkpoint::count_jsonl_lines(&jsonl)?;
+        let line_count = checkpoint::count_jsonl_lines(&jsonl)?.saturating_sub(1);
         let message = format!("checkpoint-{next_idx}");
         let shadow_commit =
             checkpoint::snapshot_worktree(&wt, &shadow, &message).map_err(E::GitFailed)?;
