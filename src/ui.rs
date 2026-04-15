@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use futures::SinkExt;
+use uuid::Uuid;
 
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Task, Theme};
@@ -255,7 +256,7 @@ impl App {
         }
 
         let session_id = if is_claude && resume_session_id.is_none() {
-            Some(checkpoint::uuid_v4())
+            Some(Uuid::new_v4().to_string())
         } else {
             None
         };
@@ -1163,7 +1164,7 @@ impl App {
         // A random suffix keeps the branch (and derived worktree path) unique
         // when the same (tab, checkpoint) is forked more than once — otherwise
         // `git worktree add -b` hits `fatal: a branch named ... already exists`.
-        let suffix = &checkpoint::uuid_v4()[..6];
+        let suffix = &Uuid::new_v4().simple().to_string()[..6];
         let new_branch = format!(
             "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}-{}",
             &ckpt.shadow_commit[..8],

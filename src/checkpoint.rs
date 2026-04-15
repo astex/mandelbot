@@ -69,16 +69,12 @@ impl From<std::io::Error> for TimeTravelError {
     }
 }
 
-pub fn uuid_v4() -> String {
-    Uuid::new_v4().to_string()
-}
-
 /// Mint a new session UUID for use by `replace` / `fork` flows. Threading
-/// through this helper (rather than raw `uuid_v4()`) keeps the "canonical
-/// JSONL never truncated" invariant legible: every replace/fork writes to
-/// a fresh UUID, leaving the source file intact.
+/// through this helper (rather than raw `Uuid::new_v4()`) keeps the
+/// "canonical JSONL never truncated" invariant legible: every replace/fork
+/// writes to a fresh UUID, leaving the source file intact.
 pub fn fresh_session_id_for(_tab_id: usize) -> String {
-    uuid_v4()
+    Uuid::new_v4().to_string()
 }
 
 pub fn shadow_ref(tab_id: usize) -> String {
@@ -130,7 +126,7 @@ pub fn snapshot_worktree(
     let tmp_index = std::env::temp_dir().join(format!(
         "mandelbot-ckpt-idx-{}-{}",
         std::process::id(),
-        uuid_v4(),
+        Uuid::new_v4(),
     ));
     let idx_str = tmp_index.to_string_lossy().to_string();
 
@@ -296,7 +292,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "mandelbot-ckpt-test-{}-{}",
             std::process::id(),
-            uuid_v4(),
+            Uuid::new_v4(),
         ));
         std::fs::create_dir_all(&dir).unwrap();
         run(&dir, &["git", "init", "-q"]);
@@ -331,7 +327,7 @@ mod tests {
         let fork_path = dir.parent().unwrap().join(format!(
             "mandelbot-fork-{}-{}",
             std::process::id(),
-            uuid_v4(),
+            Uuid::new_v4(),
         ));
         fork_worktree(&dir, &fork_path, "fork-test", &c2).unwrap();
         assert_eq!(std::fs::read_to_string(fork_path.join("a.txt")).unwrap(), "v3");
