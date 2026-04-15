@@ -122,6 +122,12 @@ pub struct TerminalTab {
     /// PR number set explicitly by an agent via the `set_pr` MCP tool.
     /// When `Some`, this wins over whatever the scraper sees.
     pub pr_override: Option<u32>,
+    /// Epoch ms of the next scheduled Claude wake-up (from the
+    /// `ScheduleWakeup` tool, captured via a PostToolUse hook). At
+    /// most one outstanding per tab — `/loop` only ever has one in
+    /// flight, and re-issues replace.  `None` once the deadline has
+    /// passed or no wake-up has been scheduled.
+    pub next_wakeup_at_ms: Option<u64>,
     pub pending_input: Option<String>,
     /// Claude session UUID for this tab (if `is_claude`).
     pub session_id: Option<String>,
@@ -160,6 +166,7 @@ impl TerminalTab {
             background_tasks: 0,
             pr_scraped: None,
             pr_override: None,
+            next_wakeup_at_ms: None,
             pending_input: None,
             session_id: None,
             worktree_dir: None,

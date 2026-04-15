@@ -116,10 +116,27 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
                     "hooks": [set_status("needs_review")],
                 },
             ],
-            "PostToolUse": [{
-                "matcher": "",
-                "hooks": [set_status("working")],
-            }],
+            "PostToolUse": [
+                {
+                    "matcher": "",
+                    "hooks": [set_status("working")],
+                },
+                {
+                    // Capture ScheduleWakeup tool calls so the tab can
+                    // show a pending wake-up alongside backgrounded
+                    // shells.  `tool_response.scheduledFor` is epoch ms
+                    // (or 0 when the runtime declined to schedule, e.g.
+                    // /loop dynamic disabled or the loop aged out).
+                    // Parsed with grep instead of jq to avoid adding a
+                    // runtime dep — the field is a top-level number in
+                    // the hook's stdin JSON, so the regex is unambig.
+                    "matcher": "ScheduleWakeup",
+                    "hooks": [{
+                        "type": "command",
+                        "command": r#"sf=$(grep -oE '"scheduledFor":[0-9]+' | grep -oE '[0-9]+'); [ "${sf:-0}" -gt 0 ] && echo "wakeup_at:$sf" > $MANDELBOT_FIFO"#,
+                    }],
+                },
+            ],
             "PostToolUseFailure": [{
                 "hooks": [set_status("working")],
             }],
