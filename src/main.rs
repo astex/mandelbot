@@ -1,4 +1,5 @@
 mod animation;
+mod checkpoint;
 mod config;
 mod keys;
 mod links;

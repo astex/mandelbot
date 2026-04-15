@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use futures::SinkExt;
+use uuid::Uuid;
 
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Fill, Font, Size, Subscription, Task, Theme};
@@ -13,6 +14,7 @@ use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
 use crate::animation::FlashState;
+use crate::checkpoint;
 use crate::config::Config;
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
@@ -39,6 +41,12 @@ pub enum PendingKey {
     Cancel,
 }
 
+#[derive(Clone, Copy)]
+enum TimeTravelMode {
+    Replace,
+    Fork,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     TabOutput(usize, usize, Option<u32>),
@@ -60,6 +68,10 @@ pub enum Message {
     PendingInput(PendingKey),
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
+    McpCheckpoint(usize),
+    McpReplace(usize, usize),
+    McpFork(usize, usize, Option<String>),
+    TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
     SetSelection(Option<Selection>),
@@ -162,6 +174,25 @@ impl App {
         model_override: Option<String>,
         base: Option<String>,
     ) -> (usize, Task<Message>) {
+        self.spawn_tab_full(
+            is_claude, rank, project_dir, parent_id, prompt,
+            branch, model_override, base, None, None,
+        )
+    }
+
+    fn spawn_tab_full(
+        &mut self,
+        is_claude: bool,
+        rank: AgentRank,
+        project_dir: Option<PathBuf>,
+        parent_id: Option<usize>,
+        prompt: Option<String>,
+        branch: Option<String>,
+        model_override: Option<String>,
+        base: Option<String>,
+        resume_session_id: Option<String>,
+        existing_worktree: Option<PathBuf>,
+    ) -> (usize, Task<Message>) {
         // Expand any folded ancestors so the new tab is visible.
         if let Some(pid) = parent_id {
             self.unfold_ancestors(pid);
@@ -215,6 +246,12 @@ impl App {
             });
         }
 
+        let session_id = if is_claude && resume_session_id.is_none() {
+            Some(Uuid::new_v4().to_string())
+        } else {
+            None
+        };
+
         let params = crate::tab::TabSpawnParams {
             id,
             rows,
@@ -231,6 +268,9 @@ impl App {
             branch,
             base,
             control_prefix: self.config.control_prefix.to_string(),
+            session_id,
+            resume_session_id,
+            existing_worktree,
         };
 
         let tab = self.tabs.last().unwrap();
@@ -979,7 +1019,185 @@ impl App {
                 }
                 Task::none()
             }
+            Message::TabReady { tab_id, worktree_dir, session_id } => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.worktree_dir = worktree_dir;
+                    tab.session_id = session_id;
+                }
+                Task::none()
+            }
+            Message::McpCheckpoint(requesting_tab_id) => {
+                self.handle_checkpoint(requesting_tab_id);
+                Task::none()
+            }
+            Message::McpReplace(requesting_tab_id, ckpt_id) => {
+                self.handle_replace(requesting_tab_id, ckpt_id)
+            }
+            Message::McpFork(requesting_tab_id, ckpt_id, prompt) => {
+                self.handle_fork(requesting_tab_id, ckpt_id, prompt)
+            }
         }
+    }
+
+    fn handle_checkpoint(&mut self, tab_id: usize) {
+        let response = match self.do_checkpoint(tab_id) {
+            Ok(v) => v,
+            Err(e) => serde_json::json!({"error": e.to_string()}),
+        };
+        self.respond_to_tab(tab_id, response);
+    }
+
+    fn do_checkpoint(
+        &mut self,
+        tab_id: usize,
+    ) -> Result<serde_json::Value, checkpoint::TimeTravelError> {
+        use checkpoint::TimeTravelError as E;
+
+        let tab = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        let wt = tab.worktree_dir.clone().ok_or(E::NoWorktree)?;
+        let session_id = tab.session_id.clone().ok_or(E::NoSessionId)?;
+        if tab.rank == AgentRank::Home {
+            return Err(E::NotSupportedForRank(tab.rank));
+        }
+        let title = tab.title.clone();
+        let shadow = checkpoint::shadow_ref(tab_id);
+        let next_idx = tab.checkpoints.len();
+        let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
+        let line_count = checkpoint::count_jsonl_lines(&jsonl)?;
+        let message = format!("checkpoint-{next_idx}");
+        let shadow_commit =
+            checkpoint::snapshot_worktree(&wt, &shadow, &message).map_err(E::GitFailed)?;
+        let ckpt = checkpoint::Checkpoint {
+            id: next_idx,
+            session_id,
+            jsonl_line_count: line_count,
+            shadow_commit: shadow_commit.clone(),
+            created_at: checkpoint::now(),
+            title,
+        };
+        let tab = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        tab.checkpoints.push(ckpt);
+        Ok(serde_json::json!({
+            "checkpoint_id": next_idx,
+            "shadow_commit": shadow_commit,
+            "jsonl_line_count": line_count,
+        }))
+    }
+
+    fn handle_replace(&mut self, tab_id: usize, ckpt_id: usize) -> Task<Message> {
+        match self.do_time_travel(tab_id, ckpt_id, None, TimeTravelMode::Replace) {
+            Ok(task) => task,
+            Err(e) => {
+                self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
+                Task::none()
+            }
+        }
+    }
+
+    fn handle_fork(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: usize,
+        prompt: Option<String>,
+    ) -> Task<Message> {
+        match self.do_time_travel(tab_id, ckpt_id, prompt, TimeTravelMode::Fork) {
+            Ok(task) => task,
+            Err(e) => {
+                self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
+                Task::none()
+            }
+        }
+    }
+
+    fn do_time_travel(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: usize,
+        prompt: Option<String>,
+        mode: TimeTravelMode,
+    ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
+        use checkpoint::TimeTravelError as E;
+
+        let tab = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        let ckpt = tab
+            .checkpoints
+            .iter()
+            .find(|c| c.id == ckpt_id)
+            .cloned()
+            .ok_or(E::CheckpointNotFound(ckpt_id))?;
+        let project_dir = tab.project_dir.clone().ok_or(E::NoProjectDir)?;
+        let parent_id = tab.parent_id;
+        let rank = tab.rank;
+        let src_worktree = tab.worktree_dir.clone();
+
+        let branch_prefix = match mode {
+            TimeTravelMode::Replace => "replace",
+            TimeTravelMode::Fork => "fork",
+        };
+        // A random suffix keeps the branch (and derived worktree path) unique
+        // when the same (tab, checkpoint) is forked more than once — otherwise
+        // `git worktree add -b` hits `fatal: a branch named ... already exists`.
+        let suffix = &Uuid::new_v4().simple().to_string()[..6];
+        let new_branch = format!(
+            "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}-{}",
+            &ckpt.shadow_commit[..8],
+            suffix,
+        );
+        let wt_path = crate::worktree::worktree_path(
+            &project_dir,
+            &self.config.worktree_location,
+            &new_branch,
+        );
+        checkpoint::fork_worktree(&project_dir, &wt_path, &new_branch, &ckpt.shadow_commit)
+            .map_err(E::GitFailed)?;
+
+        let new_session = Uuid::new_v4().to_string();
+        let src_jsonl = checkpoint::jsonl_path_for(
+            src_worktree.as_ref().unwrap_or(&wt_path),
+            &ckpt.session_id,
+        );
+        let dst_jsonl = checkpoint::jsonl_path_for(&wt_path, &new_session);
+        checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
+            .map_err(E::JsonlCopyFailed)?;
+
+        let (new_tab_id, task) = self.spawn_tab_full(
+            true,
+            rank,
+            Some(project_dir),
+            parent_id,
+            prompt,
+            Some(new_branch),
+            None,
+            None,
+            Some(new_session),
+            Some(wt_path.clone()),
+        );
+        if let Some(title) = ckpt.title.clone() {
+            if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+                new_tab.title = Some(title);
+            }
+        }
+        self.focus_tab(new_tab_id);
+        self.respond_to_tab(
+            tab_id,
+            serde_json::json!({
+                "new_tab_id": new_tab_id,
+                "worktree": wt_path.to_string_lossy(),
+            }),
+        );
+        Ok(task)
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -1354,6 +1572,38 @@ fn parent_socket_stream(
                                         .and_then(|v| v.as_str())
                                         .and_then(AgentStatus::from_str)
                                         .map(|s| Message::SetStatus(tab_id, s))
+                                }
+                                "checkpoint" => {
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpCheckpoint(tab_id))
+                                }
+                                "replace" => {
+                                    let ckpt_id = msg.get("checkpoint_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize)
+                                        .unwrap_or(0);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpReplace(tab_id, ckpt_id))
+                                }
+                                "fork" => {
+                                    let ckpt_id = msg.get("checkpoint_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize)
+                                        .unwrap_or(0);
+                                    let prompt = msg.get("prompt")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpFork(tab_id, ckpt_id, prompt))
                                 }
                                 _ => None,
                             };
