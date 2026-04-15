@@ -102,10 +102,16 @@ pub fn jsonl_path_for(project_path: &Path, session_id: &str) -> PathBuf {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .stderr(Stdio::inherit())
+    git_envs(cwd, &[], args)
+}
+
+fn git_envs(cwd: &Path, envs: &[(&str, &str)], args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd).stderr(Stdio::inherit());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let out = cmd
         .output()
         .map_err(|e| format!("git {args:?}: {e}"))?;
     if !out.status.success() {
@@ -129,28 +135,15 @@ pub fn snapshot_worktree(
         Uuid::new_v4(),
     ));
     let idx_str = tmp_index.to_string_lossy().to_string();
-
-    let run = |args: &[&str]| -> Result<String, String> {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(worktree_path)
-            .env("GIT_INDEX_FILE", &idx_str)
-            .stderr(Stdio::inherit())
-            .output()
-            .map_err(|e| format!("git {args:?}: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("git {args:?}: exit {}", out.status));
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
+    let idx_env = [("GIT_INDEX_FILE", idx_str.as_str())];
 
     // Seed the temp index from HEAD.
-    run(&["read-tree", "HEAD"])?;
+    git_envs(worktree_path, &idx_env, &["read-tree", "HEAD"])?;
     // Stage adds + modifies.
-    run(&["add", "-A"])?;
+    git_envs(worktree_path, &idx_env, &["add", "-A"])?;
     // Stage deletions.
-    run(&["add", "-u"])?;
-    let tree = run(&["write-tree"])?;
+    git_envs(worktree_path, &idx_env, &["add", "-u"])?;
+    let tree = git_envs(worktree_path, &idx_env, &["write-tree"])?;
 
     // Parent: either the current shadow tip, or HEAD for the first commit.
     let parent = git(worktree_path, &["rev-parse", "--verify", shadow_ref])
