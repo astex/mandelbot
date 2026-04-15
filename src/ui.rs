@@ -1135,80 +1135,15 @@ impl App {
         }
     }
 
-    /// Rewind a tab to a prior checkpoint by spawning a new first-child of the
-    /// tab (with `claude --resume <fresh-uuid>` in the rewound worktree) and
-    /// then closing the current tab. `close_tab`'s first-child promotion takes
-    /// over from there: the new tab inherits the closed tab's parent/depth
-    /// slot, and any remaining descendants are re-parented under it.
+    /// Replace is just fork-then-close-self. The old tab's worktree and JSONL
+    /// stay on disk — future branching-conversation navigation will be able
+    /// to return to them.
     fn do_replace(
         &mut self,
         tab_id: usize,
         ckpt_id: usize,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
-        use checkpoint::TimeTravelError as E;
-
-        let (idx, tab_snapshot) = self
-            .tabs
-            .iter()
-            .enumerate()
-            .find(|(_, t)| t.id == tab_id)
-            .ok_or(E::UnknownTab(tab_id))?;
-        if tab_snapshot.rank == AgentRank::Home {
-            return Err(E::NotSupportedForRank(tab_snapshot.rank));
-        }
-        let ckpt = tab_snapshot
-            .checkpoints
-            .iter()
-            .find(|c| c.id == ckpt_id)
-            .cloned()
-            .ok_or(E::CheckpointNotFound(ckpt_id))?;
-        let worktree = tab_snapshot.worktree_dir.clone().ok_or(E::NoWorktree)?;
-        let project_dir = tab_snapshot.project_dir.clone().ok_or(E::NoProjectDir)?;
-        let rank = tab_snapshot.rank;
-        let preserved_title = tab_snapshot.title.clone();
-
-        // Mint a fresh session UUID and copy-truncate the canonical JSONL
-        // into it. The canonical file at the old UUID is never touched.
-        let new_session = Uuid::new_v4().to_string();
-        let src_jsonl = checkpoint::jsonl_path_for(&worktree, &ckpt.session_id);
-        let dst_jsonl = checkpoint::jsonl_path_for(&worktree, &new_session);
-        checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
-            .map_err(E::JsonlCopyFailed)?;
-
-        // Rewind the worktree's file state to the checkpoint commit.
-        checkpoint::rewind_worktree(&worktree, &ckpt.shadow_commit).map_err(E::GitFailed)?;
-
-        // Spawn the new claude as the first child of the old tab, immediately
-        // after it in `self.tabs`. When the old tab is closed, close_tab's
-        // first-child promotion hoists the new tab into the old slot.
-        let (new_tab_id, task) = self.spawn_tab_full(
-            true,
-            rank,
-            Some(project_dir),
-            Some(tab_id),
-            None,
-            None,
-            None,
-            None,
-            Some(new_session),
-            Some(worktree.clone()),
-            Some(idx + 1),
-        );
-        if let Some(title) = preserved_title {
-            if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
-                new_tab.title = Some(title);
-            }
-        }
-        self.focus_tab(new_tab_id);
-        self.respond_to_tab(
-            tab_id,
-            serde_json::json!({
-                "new_tab_id": new_tab_id,
-                "worktree": worktree.to_string_lossy(),
-            }),
-        );
-
-        // Close the old tab — promotion re-parents the new child into its slot.
+        let task = self.do_fork(tab_id, ckpt_id, None)?;
         let _ = self.close_tab(tab_id);
         Ok(task)
     }
@@ -1221,10 +1156,11 @@ impl App {
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
-        let tab = self
+        let (idx, tab) = self
             .tabs
             .iter()
-            .find(|t| t.id == tab_id)
+            .enumerate()
+            .find(|(_, t)| t.id == tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
         let ckpt = tab
             .checkpoints
@@ -1233,7 +1169,6 @@ impl App {
             .cloned()
             .ok_or(E::CheckpointNotFound(ckpt_id))?;
         let project_dir = tab.project_dir.clone().ok_or(E::NoProjectDir)?;
-        let parent_id = tab.parent_id;
         let rank = tab.rank;
         let src_worktree = tab.worktree_dir.clone();
 
@@ -1263,18 +1198,21 @@ impl App {
         checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
             .map_err(E::JsonlCopyFailed)?;
 
+        // Fork hangs under the tab it branched from — this gives us a true
+        // tree of branching conversations (and lets do_replace just
+        // close-self afterward and ride close_tab's first-child promotion).
         let (new_tab_id, task) = self.spawn_tab_full(
             true,
             rank,
             Some(project_dir),
-            parent_id,
+            Some(tab_id),
             prompt,
             Some(new_branch),
             None,
             None,
             Some(new_session),
             Some(wt_path.clone()),
-            None,
+            Some(idx + 1),
         );
         if let Some(title) = ckpt.title.clone() {
             if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
