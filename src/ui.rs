@@ -1039,7 +1039,12 @@ impl App {
             }
             Message::AutoCheckpoint(tab_id) => {
                 if self.config.auto_checkpoint {
-                    let _ = self.do_checkpoint(tab_id);
+                    // Auto-checkpoints record one line below the live
+                    // transcript so that a later revert lands *before*
+                    // the turn that just completed. Reverting to the
+                    // most recent turn would leave the tab at its
+                    // current state, which is never useful.
+                    let _ = self.do_checkpoint(tab_id, 1);
                 }
                 Task::none()
             }
@@ -1047,7 +1052,7 @@ impl App {
     }
 
     fn handle_checkpoint(&mut self, tab_id: usize) {
-        let response = match self.do_checkpoint(tab_id) {
+        let response = match self.do_checkpoint(tab_id, 0) {
             Ok(v) => v,
             Err(e) => serde_json::json!({"error": e.to_string()}),
         };
@@ -1057,6 +1062,7 @@ impl App {
     fn do_checkpoint(
         &mut self,
         tab_id: usize,
+        line_count_offset: usize,
     ) -> Result<serde_json::Value, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
@@ -1074,7 +1080,8 @@ impl App {
         let shadow = checkpoint::shadow_ref(tab_id);
         let next_idx = tab.checkpoints.len();
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
-        let line_count = checkpoint::count_jsonl_lines(&jsonl)?;
+        let line_count = checkpoint::count_jsonl_lines(&jsonl)?
+            .saturating_sub(line_count_offset);
         let message = format!("checkpoint-{next_idx}");
         let shadow_commit =
             checkpoint::snapshot_worktree(&wt, &shadow, &message).map_err(E::GitFailed)?;
