@@ -132,6 +132,19 @@ fn handle_tools_list(id: Value) -> Response {
                     },
                 },
                 {
+                    "name": "set_pr",
+                    "description": "Set the GitHub PR number tracked by this tab. Use this as soon as you know the PR this tab is working on (e.g. after creating a PR with `gh pr create` or when the user points you at an existing one). An explicit value set here is the source of truth and overrides the automatic status-line scraper. Omit `pr` (or pass 0) to clear the override and let the scraper take over again.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "pr": {
+                                "type": "integer",
+                                "description": "The PR number to display for this tab. Omit or pass 0 to clear.",
+                            },
+                        },
+                    },
+                },
+                {
                     "name": "checkpoint",
                     "description": "Snapshot this tab's worktree state and current conversation position. Returns a checkpoint_id that can be passed to replace or fork.",
                     "inputSchema": {
@@ -366,6 +379,38 @@ async fn handle_tools_call(
                 Err(e) => Response::err(id, -32000, e),
             }
         }
+        "set_pr" => {
+            // Absent, null, or 0 clears the override. Any positive
+            // integer locks the tab's PR to that value.
+            let pr = params
+                .get("arguments")
+                .and_then(|a| a.get("pr"))
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0);
+
+            let mut msg = serde_json::json!({
+                "type": "set_pr",
+                "tab_id": tab_id,
+            });
+            if let Some(n) = pr {
+                msg["pr"] = Value::Number(n.into());
+            }
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            let text = match pr {
+                Some(n) => format!("PR set to #{n}"),
+                None => "PR cleared".to_string(),
+            };
+            Response::ok(
+                id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": text }],
+                }),
+            )
+        }
         "checkpoint" => {
             let msg = serde_json::json!({
                 "type": "checkpoint",
@@ -599,9 +644,10 @@ mod tests {
         assert_eq!(resp["result"]["tools"][1]["name"], "spawn_tab");
         assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
         assert_eq!(resp["result"]["tools"][3]["name"], "close_tab");
-        assert_eq!(resp["result"]["tools"][4]["name"], "checkpoint");
-        assert_eq!(resp["result"]["tools"][5]["name"], "replace");
-        assert_eq!(resp["result"]["tools"][6]["name"], "fork");
+        assert_eq!(resp["result"]["tools"][4]["name"], "set_pr");
+        assert_eq!(resp["result"]["tools"][5]["name"], "checkpoint");
+        assert_eq!(resp["result"]["tools"][6]["name"], "replace");
+        assert_eq!(resp["result"]["tools"][7]["name"], "fork");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -664,6 +710,42 @@ mod tests {
         assert_eq!(parent_msg["type"], "set_status");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert_eq!(parent_msg["status"], "working");
+
+        // -- tools/call set_pr (set to a number) --
+        let call = r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"set_pr","arguments":{"pr":1234}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "PR set to #1234");
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_pr");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["pr"], 1234);
+
+        // -- tools/call set_pr (clear by omitting the field) --
+        let call = r#"{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"set_pr","arguments":{}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "PR cleared");
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_pr");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert!(parent_msg.get("pr").is_none());
 
         // -- tools/call close_tab --
         let call = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"close_tab","arguments":{"tab_id":7}}}"#;
