@@ -20,6 +20,10 @@ pub struct Checkpoint {
     pub shadow_commit: String,
     #[serde(with = "systime_serde")]
     pub created_at: SystemTime,
+    /// Tab title at the moment the checkpoint was taken, so a `fork`
+    /// (or future `replace`) can restore the label a reader will expect.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Typed errors for the time-travel handlers.
@@ -371,6 +375,7 @@ mod tests {
             jsonl_line_count: 42,
             shadow_commit: "deadbeef".into(),
             created_at: UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            title: Some("my tab".into()),
         };
         let s = serde_json::to_string(&c).unwrap();
         let back: Checkpoint = serde_json::from_str(&s).unwrap();
@@ -379,5 +384,11 @@ mod tests {
         assert_eq!(back.jsonl_line_count, c.jsonl_line_count);
         assert_eq!(back.shadow_commit, c.shadow_commit);
         assert_eq!(back.created_at, c.created_at);
+        assert_eq!(back.title, c.title);
+
+        // Records from before this field existed still deserialize.
+        let older = r#"{"id":1,"session_id":"s","jsonl_line_count":0,"shadow_commit":"x","created_at":0}"#;
+        let parsed: Checkpoint = serde_json::from_str(older).unwrap();
+        assert_eq!(parsed.title, None);
     }
 }

@@ -1071,6 +1071,7 @@ impl App {
         if tab.rank == AgentRank::Home {
             return Err(E::NotSupportedForRank(tab.rank));
         }
+        let title = tab.title.clone();
         let shadow = checkpoint::shadow_ref(tab_id);
         let next_idx = tab.checkpoints.len();
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
@@ -1084,6 +1085,7 @@ impl App {
             jsonl_line_count: line_count,
             shadow_commit: shadow_commit.clone(),
             created_at: checkpoint::now(),
+            title,
         };
         let tab = self
             .tabs
@@ -1158,9 +1160,14 @@ impl App {
             TimeTravelMode::Replace => "replace",
             TimeTravelMode::Fork => "fork",
         };
+        // A random suffix keeps the branch (and derived worktree path) unique
+        // when the same (tab, checkpoint) is forked more than once — otherwise
+        // `git worktree add -b` hits `fatal: a branch named ... already exists`.
+        let suffix = &checkpoint::uuid_v4()[..6];
         let new_branch = format!(
-            "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}",
+            "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}-{}",
             &ckpt.shadow_commit[..8],
+            suffix,
         );
         let wt_path = crate::worktree::worktree_path(
             &project_dir,
@@ -1191,6 +1198,14 @@ impl App {
             Some(new_session),
             Some(wt_path.clone()),
         );
+        // Carry the checkpoint's title forward so the fork is recognizable
+        // at a glance. Claude Code will overwrite this via `set_title` once
+        // it starts emitting on the new session.
+        if let Some(title) = ckpt.title.clone() {
+            if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+                new_tab.title = Some(title);
+            }
+        }
         self.focus_tab(new_tab_id);
         self.respond_to_tab(
             tab_id,
