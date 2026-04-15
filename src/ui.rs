@@ -72,6 +72,16 @@ pub enum Message {
     /// Agent-set PR number. `Some(n)` locks the PR to `n` and disables
     /// the status-line scraper for that tab; `None` clears both.
     SetPr(usize, Option<u32>),
+    /// A `ScheduleWakeup` tool call resolved with a real wake-up
+    /// scheduled at `epoch_ms`.  Captured by a PostToolUse hook on
+    /// the tab's Claude session and piped through `MANDELBOT_FIFO`.
+    WakeupAt(usize, u64),
+    /// One-shot deadline tick for a previously scheduled wake-up.
+    /// Fired by a delayed task spawned in the `WakeupAt` handler so
+    /// the `⏱` chip clears even when no other event is in flight at
+    /// the deadline.  Carries the original `epoch_ms` so a newer
+    /// wake-up that supersedes this one is not cleared early.
+    WakeupExpired(usize, u64),
     SetSelection(Option<Selection>),
     UpdateSelection(GridPoint, Side),
     Bell(usize),
@@ -679,6 +689,46 @@ impl App {
             Message::SetPr(tab_id, pr) => {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.pr_override = pr;
+                }
+                Task::none()
+            }
+            Message::WakeupAt(tab_id, epoch_ms) => {
+                if let Some(tab) =
+                    self.tabs.iter_mut().find(|t| t.id == tab_id)
+                {
+                    tab.next_wakeup_at_ms = Some(epoch_ms);
+                }
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let delay_ms = epoch_ms.saturating_sub(now_ms);
+                Task::perform(
+                    async move {
+                        let (tx, rx) =
+                            futures::channel::oneshot::channel();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(
+                                std::time::Duration::from_millis(
+                                    delay_ms,
+                                ),
+                            );
+                            let _ = tx.send(());
+                        });
+                        let _ = rx.await;
+                    },
+                    move |_| {
+                        Message::WakeupExpired(tab_id, epoch_ms)
+                    },
+                )
+            }
+            Message::WakeupExpired(tab_id, epoch_ms) => {
+                if let Some(tab) =
+                    self.tabs.iter_mut().find(|t| t.id == tab_id)
+                {
+                    if tab.next_wakeup_at_ms == Some(epoch_ms) {
+                        tab.next_wakeup_at_ms = None;
+                    }
                 }
                 Task::none()
             }
@@ -1363,6 +1413,23 @@ impl App {
                         .font(Font::MONOSPACE)
                         .color(self.terminal_theme.cyan),
                 );
+            }
+            if tab.is_claude {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let has_pending_wakeup = matches!(
+                    tab.next_wakeup_at_ms,
+                    Some(t) if t > now_ms,
+                );
+                if has_pending_wakeup {
+                    suffix = suffix.push(
+                        text("⏱")
+                            .size(self.config.font_size * 0.75)
+                            .color(self.terminal_theme.cyan),
+                    );
+                }
             }
             {
                 let dot_size = self.config.font_size * 0.6;

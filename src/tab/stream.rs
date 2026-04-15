@@ -73,6 +73,19 @@ pub fn fifo_stream(
                         {
                             break;
                         }
+                    } else if let Some(ts) = trimmed
+                        .strip_prefix("wakeup_at:")
+                        .and_then(|s| s.parse::<u64>().ok())
+                    {
+                        if futures::executor::block_on(
+                            sender.send(Message::WakeupAt(
+                                tab_id, ts,
+                            )),
+                        )
+                        .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
                 let _ = exit_sender.send(());
