@@ -31,6 +31,10 @@ pub enum TimeTravelError {
     JsonlCopyFailed(String),
     Io(std::io::Error),
     NotSupportedForRank(AgentRank),
+    HasChildren {
+        tab_id: usize,
+        children: Vec<usize>,
+    },
 }
 
 impl fmt::Display for TimeTravelError {
@@ -47,6 +51,11 @@ impl fmt::Display for TimeTravelError {
             Self::NotSupportedForRank(r) => {
                 write!(f, "time-travel is not supported for {r:?} tabs")
             }
+            Self::HasChildren { tab_id, children } => write!(
+                f,
+                "tab {tab_id} has open descendant tabs ({children:?}); \
+                 replace across descendants is not yet supported"
+            ),
         }
     }
 }
@@ -140,7 +149,6 @@ pub fn snapshot_worktree(
 
 /// Restore the worktree's file state to a given shadow commit, without
 /// moving HEAD. Destroys any untracked/uncommitted changes.
-#[allow(dead_code)]
 pub fn rewind_worktree(worktree_path: &Path, commit: &str) -> Result<(), String> {
     git(worktree_path, &["clean", "-fdx"])?;
     git(worktree_path, &["read-tree", "-u", "--reset", commit])?;

@@ -41,12 +41,6 @@ pub enum PendingKey {
     Cancel,
 }
 
-#[derive(Clone, Copy)]
-enum TimeTravelMode {
-    Replace,
-    Fork,
-}
-
 #[derive(Debug, Clone)]
 pub enum Message {
     TabOutput(usize, usize, Option<u32>),
@@ -177,7 +171,7 @@ impl App {
     ) -> (usize, Task<Message>) {
         self.spawn_tab_full(
             is_claude, rank, project_dir, parent_id, prompt,
-            branch, model_override, base, None, None,
+            branch, model_override, base, None, None, None,
         )
     }
 
@@ -193,6 +187,7 @@ impl App {
         base: Option<String>,
         resume_session_id: Option<String>,
         existing_worktree: Option<PathBuf>,
+        insert_position: Option<usize>,
     ) -> (usize, Task<Message>) {
         // Expand any folded ancestors so the new tab is visible.
         if let Some(pid) = parent_id {
@@ -228,10 +223,19 @@ impl App {
         let pty_tx = event_tx.clone();
         tab.set_event_tx(event_tx);
 
-        self.tabs.push(tab);
+        let inserted_idx = match insert_position {
+            Some(pos) if pos <= self.tabs.len() => {
+                self.tabs.insert(pos, tab);
+                pos
+            }
+            _ => {
+                self.tabs.push(tab);
+                self.tabs.len() - 1
+            }
+        };
 
         // Initialize colors and window size for OSC query responses.
-        if let Some(tab) = self.tabs.last() {
+        if let Some(tab) = self.tabs.get(inserted_idx) {
             tab.set_colors(
                 self.terminal_theme.fg,
                 self.terminal_theme.bg,
@@ -1107,7 +1111,7 @@ impl App {
     }
 
     fn handle_replace(&mut self, tab_id: usize, ckpt_id: usize) -> Task<Message> {
-        match self.do_time_travel(tab_id, ckpt_id, None, TimeTravelMode::Replace) {
+        match self.do_replace(tab_id, ckpt_id) {
             Ok(task) => task,
             Err(e) => {
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
@@ -1122,7 +1126,7 @@ impl App {
         ckpt_id: usize,
         prompt: Option<String>,
     ) -> Task<Message> {
-        match self.do_time_travel(tab_id, ckpt_id, prompt, TimeTravelMode::Fork) {
+        match self.do_fork(tab_id, ckpt_id, prompt) {
             Ok(task) => task,
             Err(e) => {
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
@@ -1131,12 +1135,103 @@ impl App {
         }
     }
 
-    fn do_time_travel(
+    /// Rewind a tab to a prior checkpoint by spawning a new first-child of the
+    /// tab (with `claude --resume <fresh-uuid>` in the rewound worktree) and
+    /// then closing the current tab. `close_tab`'s first-child promotion takes
+    /// over from there: the new tab inherits the closed tab's parent/depth
+    /// slot, and any remaining descendants are re-parented under it.
+    fn do_replace(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: usize,
+    ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
+        use checkpoint::TimeTravelError as E;
+
+        let (idx, tab_snapshot) = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        if tab_snapshot.rank == AgentRank::Home {
+            return Err(E::NotSupportedForRank(tab_snapshot.rank));
+        }
+        let ckpt = tab_snapshot
+            .checkpoints
+            .iter()
+            .find(|c| c.id == ckpt_id)
+            .cloned()
+            .ok_or(E::CheckpointNotFound(ckpt_id))?;
+        let worktree = tab_snapshot.worktree_dir.clone().ok_or(E::NoWorktree)?;
+        let project_dir = tab_snapshot.project_dir.clone().ok_or(E::NoProjectDir)?;
+        let rank = tab_snapshot.rank;
+        let preserved_title = tab_snapshot.title.clone();
+
+        // Guard: refuse replace on a tab with open descendants. Cascade is
+        // deliberately out of scope for PR-3 — a later hardening pass will
+        // decide whether descendants should be rewound, re-parented, or torn
+        // down.
+        let children: Vec<usize> = self
+            .tabs
+            .iter()
+            .filter(|t| t.parent_id == Some(tab_id))
+            .map(|t| t.id)
+            .collect();
+        if !children.is_empty() {
+            return Err(E::HasChildren { tab_id, children });
+        }
+
+        // Mint a fresh session UUID and copy-truncate the canonical JSONL
+        // into it. The canonical file at the old UUID is never touched.
+        let new_session = Uuid::new_v4().to_string();
+        let src_jsonl = checkpoint::jsonl_path_for(&worktree, &ckpt.session_id);
+        let dst_jsonl = checkpoint::jsonl_path_for(&worktree, &new_session);
+        checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
+            .map_err(E::JsonlCopyFailed)?;
+
+        // Rewind the worktree's file state to the checkpoint commit.
+        checkpoint::rewind_worktree(&worktree, &ckpt.shadow_commit).map_err(E::GitFailed)?;
+
+        // Spawn the new claude as the first child of the old tab, immediately
+        // after it in `self.tabs`. When the old tab is closed, close_tab's
+        // first-child promotion hoists the new tab into the old slot.
+        let (new_tab_id, task) = self.spawn_tab_full(
+            true,
+            rank,
+            Some(project_dir),
+            Some(tab_id),
+            None,
+            None,
+            None,
+            None,
+            Some(new_session),
+            Some(worktree.clone()),
+            Some(idx + 1),
+        );
+        if let Some(title) = preserved_title {
+            if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+                new_tab.title = Some(title);
+            }
+        }
+        self.focus_tab(new_tab_id);
+        self.respond_to_tab(
+            tab_id,
+            serde_json::json!({
+                "new_tab_id": new_tab_id,
+                "worktree": worktree.to_string_lossy(),
+            }),
+        );
+
+        // Close the old tab — promotion re-parents the new child into its slot.
+        let _ = self.close_tab(tab_id);
+        Ok(task)
+    }
+
+    fn do_fork(
         &mut self,
         tab_id: usize,
         ckpt_id: usize,
         prompt: Option<String>,
-        mode: TimeTravelMode,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
@@ -1156,16 +1251,12 @@ impl App {
         let rank = tab.rank;
         let src_worktree = tab.worktree_dir.clone();
 
-        let branch_prefix = match mode {
-            TimeTravelMode::Replace => "replace",
-            TimeTravelMode::Fork => "fork",
-        };
         // A random suffix keeps the branch (and derived worktree path) unique
         // when the same (tab, checkpoint) is forked more than once — otherwise
         // `git worktree add -b` hits `fatal: a branch named ... already exists`.
         let suffix = &Uuid::new_v4().simple().to_string()[..6];
         let new_branch = format!(
-            "{branch_prefix}-t{tab_id}-c{ckpt_id}-{}-{}",
+            "fork-t{tab_id}-c{ckpt_id}-{}-{}",
             &ckpt.shadow_commit[..8],
             suffix,
         );
@@ -1197,6 +1288,7 @@ impl App {
             None,
             Some(new_session),
             Some(wt_path.clone()),
+            None,
         );
         if let Some(title) = ckpt.title.clone() {
             if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
