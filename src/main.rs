@@ -8,6 +8,7 @@ mod mcp;
 mod pty;
 mod tab;
 mod theme;
+mod toast;
 mod worktree;
 mod ui;
 mod widget;
