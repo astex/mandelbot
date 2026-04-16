@@ -47,11 +47,15 @@ The script exits 0 as soon as it finds at least one change, with one line per ch
 
 `<kind>` is either `review_requested` (a PR newly needs your review) or `status_changed` (a PR you authored changed review decision, e.g. `APPROVED` → `CHANGES_REQUESTED`). `<detail>` carries the human-readable specifics.
 
-Exit 2 means a setup problem (dependencies, auth, bad repo arg). Exit 3 means the API has been unreachable for multiple consecutive polls. In both cases tell the user and stop — do not blindly relaunch.
+Exit 2 means a setup problem (dependencies, auth, cwd isn't a GitHub repo). Exit 3 means the API has been unreachable for multiple consecutive polls. In both cases tell the user and stop — do not blindly relaunch.
 
-### 3. Notify once per line
+### 3. Re-arm the watcher immediately
 
-For each TSV line, call `mcp__mandelbot__notify` exactly once with:
+As soon as the watcher exits, capture its stdout, then **relaunch the watcher in the background before doing anything else**. The persisted state file means the new invocation picks up exactly where the old one stopped — anything already reported won't re-fire, and anything that lands while you're dispatching notifications gets caught by the fresh loop instead of slipping through the gap.
+
+### 4. Notify once per line
+
+Now, for each TSV line captured from the previous run, call `mcp__mandelbot__notify` exactly once with:
 
 - **message** — a short headline, e.g. `Review requested: <title>` or `<title>: <detail>`.
 - **prompt** — an instruction to the child task tab that opens when the user clicks the toast's Open button. The child spawns in this project's worktree, so it can `gh pr checkout` the PR directly. Example:
@@ -60,11 +64,7 @@ For each TSV line, call `mcp__mandelbot__notify` exactly once with:
 
 Include the URL verbatim so the child tab can find the PR without guesswork.
 
-### 4. Requeue and keep waiting
-
-After all notifications are dispatched, start the watcher again in the background (same command) and return to step 2. The per-repo state file guarantees no event is reported twice across restarts.
-
-Keep this going until the user says to stop or closes the project tab.
+Once notifications are dispatched, go back to step 2 and wait for the next exit. Keep this going until the user says to stop or closes the tab.
 
 ## Notes
 
