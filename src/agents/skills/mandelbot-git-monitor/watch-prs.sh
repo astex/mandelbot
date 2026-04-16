@@ -18,21 +18,12 @@
 #   2  missing dependency, unauthenticated gh, or bad args
 #   3  repeated network/API failures (transient failures are retried)
 #
-# Usage: bash watch-prs.sh <owner/repo> [state-file]
+# Usage: bash watch-prs.sh [owner/repo] [state-file]
+#
+# If <owner/repo> is omitted, it is resolved from the current working
+# directory via `gh repo view`.
 
 set -euo pipefail
-
-REPO="${1:-}"
-if [ -z "$REPO" ] || ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
-    echo "Usage: watch-prs.sh <owner/repo> [state-file]" >&2
-    exit 2
-fi
-
-STATE_FILE="${2:-${HOME}/.mandelbot/git-monitor/${REPO//\//-}.state.json}"
-POLL_INTERVAL="${POLL_INTERVAL:-60}"
-MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-5}"
-
-mkdir -p "$(dirname "$STATE_FILE")"
 
 for c in gh jq; do
     if ! command -v "$c" &>/dev/null; then
@@ -45,6 +36,25 @@ if ! gh auth status &>/dev/null; then
     echo "Error: gh is not authenticated (run 'gh auth login')" >&2
     exit 2
 fi
+
+REPO="${1:-}"
+if [ -z "$REPO" ]; then
+    REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)
+    if [ -z "$REPO" ]; then
+        echo "Error: could not resolve repo from cwd; pass <owner/repo> explicitly" >&2
+        exit 2
+    fi
+fi
+if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    echo "Error: invalid <owner/repo>: $REPO" >&2
+    exit 2
+fi
+
+STATE_FILE="${2:-${HOME}/.mandelbot/git-monitor/${REPO//\//-}.state.json}"
+POLL_INTERVAL="${POLL_INTERVAL:-60}"
+MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-5}"
+
+mkdir -p "$(dirname "$STATE_FILE")"
 
 fetch() {
     gh api graphql \

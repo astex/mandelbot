@@ -23,29 +23,21 @@ The watcher exits 2 on startup if either is missing, if gh isn't logged in, or i
 
 ## Workflow
 
-### 1. Resolve the repo
-
-Inside the project's working directory, determine `<owner/repo>` for the watcher:
-
-```bash
-gh repo view --json nameWithOwner --jq .nameWithOwner
-```
-
-If that fails (the project isn't a GitHub repo, or the user hasn't set a remote), surface the error and stop.
-
-### 2. Start the watcher in the background
+### 1. Start the watcher in the background
 
 Invoke with `run_in_background: true`:
 
 ```bash
-bash <plugin-dir>/skills/mandelbot-git-monitor/watch-prs.sh <owner/repo>
+bash <plugin-dir>/skills/mandelbot-git-monitor/watch-prs.sh
 ```
+
+The script resolves the repo from the current working directory (via `gh repo view`). Pass `<owner/repo>` as an explicit first arg if you want to watch a different repo.
 
 State is cached per-repo at `~/.mandelbot/git-monitor/<owner>-<repo>.state.json` across runs. On the very first run for a given repo it records a baseline snapshot and treats everything currently open as already seen, so the user is not flooded with pre-existing review requests.
 
 Polling interval defaults to 60 s and can be overridden by setting `POLL_INTERVAL=<seconds>` before the `bash` invocation.
 
-### 3. Wait for it to exit
+### 2. Wait for it to exit
 
 The script exits 0 as soon as it finds at least one change, with one line per change on stdout in TSV form:
 
@@ -57,7 +49,7 @@ The script exits 0 as soon as it finds at least one change, with one line per ch
 
 Exit 2 means a setup problem (dependencies, auth, bad repo arg). Exit 3 means the API has been unreachable for multiple consecutive polls. In both cases tell the user and stop — do not blindly relaunch.
 
-### 4. Notify once per line
+### 3. Notify once per line
 
 For each TSV line, call `mcp__mandelbot__notify` exactly once with:
 
@@ -68,9 +60,9 @@ For each TSV line, call `mcp__mandelbot__notify` exactly once with:
 
 Include the URL verbatim so the child tab can find the PR without guesswork.
 
-### 5. Requeue and keep waiting
+### 4. Requeue and keep waiting
 
-After all notifications are dispatched, start the watcher again in the background (same command, same `<owner/repo>`) and return to step 3. The per-repo state file guarantees no event is reported twice across restarts.
+After all notifications are dispatched, start the watcher again in the background (same command) and return to step 2. The per-repo state file guarantees no event is reported twice across restarts.
 
 Keep this going until the user says to stop or closes the project tab.
 
