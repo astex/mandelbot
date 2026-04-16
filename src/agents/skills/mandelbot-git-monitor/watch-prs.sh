@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Watch one GitHub repo for PR events concerning the logged-in user:
-#   - PRs in <owner/repo> newly review-requested from you
-#   - PRs in <owner/repo> you authored whose review decision changed
+# Watch the current-directory GitHub repo for PR events concerning the
+# logged-in user:
+#   - PRs newly review-requested from you
+#   - PRs you authored whose review decision changed
 #
 # Blocks in a poll loop until at least one such event is seen, then exits 0
 # after printing one TSV line per change:
@@ -15,42 +16,20 @@
 #
 # Exit codes:
 #   0  one or more changes were reported on stdout
-#   2  missing dependency, unauthenticated gh, or bad args
+#   2  missing dependency, unauthenticated gh, or cwd isn't a GitHub repo
 #   3  repeated network/API failures (transient failures are retried)
 #
-# Usage: bash watch-prs.sh [owner/repo] [state-file]
-#
-# If <owner/repo> is omitted, it is resolved from the current working
-# directory via `gh repo view`.
+# Usage: bash watch-prs.sh
 
 set -euo pipefail
 
-for c in gh jq; do
-    if ! command -v "$c" &>/dev/null; then
-        echo "Error: '$c' not found on PATH" >&2
-        exit 2
-    fi
-done
-
-if ! gh auth status &>/dev/null; then
-    echo "Error: gh is not authenticated (run 'gh auth login')" >&2
-    exit 2
-fi
-
-REPO="${1:-}"
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)
 if [ -z "$REPO" ]; then
-    REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)
-    if [ -z "$REPO" ]; then
-        echo "Error: could not resolve repo from cwd; pass <owner/repo> explicitly" >&2
-        exit 2
-    fi
-fi
-if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
-    echo "Error: invalid <owner/repo>: $REPO" >&2
+    echo "Error: could not resolve GitHub repo from cwd" >&2
     exit 2
 fi
 
-STATE_FILE="${2:-${HOME}/.mandelbot/git-monitor/${REPO//\//-}.state.json}"
+STATE_FILE="${HOME}/.mandelbot/git-monitor/${REPO//\//-}.state.json"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
 MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-5}"
 

@@ -31,7 +31,7 @@ Invoke with `run_in_background: true`:
 bash <plugin-dir>/skills/mandelbot-git-monitor/watch-prs.sh
 ```
 
-The script resolves the repo from the current working directory (via `gh repo view`). Pass `<owner/repo>` as an explicit first arg if you want to watch a different repo.
+The script resolves the GitHub repo from the current working directory. It watches that repo and that repo only — that's deliberate, so the toast's Open button always spawns a child in a worktree where `gh pr checkout` works.
 
 State is cached per-repo at `~/.mandelbot/git-monitor/<owner>-<repo>.state.json` across runs. On the very first run for a given repo it records a baseline snapshot and treats everything currently open as already seen, so the user is not flooded with pre-existing review requests.
 
@@ -68,5 +68,4 @@ Keep this going until the user says to stop or closes the project tab.
 
 ## Notes
 
-- One watcher per project tab. If the user wants monitoring for another repo, they should start the skill from that repo's project tab — the state files don't collide because they're keyed by repo.
-- The script makes one GraphQL request per poll — very light. Do not wrap it in your own polling or re-invoke it while an instance is already running in the background.
+The script makes one GraphQL request per poll — very light. Do not wrap it in your own polling or re-invoke it while an instance is already running in the background.
