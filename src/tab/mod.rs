@@ -106,6 +106,10 @@ pub struct TabSpawnParams {
 
 pub struct TerminalTab {
     pub id: usize,
+    /// Stable per-tab UUID. Unlike the numeric `id`, this survives across
+    /// mandelbot restarts when a tab's durable state is rehydrated.
+    /// Used as the on-disk key for `checkpoint_store`.
+    pub uuid: String,
     pub is_claude: bool,
     pub rank: AgentRank,
     pub project_dir: Option<PathBuf>,
@@ -133,8 +137,6 @@ pub struct TerminalTab {
     pub session_id: Option<String>,
     /// Worktree path (if task+git spawn).
     pub worktree_dir: Option<PathBuf>,
-    /// Time-travel checkpoints taken on this tab.
-    pub checkpoints: Vec<crate::checkpoint::Checkpoint>,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
@@ -155,6 +157,7 @@ impl TerminalTab {
         let (term, listener) = new_term(cols, rows);
         Self {
             id,
+            uuid: uuid::Uuid::new_v4().to_string(),
             is_claude,
             rank,
             project_dir,
@@ -170,7 +173,6 @@ impl TerminalTab {
             pending_input: None,
             session_id: None,
             worktree_dir: None,
-            checkpoints: Vec::new(),
             term: Arc::new(Mutex::new(term)),
             listener,
             event_tx: None,

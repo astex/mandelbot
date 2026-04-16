@@ -63,8 +63,8 @@ pub enum Message {
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
     McpCheckpoint(usize),
-    McpReplace(usize, usize),
-    McpFork(usize, usize, Option<String>),
+    McpReplace(usize, String),
+    McpFork(usize, String, Option<String>),
     AutoCheckpoint(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
@@ -113,12 +113,18 @@ pub struct App {
     response_writers: ResponseWriters,
     bell_flashes: FlashState,
     folded_tabs: HashSet<usize>,
+    ckpt_store: crate::checkpoint_store::CheckpointStore,
 }
 
 impl App {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
+
+        let mut ckpt_store = crate::checkpoint_store::load_all().unwrap_or_default();
+        for outcome in ckpt_store.gc_orphans(&HashSet::new()) {
+            let _ = outcome.persist(&ckpt_store);
+        }
 
         let parent_socket_dir = crate::tab::runtime_dir();
         std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
@@ -147,6 +153,7 @@ impl App {
             response_writers,
             bell_flashes: FlashState::default(),
             folded_tabs: HashSet::new(),
+            ckpt_store,
         };
 
         (app, listen_task)
@@ -488,6 +495,9 @@ impl App {
         let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return Task::none();
         };
+
+        let tab_uuid = self.tabs[idx].uuid.clone();
+        let _ = self.ckpt_store.close_tab(&tab_uuid).persist(&self.ckpt_store);
 
         let closing_parent_id = self.tabs[idx].parent_id;
         let closing_depth = self.tabs[idx].depth;
@@ -1141,35 +1151,49 @@ impl App {
             return Err(E::NotSupportedForRank(tab.rank));
         }
         let title = tab.title.clone();
-        let shadow = checkpoint::shadow_ref(tab_id);
-        let next_idx = tab.checkpoints.len();
+        let tab_uuid = tab.uuid.clone();
+
+        // Parent the new checkpoint on this tab's current head, if any.
+        let parent_id = self.ckpt_store.head_of(&tab_uuid).cloned();
+        let parent_commit = parent_id
+            .as_deref()
+            .and_then(|pid| self.ckpt_store.node(pid))
+            .map(|n| n.shadow_commit.clone());
+
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
         let line_count = checkpoint::count_jsonl_lines(&jsonl)?.saturating_sub(1);
-        let message = format!("checkpoint-{next_idx}");
-        let shadow_commit =
-            checkpoint::snapshot_worktree(&wt, &shadow, &message).map_err(E::GitFailed)?;
-        let ckpt = checkpoint::Checkpoint {
-            id: next_idx,
+        let new_id = Uuid::new_v4().to_string();
+        let new_ref = crate::checkpoint_store::shadow_ref_for(&new_id);
+        let message = format!("checkpoint-{new_id}");
+        let shadow_commit = checkpoint::snapshot_worktree(
+            &wt,
+            parent_commit.as_deref(),
+            &new_ref,
+            &message,
+        )
+        .map_err(E::GitFailed)?;
+
+        let node = crate::checkpoint_store::CheckpointNode {
+            id: new_id.clone(),
+            parent: parent_id,
             session_id,
             jsonl_line_count: line_count,
             shadow_commit: shadow_commit.clone(),
-            created_at: checkpoint::now(),
+            created_at: std::time::SystemTime::now(),
             title,
+            worktree_dir: wt,
         };
-        let tab = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.id == tab_id)
-            .ok_or(E::UnknownTab(tab_id))?;
-        tab.checkpoints.push(ckpt);
+        self.ckpt_store.insert_node(node);
+        self.ckpt_store.set_head(&tab_uuid, new_id.clone());
+        let _ = crate::checkpoint_store::save_tree(&self.ckpt_store, &new_id);
         Ok(serde_json::json!({
-            "checkpoint_id": next_idx,
+            "checkpoint_id": new_id,
             "shadow_commit": shadow_commit,
             "jsonl_line_count": line_count,
         }))
     }
 
-    fn handle_replace(&mut self, tab_id: usize, ckpt_id: usize) -> Task<Message> {
+    fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
         match self.do_replace(tab_id, ckpt_id) {
             Ok(task) => task,
             Err(e) => {
@@ -1182,7 +1206,7 @@ impl App {
     fn handle_fork(
         &mut self,
         tab_id: usize,
-        ckpt_id: usize,
+        ckpt_id: String,
         prompt: Option<String>,
     ) -> Task<Message> {
         match self.do_fork(tab_id, ckpt_id, prompt) {
@@ -1194,13 +1218,13 @@ impl App {
         }
     }
 
-    /// Replace is just fork-then-close-self. The old tab's worktree and JSONL
-    /// stay on disk — future branching-conversation navigation will be able
-    /// to return to them.
+    /// Replace is just fork-then-close-self. The old tab's branch in the
+    /// checkpoint tree stays — closing the tab only drops the component
+    /// if no sibling still references it, and the new fork does.
     fn do_replace(
         &mut self,
         tab_id: usize,
-        ckpt_id: usize,
+        ckpt_id: String,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
         let task = self.do_fork(tab_id, ckpt_id, None)?;
         let _ = self.close_tab(tab_id);
@@ -1210,7 +1234,7 @@ impl App {
     fn do_fork(
         &mut self,
         tab_id: usize,
-        ckpt_id: usize,
+        ckpt_id: String,
         prompt: Option<String>,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
@@ -1221,12 +1245,11 @@ impl App {
             .enumerate()
             .find(|(_, t)| t.id == tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
-        let ckpt = tab
-            .checkpoints
-            .iter()
-            .find(|c| c.id == ckpt_id)
+        let ckpt = self
+            .ckpt_store
+            .node(&ckpt_id)
             .cloned()
-            .ok_or(E::CheckpointNotFound(ckpt_id))?;
+            .ok_or_else(|| E::CheckpointNotFound(ckpt_id.clone()))?;
         let project_dir = tab.project_dir.clone().ok_or(E::NoProjectDir)?;
         let rank = tab.rank;
         let src_worktree = tab.worktree_dir.clone();
@@ -1236,7 +1259,7 @@ impl App {
         // `git worktree add -b` hits `fatal: a branch named ... already exists`.
         let suffix = &Uuid::new_v4().simple().to_string()[..6];
         let new_branch = format!(
-            "fork-t{tab_id}-c{ckpt_id}-{}-{}",
+            "fork-t{tab_id}-{}-{}",
             &ckpt.shadow_commit[..8],
             suffix,
         );
@@ -1269,15 +1292,24 @@ impl App {
             Some(new_branch),
             None,
             None,
-            Some(new_session),
+            Some(new_session.clone()),
             Some(wt_path.clone()),
             Some(idx + 1),
         );
-        if let Some(title) = ckpt.title.clone() {
-            if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+        // Carry the checkpoint's title forward so the fork is recognizable
+        // at a glance. Claude Code will overwrite via `set_title` once it
+        // starts emitting on the new session.
+        if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+            new_tab.worktree_dir = Some(wt_path.clone());
+            if let Some(title) = ckpt.title.clone() {
                 new_tab.title = Some(title);
             }
+            // Point the new tab's head at the fork-source checkpoint so
+            // the component stays rooted by both tabs.
+            let new_tab_uuid = new_tab.uuid.clone();
+            self.ckpt_store.set_head(&new_tab_uuid, ckpt_id.clone());
         }
+        let _ = crate::checkpoint_store::save_tree(&self.ckpt_store, &ckpt_id);
         self.focus_tab(new_tab_id);
         self.respond_to_tab(
             tab_id,
@@ -1698,9 +1730,9 @@ fn parent_socket_stream(
                                 }
                                 "replace" => {
                                     let ckpt_id = msg.get("checkpoint_id")
-                                        .and_then(|v| v.as_u64())
-                                        .map(|v| v as usize)
-                                        .unwrap_or(0);
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from)
+                                        .unwrap_or_default();
                                     let resp_writer = writer.try_clone()
                                         .expect("failed to clone writer for response");
                                     response_writers.lock().unwrap()
@@ -1709,9 +1741,9 @@ fn parent_socket_stream(
                                 }
                                 "fork" => {
                                     let ckpt_id = msg.get("checkpoint_id")
-                                        .and_then(|v| v.as_u64())
-                                        .map(|v| v as usize)
-                                        .unwrap_or(0);
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from)
+                                        .unwrap_or_default();
                                     let prompt = msg.get("prompt")
                                         .and_then(|v| v.as_str())
                                         .map(String::from);
