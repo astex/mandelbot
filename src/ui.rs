@@ -18,6 +18,7 @@ use crate::checkpoint;
 use crate::config::Config;
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
+use crate::toast::{self, Toast};
 use crate::widget::terminal::{self, TerminalWidget};
 
 const PADDING: f32 = 4.0;
@@ -89,6 +90,13 @@ pub enum Message {
     ToggleFoldTab(usize),
     ClipboardLoadResult(usize, Option<String>),
     OpenPr(usize),
+    ShowToast {
+        source_tab_id: usize,
+        message: String,
+        prompt: Option<String>,
+    },
+    DismissToast(usize),
+    SpawnFromToast(usize),
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -114,6 +122,8 @@ pub struct App {
     bell_flashes: FlashState,
     folded_tabs: HashSet<usize>,
     ckpt_store: crate::checkpoint_store::CheckpointStore,
+    toasts: Vec<Toast>,
+    next_toast_id: usize,
 }
 
 impl App {
@@ -154,6 +164,8 @@ impl App {
             bell_flashes: FlashState::default(),
             folded_tabs: HashSet::new(),
             ckpt_store,
+            toasts: Vec::new(),
+            next_toast_id: 0,
         };
 
         (app, listen_task)
@@ -1116,6 +1128,42 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ShowToast { source_tab_id, message, prompt } => {
+                let id = self.next_toast_id;
+                self.next_toast_id += 1;
+                self.toasts.push(Toast { id, source_tab_id, message, prompt });
+                toast::schedule_dismiss(id)
+            }
+            Message::DismissToast(toast_id) => {
+                self.toasts.retain(|t| t.id != toast_id);
+                Task::none()
+            }
+            Message::SpawnFromToast(toast_id) => {
+                let Some(idx) = self.toasts.iter().position(|t| t.id == toast_id) else {
+                    return Task::none();
+                };
+                let toast = self.toasts.remove(idx);
+                let Some(prompt) = toast.prompt else {
+                    return Task::none();
+                };
+                let Some(source) = self.tabs.iter().find(|t| t.id == toast.source_tab_id) else {
+                    return Task::none();
+                };
+                let (rank, project_dir, parent_id) = match source.rank {
+                    AgentRank::Home => return Task::none(),
+                    AgentRank::Project => (AgentRank::Task, source.project_dir.clone(), Some(source.id)),
+                    AgentRank::Task => {
+                        let dir = self.project_dir_for_tab(source.id);
+                        (AgentRank::Task, dir, Some(source.id))
+                    }
+                };
+                let (new_tab_id, task) = self.spawn_tab(
+                    true, rank, project_dir, parent_id, Some(prompt),
+                    None, None, None,
+                );
+                self.focus_tab(new_tab_id);
+                task
+            }
         }
     }
 
@@ -1319,6 +1367,76 @@ impl App {
             }),
         );
         Ok(task)
+    }
+
+    fn toast_view(&self, toast: &Toast) -> Element<'_, Message> {
+        let fg = self.terminal_theme.fg;
+        let muted_fg = Color { a: 0.6, ..fg };
+        let toast_bg = self.terminal_theme.bg;
+        let ui_font = self.config.font();
+
+        let message_text = text(toast.message.clone())
+            .size(self.config.font_size)
+            .font(ui_font)
+            .color(fg);
+
+        let close_btn = button(
+            text("×")
+                .size(self.config.font_size)
+                .font(ui_font)
+                .color(muted_fg),
+        )
+            .on_press(Message::DismissToast(toast.id))
+            .padding([0, 4])
+            .style(move |_theme, _status| button::Style {
+                background: None,
+                border: Border::default(),
+                ..Default::default()
+            });
+
+        let header = row![
+            container(message_text).width(Fill).clip(true),
+            close_btn,
+        ]
+            .align_y(Alignment::Start)
+            .spacing(PADDING);
+
+        let mut col = column![header].spacing(PADDING);
+
+        if toast.prompt.is_some() {
+            let open_label = text("Open")
+                .size(self.config.font_size)
+                .font(ui_font)
+                .color(fg);
+            let open_btn = button(open_label)
+                .on_press(Message::SpawnFromToast(toast.id))
+                .padding([2, 8])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(Color { a: 0.15, ..fg }.into()),
+                    text_color: fg,
+                    border: Border {
+                        color: Color { a: 0.3, ..fg },
+                        width: 1.0,
+                        radius: 3.0.into(),
+                    },
+                    ..Default::default()
+                });
+            col = col.push(row![open_btn]);
+        }
+
+        container(col)
+            .padding(8)
+            .width(Fill)
+            .style(move |_theme| container::Style {
+                background: Some(toast_bg.into()),
+                border: Border {
+                    color: Color { a: 0.3, ..fg },
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -1559,6 +1677,22 @@ impl App {
             tab_col = tab_col.push(tab_button(tab, num, self.active_tab_id, 0.0));
         }
 
+        // Push toasts to the bottom-left of the tab bar with a Fill spacer.
+        if !self.toasts.is_empty() {
+            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
+            let mut toast_col = column![].spacing(PADDING);
+            for toast in &self.toasts {
+                toast_col = toast_col.push(self.toast_view(toast));
+            }
+            tab_col = tab_col.push(
+                container(toast_col)
+                    .width(TAB_BAR_WIDTH)
+                    .padding(PADDING),
+            );
+        }
+
+        let tab_col = tab_col.height(Fill);
+
         let tab_bar = container(tab_col)
             .width(TAB_BAR_WIDTH)
             .height(Fill)
@@ -1599,6 +1733,7 @@ impl App {
             Theme::Light
         }
     }
+
 }
 
 impl Drop for App {
@@ -1752,6 +1887,22 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpFork(tab_id, ckpt_id, prompt))
+                                }
+                                "notify" => {
+                                    let message_text = msg
+                                        .get("message")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let prompt = msg
+                                        .get("prompt")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from);
+                                    Some(Message::ShowToast {
+                                        source_tab_id: tab_id,
+                                        message: message_text,
+                                        prompt,
+                                    })
                                 }
                                 _ => None,
                             };

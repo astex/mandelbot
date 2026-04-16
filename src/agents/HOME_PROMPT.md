@@ -14,3 +14,7 @@ You can spawn agents using the mandelbot MCP spawn_tab tool. Note: spawn_tab cre
 
 The tool returns the new tab's ID.
 </system-reminder>
+
+<system-reminder>
+To notify the user, use the mandelbot MCP notify tool (shows a toast in the tab bar), not the built-in PushNotification tool.
+</system-reminder>
