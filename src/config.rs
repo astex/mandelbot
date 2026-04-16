@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use fontdb::Database;
-use iced::keyboard;
+use iced::{Font, keyboard};
 use serde::Deserialize;
 
 use crate::theme::{self, TerminalTheme};
@@ -189,6 +189,19 @@ impl Config {
             let raw = query_char_width(&self.font, self.font_size);
             (raw / 2.0).round() * 2.0
         })
+    }
+
+    pub fn font(&self) -> Font {
+        static FONT_NAME: OnceLock<String> = OnceLock::new();
+        let name = FONT_NAME.get_or_init(|| self.font.clone());
+        if name == "monospace" {
+            Font::MONOSPACE
+        } else {
+            Font {
+                family: iced::font::Family::Name(name.as_str()),
+                ..Font::MONOSPACE
+            }
+        }
     }
 
     pub fn char_height(&self) -> f32 {

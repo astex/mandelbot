@@ -1373,7 +1373,7 @@ impl App {
         let fg = self.terminal_theme.fg;
         let muted_fg = Color { a: 0.6, ..fg };
         let toast_bg = self.terminal_theme.bg;
-        let ui_font = self.ui_font();
+        let ui_font = self.config.font();
 
         let message_text = text(toast.message.clone())
             .size(self.config.font_size)
@@ -1734,19 +1734,6 @@ impl App {
         }
     }
 
-    fn ui_font(&self) -> Font {
-        use std::sync::OnceLock;
-        static FONT_NAME: OnceLock<String> = OnceLock::new();
-        let name = FONT_NAME.get_or_init(|| self.config.font.clone());
-        if name == "monospace" {
-            Font::MONOSPACE
-        } else {
-            Font {
-                family: iced::font::Family::Name(name.as_str()),
-                ..Font::MONOSPACE
-            }
-        }
-    }
 }
 
 impl Drop for App {
