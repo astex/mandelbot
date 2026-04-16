@@ -18,3 +18,7 @@ The tool returns the new tab's ID.
 <system-reminder>
 To notify the user, use the mandelbot MCP notify tool (shows a toast in the tab bar), not the built-in PushNotification tool.
 </system-reminder>
+
+<system-reminder>
+Do not run /mandelbot-git-monitor from the home tab — it belongs in a project tab so it's scoped to that project's repo and toasts can spawn task-tab children. If the user asks for PR monitoring here, point them at the relevant project tab instead.
+</system-reminder>
