@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
 # Watch the current-directory GitHub repo for PR events concerning the
-# logged-in user:
-#   - PRs newly review-requested from you
-#   - PRs you authored whose review decision changed
-#
-# Blocks in a poll loop until at least one such event is seen, then exits 0
-# after printing one TSV line per change:
+# logged-in user. Blocks in a poll loop until at least one event is seen,
+# then exits 0 with one TSV line per change on stdout:
 #
 #   <kind>\t<pr url>\t<pr title>\t<detail>
 #
 # Where <kind> is "review_requested" or "status_changed".
-#
-# State is cached in a per-repo sidecar JSON so the next invocation picks up
-# where this one left off — nothing already reported will re-fire.
 #
 # Exit codes:
 #   0  one or more changes were reported on stdout
@@ -23,9 +16,8 @@
 
 set -euo pipefail
 
-REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)
-if [ -z "$REPO" ]; then
-    echo "Error: could not resolve GitHub repo from cwd" >&2
+if ! REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner); then
+    echo "Error: could not resolve GitHub repo from cwd (see gh error above)" >&2
     exit 2
 fi
 
@@ -42,41 +34,28 @@ fetch() {
         -f query='
         query($rr_query: String!, $a_query: String!) {
           reviewRequested: search(query: $rr_query, type: ISSUE, first: 50) {
-            nodes {
-              ... on PullRequest {
-                number title url
-                repository { nameWithOwner }
-              }
-            }
+            nodes { ... on PullRequest { number title url } }
           }
           authored: search(query: $a_query, type: ISSUE, first: 50) {
-            nodes {
-              ... on PullRequest {
-                number title url reviewDecision
-                repository { nameWithOwner }
-              }
-            }
+            nodes { ... on PullRequest { number title url reviewDecision } }
           }
         }' | jq '{
             assigned: [
-              .data.reviewRequested.nodes[]? | {
-                key: (.repository.nameWithOwner + "#" + (.number|tostring)),
-                title, url
-              }
+              .data.reviewRequested.nodes[]? | {key: (.number|tostring), title, url}
             ],
             authored: [
               .data.authored.nodes[]? | {
-                key: (.repository.nameWithOwner + "#" + (.number|tostring)),
-                title, url,
+                key: (.number|tostring), title, url,
                 reviewDecision: (.reviewDecision // "NONE")
               }
             ]
         }'
 }
 
+# Emits TSV rows directly — empty output means no changes.
 diff_snapshots() {
     local prev="$1" curr="$2"
-    jq -n --argjson prev "$prev" --argjson curr "$curr" '
+    jq -rn --argjson prev "$prev" --argjson curr "$curr" '
       ($prev.assigned | map({(.key): true}) | add // {}) as $prev_assigned |
       ($prev.authored | map({(.key): .reviewDecision}) | add // {}) as $prev_authored |
       ($curr.assigned
@@ -93,22 +72,23 @@ diff_snapshots() {
             $pr + {kind:"status_changed", detail:("review decision: " + $was + " → " + $pr.reviewDecision)}
           else empty end
         )) as $authored_changes |
-      $new_assigned + $authored_changes
+      ($new_assigned + $authored_changes)[]
+      | [.kind, .url, .title, .detail] | @tsv
     '
 }
 
-# Bootstrap: if no state yet, take a current snapshot as the baseline.
-# Existing review requests and existing review decisions are treated as
-# already seen so the first invocation does not flood the user.
+# Bootstrap: treat the current snapshot as already-seen so the first run
+# does not flood the user with pre-existing review requests.
 if [ ! -f "$STATE_FILE" ]; then
-    if ! initial=$(fetch); then
+    if ! prev=$(fetch); then
         echo "Error: initial gh query failed" >&2
         exit 3
     fi
-    echo "$initial" > "$STATE_FILE"
+    echo "$prev" > "$STATE_FILE"
+else
+    prev=$(cat "$STATE_FILE")
 fi
 
-prev=$(cat "$STATE_FILE")
 failures=0
 
 while true; do
@@ -125,10 +105,9 @@ while true; do
     failures=0
 
     changes=$(diff_snapshots "$prev" "$curr")
-    count=$(echo "$changes" | jq 'length')
-    if [ "$count" -gt 0 ]; then
+    if [ -n "$changes" ]; then
         echo "$curr" > "$STATE_FILE"
-        echo "$changes" | jq -r '.[] | [.kind, .url, .title, .detail] | @tsv'
+        printf '%s\n' "$changes"
         exit 0
     fi
 
