@@ -89,6 +89,23 @@ pub enum Message {
     ToggleFoldTab(usize),
     ClipboardLoadResult(usize, Option<String>),
     OpenPr(usize),
+    ToggleTimeline(usize),
+    TimelineScrub(usize, TimelineDir),
+    TimelineActivate(usize, TimelineMode),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TimelineDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TimelineMode {
+    Replace,
+    Fork,
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
@@ -1116,6 +1133,42 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ToggleTimeline(tab_id) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.timeline_visible = !tab.timeline_visible;
+                    if !tab.timeline_visible {
+                        tab.timeline_cursor = None;
+                    }
+                }
+                Task::none()
+            }
+            Message::TimelineScrub(tab_id, dir) => {
+                use crate::widget::timeline::MoveResult;
+                let result = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.id == tab_id)
+                    .map(|tab| crate::widget::timeline::move_cursor(&self.ckpt_store, tab, dir));
+                if let Some(MoveResult::Go(next)) = result {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        tab.timeline_cursor = next;
+                    }
+                }
+                Task::none()
+            }
+            Message::TimelineActivate(tab_id, mode) => {
+                use crate::widget::timeline::CursorTarget;
+                let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                    return Task::none();
+                };
+                match crate::widget::timeline::cursor_target(tab) {
+                    CursorTarget::Head => Task::none(),
+                    CursorTarget::Checkpoint(ckpt_id) => match mode {
+                        TimelineMode::Replace => self.handle_replace(tab_id, ckpt_id),
+                        TimelineMode::Fork => self.handle_fork(tab_id, ckpt_id, None),
+                    },
+                }
+            }
         }
     }
 
@@ -1568,7 +1621,18 @@ impl App {
             });
 
         let terminal_content: Element<'_, Message> = if let Some(tab) = self.active_tab() {
-            TerminalWidget::new(tab, &self.config).into()
+            let term: Element<'_, Message> = TerminalWidget::new(tab, &self.config).into();
+            if tab.timeline_visible {
+                let timeline = crate::widget::timeline::view(
+                    &self.ckpt_store,
+                    tab,
+                    &self.terminal_theme,
+                    &self.config,
+                );
+                column![term, timeline].into()
+            } else {
+                term
+            }
         } else {
             Space::new().width(Fill).height(Fill).into()
         };
