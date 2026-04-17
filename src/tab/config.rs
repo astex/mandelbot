@@ -100,6 +100,9 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
 
     let settings = serde_json::json!({
         "hooks": {
+            "SessionStart": [{
+                "hooks": [set_status("idle")],
+            }],
             "UserPromptSubmit": [{
                 "hooks": [
                     set_status("working"),
