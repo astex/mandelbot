@@ -143,6 +143,9 @@ pub struct TerminalTab {
     /// tip (its current checkpoint); arrow keys set `Some(id)` to
     /// scrub elsewhere in the tree.
     pub timeline_cursor: Option<String>,
+    /// Stack of checkpoint ids to redo back into. Pushed on undo, popped
+    /// on redo, cleared on any non-undo/non-redo activity. In-memory only.
+    pub redo_path: Vec<String>,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
@@ -181,6 +184,7 @@ impl TerminalTab {
             worktree_dir: None,
             timeline_visible: false,
             timeline_cursor: None,
+            redo_path: Vec::new(),
             term: Arc::new(Mutex::new(term)),
             listener,
             event_tx: None,

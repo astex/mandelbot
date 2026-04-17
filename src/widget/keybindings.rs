@@ -42,6 +42,8 @@ fn control_key_message(key: &keyboard::Key, ctx: &KeyContext) -> Option<Message>
         keyboard::Key::Character(c) if c.as_ref() == "w" => Some(Message::CloseTab(ctx.active_tab_id)),
         keyboard::Key::Character(c) if c.as_ref() == "f" => Some(Message::ToggleFoldTab(ctx.active_tab_id)),
         keyboard::Key::Character(c) if c.as_ref() == "h" => Some(Message::ToggleTimeline(ctx.active_tab_id)),
+        keyboard::Key::Character(c) if c.as_ref() == "z" => Some(Message::Undo(ctx.active_tab_id)),
+        keyboard::Key::Character(c) if c.as_ref() == "r" => Some(Message::Redo(ctx.active_tab_id)),
         _ => None,
     }
 }
