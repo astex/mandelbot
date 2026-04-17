@@ -1416,6 +1416,7 @@ impl App {
         };
         self.ckpt_store.insert_node(node);
         self.ckpt_store.set_head(&tab_uuid, new_id.clone());
+        self.ckpt_store.prune_tree(&new_id);
         let _ = crate::checkpoint_store::save_tree(&self.ckpt_store, &new_id);
         Ok(serde_json::json!({
             "checkpoint_id": new_id,
