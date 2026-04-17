@@ -66,6 +66,7 @@ pub enum Message {
     McpCheckpoint(usize),
     McpReplace(usize, String),
     McpFork(usize, String, Option<String>),
+    McpListTabs(usize),
     AutoCheckpoint(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
@@ -1155,6 +1156,62 @@ impl App {
             Message::McpFork(requesting_tab_id, ckpt_id, prompt) => {
                 self.handle_fork(requesting_tab_id, ckpt_id, prompt)
             }
+            Message::McpListTabs(requesting_tab_id) => {
+                let is_home = self.tabs.iter()
+                    .find(|t| t.id == requesting_tab_id)
+                    .is_some_and(|t| t.rank == AgentRank::Home);
+
+                let mut visible: Vec<usize> = vec![requesting_tab_id];
+                if is_home {
+                    visible = self.tabs.iter().map(|t| t.id).collect();
+                } else {
+                    let mut i = 0;
+                    while i < visible.len() {
+                        let parent = visible[i];
+                        for t in &self.tabs {
+                            if t.parent_id == Some(parent) && !visible.contains(&t.id) {
+                                visible.push(t.id);
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+
+                let tabs_json: Vec<serde_json::Value> = self.tabs.iter()
+                    .filter(|t| visible.contains(&t.id))
+                    .map(|t| {
+                        let rank = match t.rank {
+                            AgentRank::Home => "home",
+                            AgentRank::Project => "project",
+                            AgentRank::Task => "task",
+                        };
+                        let status = match t.status {
+                            AgentStatus::Idle => "idle",
+                            AgentStatus::Working => "working",
+                            AgentStatus::Compacting => "compacting",
+                            AgentStatus::Blocked => "blocked",
+                            AgentStatus::NeedsReview => "needs_review",
+                            AgentStatus::Error => "error",
+                        };
+                        serde_json::json!({
+                            "id": t.id,
+                            "parent_id": t.parent_id,
+                            "title": t.title,
+                            "rank": rank,
+                            "status": status,
+                            "is_claude": t.is_claude,
+                            "project_dir": t.project_dir.as_ref().map(|p| p.display().to_string()),
+                            "worktree_dir": t.worktree_dir.as_ref().map(|p| p.display().to_string()),
+                            "pr": t.pr_number(),
+                        })
+                    })
+                    .collect();
+
+                self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                    "tabs": tabs_json,
+                }));
+                Task::none()
+            }
             Message::AutoCheckpoint(tab_id) => {
                 if self.config.auto_checkpoint {
                     let _ = self.do_checkpoint(tab_id);
@@ -2204,6 +2261,13 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpFork(tab_id, ckpt_id, prompt))
+                                }
+                                "list_tabs" => {
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpListTabs(tab_id))
                                 }
                                 "notify" => {
                                     let message_text = msg
