@@ -1141,7 +1141,6 @@ impl App {
                     tab.worktree_dir = worktree_dir;
                     tab.session_id = session_id;
                 }
-                let _ = self.ensure_root_checkpoint(tab_id);
                 Task::none()
             }
             Message::McpCheckpoint(requesting_tab_id) => {
@@ -1370,11 +1369,9 @@ impl App {
         let title = tab.title.clone();
         let tab_uuid = tab.uuid.clone();
 
-        // Root-on-demand: TabReady fires before the worktree setup
-        // script has run inside the PTY, so the eager ensure_root at
-        // TabReady time snapshots against a not-yet-existing worktree
-        // and fails silently. Lazily create the root here on first
-        // checkpoint — by now the worktree is real.
+        // Root-on-demand: the worktree setup script runs inside the
+        // PTY after TabReady, so we can't snapshot at TabReady time.
+        // Create the root here on first checkpoint instead.
         if self.ckpt_store.head_of(&tab_uuid).is_none() {
             self.ensure_root_checkpoint(tab_id)?;
         }
