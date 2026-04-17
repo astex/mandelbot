@@ -103,33 +103,33 @@ fn prompt_status_rows(term: &TermInstance) -> Option<Vec<String>> {
     let grid = term.grid();
     let screen_lines = grid.screen_lines();
     let cursor_line = grid.cursor.point.line.0;
-    let top = (cursor_line - 2).max(0) as usize;
+    let top = (cursor_line - 20).max(0) as usize;
     let bot =
         ((cursor_line + 6) as usize).min(screen_lines - 1);
     let rows: Vec<String> = (top..=bot)
         .map(|i| row_text(term, Line(i as i32)))
         .collect();
 
-    let mut first_border = None;
-    let mut second_border = None;
-    for (i, text) in rows.iter().enumerate() {
+    // Walk upward from the cursor so we pick the prompt frame
+    // closest to the cursor, not an older one up in scrollback.
+    let mut bot_border = None;
+    let mut top_border = None;
+    for (i, text) in rows.iter().enumerate().rev() {
         if is_border_row(text) {
-            if first_border.is_none() {
-                first_border = Some(i);
+            if bot_border.is_none() {
+                bot_border = Some(i);
             } else {
-                second_border = Some(i);
+                top_border = Some(i);
                 break;
             }
         }
     }
 
-    let (Some(_top_border), Some(bot_border)) =
-        (first_border, second_border)
-    else {
+    let (Some(_top), Some(bot)) = (top_border, bot_border) else {
         return None;
     };
 
-    Some(rows.into_iter().skip(bot_border + 1).collect())
+    Some(rows.into_iter().skip(bot + 1).collect())
 }
 
 /// Detect Claude Code's prompt frame and read the background shell
