@@ -194,7 +194,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "notify",
-                    "description": "Show a toast notification at the bottom-left of the tab bar. The toast is dismissed after 10 seconds or when the user clicks the close button. If a prompt is provided, the toast shows an Open button that spawns a child tab of this one with that prompt.",
+                    "description": "Show a toast notification at the bottom-left of the tab bar. The toast is dismissed after 10 seconds or when the user clicks the close button. If tab_id is provided, the toast shows a \"Go to\" button that focuses that existing tab. Otherwise, if prompt is provided, the toast shows an \"Open\" button that spawns a child tab of this one with that prompt.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -204,7 +204,11 @@ fn handle_tools_list(id: Value) -> Response {
                             },
                             "prompt": {
                                 "type": "string",
-                                "description": "Optional. If provided, the toast has an Open button that spawns a child tab under this one with this prompt.",
+                                "description": "Optional. If provided (and tab_id is not), the toast has an Open button that spawns a child tab under this one with this prompt.",
+                            },
+                            "tab_id": {
+                                "type": "string",
+                                "description": "Optional id of an existing tab. If provided, the toast has a \"Go to\" button that focuses that tab. Takes precedence over prompt.",
                             },
                         },
                         "required": ["message"],
@@ -566,6 +570,9 @@ async fn handle_tools_call(
             let prompt = args
                 .and_then(|a| a.get("prompt"))
                 .and_then(|v| v.as_str());
+            let target_tab_id = args
+                .and_then(|a| a.get("tab_id"))
+                .and_then(|v| v.as_str());
 
             let mut msg = serde_json::json!({
                 "type": "notify",
@@ -574,6 +581,9 @@ async fn handle_tools_call(
             });
             if let Some(p) = prompt {
                 msg["prompt"] = Value::String(p.to_string());
+            }
+            if let Some(t) = target_tab_id {
+                msg["target_tab_id"] = Value::String(t.to_string());
             }
 
             if let Err(e) = send_to_parent(parent_writer, msg).await {

@@ -100,9 +100,11 @@ pub enum Message {
         source_tab_id: usize,
         message: String,
         prompt: Option<String>,
+        target_tab_id: Option<usize>,
     },
     DismissToast(usize),
     SpawnFromToast(usize),
+    FocusFromToast(usize),
     CheckpointDone {
         tab_id: usize,
         reason: CheckpointReason,
@@ -1554,11 +1556,30 @@ impl App {
             }
             Message::Undo(tab_id) => self.handle_undo(tab_id),
             Message::Redo(tab_id) => self.handle_redo(tab_id),
-            Message::ShowToast { source_tab_id, message, prompt } => {
+            Message::ShowToast { source_tab_id, message, prompt, target_tab_id } => {
                 let id = self.next_toast_id;
                 self.next_toast_id += 1;
-                self.toasts.push(Toast { id, source_tab_id, message, prompt });
+                self.toasts.push(Toast {
+                    id,
+                    source_tab_id,
+                    message,
+                    prompt,
+                    target_tab_id,
+                });
                 toast::schedule_dismiss(id)
+            }
+            Message::FocusFromToast(toast_id) => {
+                let Some(idx) = self.toasts.iter().position(|t| t.id == toast_id) else {
+                    return Task::none();
+                };
+                let toast = self.toasts.remove(idx);
+                let Some(target) = toast.target_tab_id else {
+                    return Task::none();
+                };
+                if self.tabs.iter().any(|t| t.id == target) {
+                    self.focus_tab(target);
+                }
+                Task::none()
             }
             Message::DismissToast(toast_id) => {
                 self.toasts.retain(|t| t.id != toast_id);
@@ -2043,13 +2064,21 @@ impl App {
 
         let mut col = column![header].spacing(PADDING);
 
-        if toast.prompt.is_some() {
-            let open_label = text("Open")
+        let action: Option<(&'static str, Message)> = if toast.target_tab_id.is_some() {
+            Some(("Go to", Message::FocusFromToast(toast.id)))
+        } else if toast.prompt.is_some() {
+            Some(("Open", Message::SpawnFromToast(toast.id)))
+        } else {
+            None
+        };
+
+        if let Some((label, on_press)) = action {
+            let open_label = text(label)
                 .size(self.config.font_size)
                 .font(ui_font)
                 .color(fg);
             let open_btn = button(open_label)
-                .on_press(Message::SpawnFromToast(toast.id))
+                .on_press(on_press)
                 .padding([2, 8])
                 .style(move |_theme, _status| button::Style {
                     background: Some(Color { a: 0.15, ..fg }.into()),
@@ -2563,10 +2592,15 @@ fn parent_socket_stream(
                                         .get("prompt")
                                         .and_then(|v| v.as_str())
                                         .map(String::from);
+                                    let target_tab_id = msg
+                                        .get("target_tab_id")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| s.parse::<usize>().ok());
                                     Some(Message::ShowToast {
                                         source_tab_id: tab_id,
                                         message: message_text,
                                         prompt,
+                                        target_tab_id,
                                     })
                                 }
                                 _ => None,

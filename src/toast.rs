@@ -12,6 +12,7 @@ pub struct Toast {
     pub source_tab_id: usize,
     pub message: String,
     pub prompt: Option<String>,
+    pub target_tab_id: Option<usize>,
 }
 
 pub fn schedule_dismiss(toast_id: usize) -> Task<Message> {
