@@ -1143,7 +1143,6 @@ impl App {
                     tab.worktree_dir = worktree_dir;
                     tab.session_id = session_id;
                 }
-                let _ = self.ensure_root_checkpoint(tab_id);
                 Task::none()
             }
             Message::McpCheckpoint(requesting_tab_id) => {
@@ -1172,8 +1171,19 @@ impl App {
                         opened = true;
                     }
                 }
-                self.resize_tab_for_timeline(tab_id);
                 if opened {
+                    // Snapshot uncheckpointed tail on open so the tip
+                    // represents "now". do_checkpoint's dup-skip no-ops
+                    // when nothing's grown past the tip.
+                    if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id)
+                        && let Some(tip) = self.ckpt_store.head_of(&tab.uuid).cloned()
+                        && crate::widget::timeline::has_uncheckpointed_tail(
+                            &self.ckpt_store, tab, &tip,
+                        )
+                    {
+                        let _ = self.do_checkpoint(tab_id);
+                    }
+                    self.resize_tab_for_timeline(tab_id);
                     if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
                         return crate::widget::timeline::scroll_to_cursor(
                             &self.ckpt_store,
@@ -1181,7 +1191,9 @@ impl App {
                             &self.config,
                         );
                     }
+                    return Task::none();
                 }
+                self.resize_tab_for_timeline(tab_id);
                 Task::none()
             }
             Message::TimelineScrub(tab_id, dir) => {
@@ -1361,6 +1373,13 @@ impl App {
         }
         let title = tab.title.clone();
         let tab_uuid = tab.uuid.clone();
+
+        // Root-on-demand: the worktree setup script runs inside the
+        // PTY after TabReady, so we can't snapshot at TabReady time.
+        // Create the root here on first checkpoint instead.
+        if self.ckpt_store.head_of(&tab_uuid).is_none() {
+            self.ensure_root_checkpoint(tab_id)?;
+        }
 
         // Parent the new checkpoint on this tab's current head, if any.
         let parent_id = self.ckpt_store.head_of(&tab_uuid).cloned();

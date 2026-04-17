@@ -336,14 +336,26 @@ fn render_content_row<'a>(
                 bot.push(plain_span("   ".into(), dim));
             }
             Cell::Node(id) => {
-                let label = component
-                    .nodes
-                    .get(id)
-                    .map(format_label)
-                    .unwrap_or_else(|| " ".repeat(NODE_INNER));
-                let top_s = format!("╭{}╮", "─".repeat(NODE_INNER));
-                let mid_s = format!("│{}│", label);
-                let bot_s = format!("╰{}╯", "─".repeat(NODE_INNER));
+                let node = component.nodes.get(id);
+                let is_root = node.map(|n| n.parent.is_none()).unwrap_or(false);
+                let label = if is_root {
+                    center_pad("ROOT", NODE_INNER)
+                } else {
+                    node.map(format_label).unwrap_or_else(|| " ".repeat(NODE_INNER))
+                };
+                let (top_s, mid_s, bot_s) = if is_root {
+                    (
+                        format!("╔{}╗", "═".repeat(NODE_INNER)),
+                        format!("║{}║", label),
+                        format!("╚{}╝", "═".repeat(NODE_INNER)),
+                    )
+                } else {
+                    (
+                        format!("╭{}╮", "─".repeat(NODE_INNER)),
+                        format!("│{}│", label),
+                        format!("╰{}╯", "─".repeat(NODE_INNER)),
+                    )
+                };
 
                 let is_cursor = cursor == Some(id.as_str());
                 let is_tip = tip == Some(id.as_str());
@@ -414,10 +426,15 @@ fn format_label(node: &CheckpointNode) -> String {
     use chrono::{DateTime, Local};
     let dt: DateTime<Local> = node.created_at.into();
     let stamp = format!("{}", dt.format("%m-%d %H:%M"));
-    let pad = NODE_INNER.saturating_sub(stamp.chars().count());
+    center_pad(&stamp, NODE_INNER)
+}
+
+fn center_pad(s: &str, width: usize) -> String {
+    let len = s.chars().count();
+    let pad = width.saturating_sub(len);
     let left = pad / 2;
     let right = pad - left;
-    format!("{}{}{}", " ".repeat(left), stamp, " ".repeat(right))
+    format!("{}{}{}", " ".repeat(left), s, " ".repeat(right))
 }
 
 fn dim_fg(theme: &TerminalTheme) -> Color {
@@ -435,9 +452,24 @@ fn dim_fg(theme: &TerminalTheme) -> Color {
 /// `tab.timeline_cursor` falls back to the tab's tip (the default
 /// when the strip first opens).
 pub fn effective_cursor(tab: &TerminalTab, tip: Option<&str>) -> Option<String> {
-    tab.timeline_cursor
-        .clone()
-        .or_else(|| tip.map(|s| s.to_string()))
+    tab.timeline_cursor.clone().or_else(|| tip.map(|s| s.to_string()))
+}
+
+/// True when the tab's current jsonl has grown past the tip's recorded
+/// `jsonl_line_count` — i.e. there's an uncheckpointed assistant turn
+/// sitting past the last checkpoint. Cheap best-effort: any IO failure
+/// or missing data returns false.
+pub fn has_uncheckpointed_tail(
+    store: &CheckpointStore,
+    tab: &TerminalTab,
+    tip_id: &str,
+) -> bool {
+    let Some(node) = store.node(tip_id) else { return false };
+    let Some(wt) = tab.worktree_dir.as_ref() else { return false };
+    let Some(sid) = tab.session_id.as_ref() else { return false };
+    let path = crate::checkpoint::jsonl_path_for(wt, sid);
+    let count = crate::checkpoint::count_jsonl_lines(&path).unwrap_or(0);
+    count > node.jsonl_line_count
 }
 
 /// How many pixels tall the strip will be. Fixed regardless of tree
