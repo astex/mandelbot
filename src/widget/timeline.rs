@@ -449,8 +449,8 @@ fn dim_fg(theme: &TerminalTheme) -> Color {
 }
 
 /// The cursor id to render and to activate on Enter. `None` in
-/// `tab.timeline_cursor` falls back to LIVE when the tip lags actual
-/// state (uncheckpointed tail), otherwise to the tip itself.
+/// `tab.timeline_cursor` falls back to the tab's tip (the default
+/// when the strip first opens).
 pub fn effective_cursor(tab: &TerminalTab, tip: Option<&str>) -> Option<String> {
     tab.timeline_cursor.clone().or_else(|| tip.map(|s| s.to_string()))
 }

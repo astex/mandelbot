@@ -1170,29 +1170,19 @@ impl App {
                         opened = true;
                     }
                 }
-                // Snapshot any uncheckpointed tail on open so the tip
-                // reflects current state. do_checkpoint's own dup-skip
-                // makes this a no-op when the jsonl hasn't grown past
-                // the existing tip.
                 if opened {
-                    let has_tail = self
-                        .tabs
-                        .iter()
-                        .find(|t| t.id == tab_id)
-                        .and_then(|tab| {
-                            self.ckpt_store.head_of(&tab.uuid).cloned().map(|tip| {
-                                crate::widget::timeline::has_uncheckpointed_tail(
-                                    &self.ckpt_store, tab, &tip,
-                                )
-                            })
-                        })
-                        .unwrap_or(false);
-                    if has_tail {
+                    // Snapshot uncheckpointed tail on open so the tip
+                    // represents "now". do_checkpoint's dup-skip no-ops
+                    // when nothing's grown past the tip.
+                    if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id)
+                        && let Some(tip) = self.ckpt_store.head_of(&tab.uuid).cloned()
+                        && crate::widget::timeline::has_uncheckpointed_tail(
+                            &self.ckpt_store, tab, &tip,
+                        )
+                    {
                         let _ = self.do_checkpoint(tab_id);
                     }
-                }
-                self.resize_tab_for_timeline(tab_id);
-                if opened {
+                    self.resize_tab_for_timeline(tab_id);
                     if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
                         return crate::widget::timeline::scroll_to_cursor(
                             &self.ckpt_store,
@@ -1200,7 +1190,9 @@ impl App {
                             &self.config,
                         );
                     }
+                    return Task::none();
                 }
+                self.resize_tab_for_timeline(tab_id);
                 Task::none()
             }
             Message::TimelineScrub(tab_id, dir) => {
