@@ -139,10 +139,9 @@ pub struct TerminalTab {
     pub worktree_dir: Option<PathBuf>,
     /// Whether the checkpoint timeline strip is open under this tab.
     pub timeline_visible: bool,
-    /// Cursor position in the timeline. `Some(id)` points at a real
-    /// checkpoint; `None` means the virtual HEAD node (the live,
-    /// uncommitted state past the tip). Defaults to `None` because
-    /// that's where the user actually is when the strip opens.
+    /// Cursor position in the timeline. `None` defaults to the tab's
+    /// tip (its current checkpoint); arrow keys set `Some(id)` to
+    /// scrub elsewhere in the tree.
     pub timeline_cursor: Option<String>,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,

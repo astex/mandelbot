@@ -101,7 +101,13 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
     let settings = serde_json::json!({
         "hooks": {
             "UserPromptSubmit": [{
-                "hooks": [set_status("working")],
+                "hooks": [
+                    set_status("working"),
+                    {
+                        "type": "command",
+                        "command": "echo checkpoint > $MANDELBOT_FIFO",
+                    },
+                ],
             }],
             "PreToolUse": [{
                 "matcher": "",
@@ -147,13 +153,7 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
                 "hooks": [set_status("idle")],
             }],
             "Stop": [{
-                "hooks": [
-                    set_status("idle"),
-                    {
-                        "type": "command",
-                        "command": "echo checkpoint > $MANDELBOT_FIFO",
-                    },
-                ],
+                "hooks": [set_status("idle")],
             }],
             "StopFailure": [{
                 "hooks": [set_status("error")],

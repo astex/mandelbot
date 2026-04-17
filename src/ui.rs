@@ -109,8 +109,19 @@ pub enum TimelineMode {
 }
 
 fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
+    terminal_size_with_reserved(window, char_width, char_height, 0.0)
+}
+
+/// Same as `terminal_size` but reserves `reserved_px` vertical pixels
+/// below the terminal (e.g. for the timeline strip).
+fn terminal_size_with_reserved(
+    window: Size,
+    char_width: f32,
+    char_height: f32,
+    reserved_px: f32,
+) -> (usize, usize) {
     let cols = ((window.width - PADDING * 2.0 - TAB_BAR_WIDTH - terminal::SCROLLBAR_WIDTH) / char_width).floor() as usize;
-    let rows = ((window.height - PADDING * 2.0) / char_height).floor() as usize;
+    let rows = ((window.height - PADDING * 2.0 - reserved_px) / char_height).floor() as usize;
     (rows.max(1), cols.max(1))
 }
 
@@ -315,7 +326,7 @@ impl App {
             existing_worktree,
         };
 
-        let tab = self.tabs.last().unwrap();
+        let tab = &self.tabs[inserted_idx];
         let tab_task = Task::run(
             crate::tab::tab_stream(
                 params,
@@ -583,8 +594,11 @@ impl App {
                 self.window_size = Some(size);
                 let cw = self.config.char_width();
                 let ch = self.config.char_height();
-                let (rows, cols) = terminal_size(size, cw, ch);
+                let store = &self.ckpt_store;
+                let cfg = &self.config;
                 for tab in &mut self.tabs {
+                    let reserved = crate::widget::timeline::pixel_height(store, tab, cfg);
+                    let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
                     tab.resize(rows, cols, size.width as u16, size.height as u16);
                     tab.set_window_size(alacritty_terminal::event::WindowSize {
                         num_lines: rows as u16,
@@ -1115,6 +1129,7 @@ impl App {
                     tab.worktree_dir = worktree_dir;
                     tab.session_id = session_id;
                 }
+                let _ = self.ensure_root_checkpoint(tab_id);
                 Task::none()
             }
             Message::McpCheckpoint(requesting_tab_id) => {
@@ -1134,42 +1149,91 @@ impl App {
                 Task::none()
             }
             Message::ToggleTimeline(tab_id) => {
+                let mut opened = false;
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     tab.timeline_visible = !tab.timeline_visible;
                     if !tab.timeline_visible {
                         tab.timeline_cursor = None;
+                    } else {
+                        opened = true;
+                    }
+                }
+                self.resize_tab_for_timeline(tab_id);
+                if opened {
+                    if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+                        return crate::widget::timeline::scroll_to_cursor(
+                            &self.ckpt_store,
+                            tab,
+                            &self.config,
+                        );
                     }
                 }
                 Task::none()
             }
             Message::TimelineScrub(tab_id, dir) => {
-                use crate::widget::timeline::MoveResult;
-                let result = self
+                let next = self
                     .tabs
                     .iter()
                     .find(|t| t.id == tab_id)
-                    .map(|tab| crate::widget::timeline::move_cursor(&self.ckpt_store, tab, dir));
-                if let Some(MoveResult::Go(next)) = result {
+                    .and_then(|tab| crate::widget::timeline::move_cursor(&self.ckpt_store, tab, dir));
+                if let Some(id) = next {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
-                        tab.timeline_cursor = next;
+                        tab.timeline_cursor = Some(id);
+                    }
+                    if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+                        return crate::widget::timeline::scroll_to_cursor(
+                            &self.ckpt_store,
+                            tab,
+                            &self.config,
+                        );
                     }
                 }
                 Task::none()
             }
             Message::TimelineActivate(tab_id, mode) => {
-                use crate::widget::timeline::CursorTarget;
                 let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
                     return Task::none();
                 };
-                match crate::widget::timeline::cursor_target(tab) {
-                    CursorTarget::Head => Task::none(),
-                    CursorTarget::Checkpoint(ckpt_id) => match mode {
-                        TimelineMode::Replace => self.handle_replace(tab_id, ckpt_id),
-                        TimelineMode::Fork => self.handle_fork(tab_id, ckpt_id, None),
-                    },
+                let tip = self.ckpt_store.head_of(&tab.uuid).cloned();
+                let Some(ckpt_id) =
+                    crate::widget::timeline::effective_cursor(tab, tip.as_deref())
+                else {
+                    return Task::none();
+                };
+                match mode {
+                    TimelineMode::Replace => self.handle_replace(tab_id, ckpt_id),
+                    TimelineMode::Fork => self.handle_fork(tab_id, ckpt_id, None),
                 }
             }
         }
+    }
+
+    /// Resize a tab's PTY/term to account for its current timeline
+    /// visibility. Called when the timeline is toggled so the agent's
+    /// bottom rows don't end up hidden behind the strip.
+    fn resize_tab_for_timeline(&mut self, tab_id: usize) {
+        let Some(size) = self.window_size else {
+            return;
+        };
+        let cw = self.config.char_width();
+        let ch = self.config.char_height();
+        let reserved = {
+            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+                return;
+            };
+            crate::widget::timeline::pixel_height(&self.ckpt_store, tab, &self.config)
+        };
+        let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        tab.resize(rows, cols, size.width as u16, size.height as u16);
+        tab.set_window_size(alacritty_terminal::event::WindowSize {
+            num_lines: rows as u16,
+            num_cols: cols as u16,
+            cell_width: cw as u16,
+            cell_height: ch as u16,
+        });
     }
 
     fn handle_checkpoint(&mut self, tab_id: usize) {
@@ -1180,13 +1244,52 @@ impl App {
         self.respond_to_tab(tab_id, response);
     }
 
-    // Checkpoints always record one line below the live transcript.
-    // Reverting to the most recently flushed line would leave the tab
-    // at (or near) its current state, which is never useful — and for
-    // manual checkpoints fired mid-turn (e.g. Claude calling the MCP
-    // tool as part of a reasoning step) there is no reliable way to
-    // identify a "better" truncation point without parsing transcript
-    // internals. A constant one-line offset is defensible and simple.
+    /// Create a root checkpoint for a tab on first ready, representing
+    /// the conversation's pre-prompt state — empty jsonl, fresh worktree
+    /// snapshot. Forking from root yields a brand-new conversation.
+    /// Skips tabs that already have a head (forks inherit their parent's
+    /// checkpoint graph) and tabs without a worktree (project/home).
+    fn ensure_root_checkpoint(
+        &mut self,
+        tab_id: usize,
+    ) -> Result<(), checkpoint::TimeTravelError> {
+        use checkpoint::TimeTravelError as E;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .ok_or(E::UnknownTab(tab_id))?;
+        if !tab.is_claude || tab.rank == AgentRank::Home {
+            return Ok(());
+        }
+        let wt = tab.worktree_dir.clone().ok_or(E::NoWorktree)?;
+        let session_id = tab.session_id.clone().ok_or(E::NoSessionId)?;
+        let tab_uuid = tab.uuid.clone();
+        if self.ckpt_store.head_of(&tab_uuid).is_some() {
+            return Ok(());
+        }
+        let new_id = Uuid::new_v4().to_string();
+        let new_ref = crate::checkpoint_store::shadow_ref_for(&new_id);
+        let message = format!("checkpoint-{new_id}");
+        let shadow_commit =
+            checkpoint::snapshot_worktree(&wt, None, &new_ref, &message)
+                .map_err(E::GitFailed)?;
+        let node = crate::checkpoint_store::CheckpointNode {
+            id: new_id.clone(),
+            parent: None,
+            session_id,
+            jsonl_line_count: 0,
+            shadow_commit,
+            created_at: std::time::SystemTime::now(),
+            title: None,
+            worktree_dir: wt,
+        };
+        self.ckpt_store.insert_node(node);
+        self.ckpt_store.set_head(&tab_uuid, new_id.clone());
+        let _ = crate::checkpoint_store::save_tree(&self.ckpt_store, &new_id);
+        Ok(())
+    }
+
     fn do_checkpoint(
         &mut self,
         tab_id: usize,
@@ -1214,7 +1317,34 @@ impl App {
             .map(|n| n.shadow_commit.clone());
 
         let jsonl = checkpoint::jsonl_path_for(&wt, &session_id);
-        let line_count = checkpoint::count_jsonl_lines(&jsonl)?.saturating_sub(1);
+        // UserPromptSubmit fires *before* claude-code writes the new
+        // prompt block to jsonl — empirically: at hook time the file
+        // already holds the complete prior turn (ending in a `system`
+        // marker) and the next turn's file-history-snapshot/user lines
+        // haven't been appended yet. So count-as-is is the right
+        // "state before this prompt" snapshot; subtracting 1 would
+        // drop the `system` marker, which compounds on nested forks
+        // into lost assistant text.
+        let line_count = checkpoint::count_jsonl_lines(&jsonl)?;
+
+        // Skip when this would be a clone of the parent. On a fork's
+        // first UserPromptSubmit the new tab's jsonl has exactly the
+        // line_count we copied from the parent (plus a file-history
+        // marker claude-code writes on resume, which the N-1 offset
+        // trims back off). Recording it would sprout a phantom node
+        // representing identical state to its parent.
+        if let Some(pid) = parent_id.as_deref() {
+            if let Some(parent_node) = self.ckpt_store.node(pid) {
+                if parent_node.jsonl_line_count == line_count {
+                    return Ok(serde_json::json!({
+                        "skipped": "duplicate_of_parent",
+                        "parent_id": pid,
+                        "jsonl_line_count": line_count,
+                    }));
+                }
+            }
+        }
+
         let new_id = Uuid::new_v4().to_string();
         let new_ref = crate::checkpoint_store::shadow_ref_for(&new_id);
         let message = format!("checkpoint-{new_id}");
@@ -1250,6 +1380,7 @@ impl App {
         match self.do_replace(tab_id, ckpt_id) {
             Ok(task) => task,
             Err(e) => {
+                eprintln!("[mandelbot] replace failed for tab {tab_id}: {e}");
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
                 Task::none()
             }
@@ -1265,6 +1396,7 @@ impl App {
         match self.do_fork(tab_id, ckpt_id, prompt) {
             Ok(task) => task,
             Err(e) => {
+                eprintln!("[mandelbot] fork failed for tab {tab_id}: {e}");
                 self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
                 Task::none()
             }
@@ -1305,7 +1437,11 @@ impl App {
             .ok_or_else(|| E::CheckpointNotFound(ckpt_id.clone()))?;
         let project_dir = tab.project_dir.clone().ok_or(E::NoProjectDir)?;
         let rank = tab.rank;
-        let src_worktree = tab.worktree_dir.clone();
+        // The source jsonl lives wherever the checkpoint was recorded —
+        // often a different worktree than this tab's current one (when
+        // the checkpoint traces back to an ancestor fork). The node
+        // itself records that path.
+        let src_worktree = ckpt.worktree_dir.clone();
 
         // A random suffix keeps the branch (and derived worktree path) unique
         // when the same (tab, checkpoint) is forked more than once — otherwise
@@ -1324,14 +1460,19 @@ impl App {
         checkpoint::fork_worktree(&project_dir, &wt_path, &new_branch, &ckpt.shadow_commit)
             .map_err(E::GitFailed)?;
 
-        let new_session = Uuid::new_v4().to_string();
-        let src_jsonl = checkpoint::jsonl_path_for(
-            src_worktree.as_ref().unwrap_or(&wt_path),
-            &ckpt.session_id,
-        );
-        let dst_jsonl = checkpoint::jsonl_path_for(&wt_path, &new_session);
-        checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
-            .map_err(E::JsonlCopyFailed)?;
+        // Root checkpoints represent the conversation's pre-prompt state:
+        // jsonl_line_count=0 means "brand-new session". Skip the jsonl
+        // copy and launch the new tab fresh (--session-id, not --resume).
+        let resume_session_id = if ckpt.jsonl_line_count == 0 {
+            None
+        } else {
+            let new_session = Uuid::new_v4().to_string();
+            let src_jsonl = checkpoint::jsonl_path_for(&src_worktree, &ckpt.session_id);
+            let dst_jsonl = checkpoint::jsonl_path_for(&wt_path, &new_session);
+            checkpoint::copy_truncated_jsonl(&src_jsonl, &dst_jsonl, ckpt.jsonl_line_count)
+                .map_err(E::JsonlCopyFailed)?;
+            Some(new_session)
+        };
 
         // Fork hangs under the tab it branched from — this gives us a true
         // tree of branching conversations (and lets do_replace just
@@ -1345,7 +1486,7 @@ impl App {
             Some(new_branch),
             None,
             None,
-            Some(new_session.clone()),
+            resume_session_id,
             Some(wt_path.clone()),
             Some(idx + 1),
         );
@@ -1620,24 +1761,25 @@ impl App {
                 ..Default::default()
             });
 
-        let terminal_content: Element<'_, Message> = if let Some(tab) = self.active_tab() {
-            let term: Element<'_, Message> = TerminalWidget::new(tab, &self.config).into();
-            if tab.timeline_visible {
-                let timeline = crate::widget::timeline::view(
-                    &self.ckpt_store,
-                    tab,
-                    &self.terminal_theme,
-                    &self.config,
-                );
-                column![term, timeline].into()
+        let (term_element, timeline_element): (Element<'_, Message>, Option<Element<'_, Message>>) =
+            if let Some(tab) = self.active_tab() {
+                let term: Element<'_, Message> = TerminalWidget::new(tab, &self.config).into();
+                if tab.timeline_visible {
+                    let timeline = crate::widget::timeline::view(
+                        &self.ckpt_store,
+                        tab,
+                        &self.terminal_theme,
+                        &self.config,
+                    );
+                    (term, Some(timeline))
+                } else {
+                    (term, None)
+                }
             } else {
-                term
-            }
-        } else {
-            Space::new().width(Fill).height(Fill).into()
-        };
+                (Space::new().width(Fill).height(Fill).into(), None)
+            };
 
-        let terminal_pane = container(terminal_content)
+        let terminal_pane = container(term_element)
             .padding(PADDING)
             .width(Fill)
             .height(Fill)
@@ -1646,7 +1788,13 @@ impl App {
                 ..Default::default()
             });
 
-        row![tab_bar, terminal_pane]
+        let right_side: Element<'_, Message> = if let Some(timeline) = timeline_element {
+            column![terminal_pane, timeline].into()
+        } else {
+            terminal_pane.into()
+        };
+
+        row![tab_bar, right_side]
             .width(Fill)
             .height(Fill)
             .into()
