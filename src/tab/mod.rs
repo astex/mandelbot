@@ -174,7 +174,15 @@ impl TerminalTab {
             depth,
             project_id,
             title: None,
-            status: AgentStatus::default(),
+            // Claude tabs run a setup script (worktree create, cd, etc.)
+            // before claude launches and its hooks take over. Start
+            // Working so the tab reflects that; the first Stop hook
+            // will transition to Idle.
+            status: if is_claude {
+                AgentStatus::Working
+            } else {
+                AgentStatus::Idle
+            },
             background_tasks: 0,
             pr_scraped: None,
             pr_override: None,
@@ -209,6 +217,8 @@ impl TerminalTab {
             Some(id),
         );
         tab.pending_input = Some(String::new());
+        // Pending tab is waiting on the user, not running claude yet.
+        tab.status = AgentStatus::Idle;
         tab
     }
 
