@@ -93,6 +93,8 @@ pub enum Message {
     ToggleTimeline(usize),
     TimelineScrub(usize, TimelineDir),
     TimelineActivate(usize, TimelineMode),
+    Undo(usize),
+    Redo(usize),
     ShowToast {
         source_tab_id: usize,
         message: String,
@@ -1191,6 +1193,7 @@ impl App {
                 if let Some(id) = next {
                     if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                         tab.timeline_cursor = Some(id);
+                        tab.redo_path.clear();
                     }
                     if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
                         return crate::widget::timeline::scroll_to_cursor(
@@ -1217,6 +1220,8 @@ impl App {
                     TimelineMode::Fork => self.handle_fork(tab_id, ckpt_id, None),
                 }
             }
+            Message::Undo(tab_id) => self.handle_undo(tab_id),
+            Message::Redo(tab_id) => self.handle_redo(tab_id),
             Message::ShowToast { source_tab_id, message, prompt } => {
                 let id = self.next_toast_id;
                 self.next_toast_id += 1;
@@ -1416,6 +1421,9 @@ impl App {
         };
         self.ckpt_store.insert_node(node);
         self.ckpt_store.set_head(&tab_uuid, new_id.clone());
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            t.redo_path.clear();
+        }
         let _ = crate::checkpoint_store::save_tree(&self.ckpt_store, &new_id);
         Ok(serde_json::json!({
             "checkpoint_id": new_id,
@@ -1424,7 +1432,65 @@ impl App {
         }))
     }
 
+    fn handle_undo(&mut self, tab_id: usize) -> Task<Message> {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return Task::none();
+        };
+        let tab_uuid = tab.uuid.clone();
+        let Some(head) = self.ckpt_store.head_of(&tab_uuid).cloned() else {
+            return Task::none();
+        };
+        let Some(parent) = self
+            .ckpt_store
+            .node(&head)
+            .and_then(|n| n.parent.clone())
+        else {
+            return Task::none();
+        };
+        let mut new_redo = tab.redo_path.clone();
+        new_redo.push(head);
+        self.do_replace_preserving_redo(tab_id, parent, new_redo)
+    }
+
+    fn handle_redo(&mut self, tab_id: usize) -> Task<Message> {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            return Task::none();
+        };
+        let mut new_redo = tab.redo_path.clone();
+        let Some(target) = new_redo.pop() else {
+            return Task::none();
+        };
+        if !self.ckpt_store.nodes.contains_key(&target) {
+            return Task::none();
+        }
+        self.do_replace_preserving_redo(tab_id, target, new_redo)
+    }
+
+    fn do_replace_preserving_redo(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: String,
+        new_redo: Vec<String>,
+    ) -> Task<Message> {
+        match self.do_fork_inner(tab_id, ckpt_id, None) {
+            Ok((task, new_tab_id)) => {
+                if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+                    new_tab.redo_path = new_redo;
+                }
+                let _ = self.close_tab(tab_id);
+                task
+            }
+            Err(e) => {
+                self.respond_to_tab(tab_id, serde_json::json!({"error": e.to_string()}));
+                Task::none()
+            }
+        }
+    }
+
     fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            t.redo_path.clear();
+        }
         match self.do_replace(tab_id, ckpt_id) {
             Ok(task) => task,
             Err(e) => {
@@ -1440,6 +1506,9 @@ impl App {
         ckpt_id: String,
         prompt: Option<String>,
     ) -> Task<Message> {
+        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            t.redo_path.clear();
+        }
         match self.do_fork(tab_id, ckpt_id, prompt) {
             Ok(task) => task,
             Err(e) => {
@@ -1468,6 +1537,15 @@ impl App {
         ckpt_id: String,
         prompt: Option<String>,
     ) -> Result<Task<Message>, checkpoint::TimeTravelError> {
+        self.do_fork_inner(tab_id, ckpt_id, prompt).map(|(t, _)| t)
+    }
+
+    fn do_fork_inner(
+        &mut self,
+        tab_id: usize,
+        ckpt_id: String,
+        prompt: Option<String>,
+    ) -> Result<(Task<Message>, usize), checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
 
         let (idx, tab) = self
@@ -1558,7 +1636,7 @@ impl App {
                 "worktree": wt_path.to_string_lossy(),
             }),
         );
-        Ok(task)
+        Ok((task, new_tab_id))
     }
 
     fn toast_view(&self, toast: &Toast) -> Element<'_, Message> {
