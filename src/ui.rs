@@ -774,6 +774,33 @@ impl App {
         }
     }
 
+    /// Pick the tab to focus after closing `closing_id`, given its pre-close
+    /// parent and position in `self.tabs`. Prefers prev sibling, then next
+    /// sibling, then parent. `closing_ids` are treated as already gone.
+    fn pick_focus_after_close(
+        &self,
+        closing_parent_id: Option<usize>,
+        anchor_idx: usize,
+        closing_ids: &[usize],
+    ) -> Option<usize> {
+        let sibling_at =
+            |pos: usize| -> Option<usize> {
+                self.tabs.get(pos).and_then(|t| {
+                    (t.parent_id == closing_parent_id
+                        && !closing_ids.contains(&t.id))
+                    .then_some(t.id)
+                })
+            };
+        let prev = (0..anchor_idx)
+            .rev()
+            .find_map(sibling_at);
+        let next = (anchor_idx..self.tabs.len())
+            .find_map(sibling_at);
+        prev.or(next).or_else(|| {
+            closing_parent_id.filter(|p| !closing_ids.contains(p))
+        })
+    }
+
     fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         self.folded_tabs.remove(&tab_id);
 
@@ -817,8 +844,13 @@ impl App {
         }
 
         if self.active_tab_id == tab_id {
-            let new_idx = idx.min(self.tabs.len() - 1);
-            self.focus_tab(self.tabs[new_idx].id);
+            let new_id = self
+                .pick_focus_after_close(closing_parent_id, idx, &[tab_id])
+                .unwrap_or_else(|| {
+                    let fallback = idx.min(self.tabs.len() - 1);
+                    self.tabs[fallback].id
+                });
+            self.focus_tab(new_id);
         }
 
         Task::none()
@@ -1294,15 +1326,23 @@ impl App {
                     self.folded_tabs.remove(&id);
                 }
                 if to_close.contains(&self.active_tab_id) {
-                    // Find the nearest surviving tab.
-                    let old_idx = self.tabs.iter()
-                        .position(|t| t.id == self.active_tab_id)
-                        .unwrap_or(0);
-                    let new_id = self.tabs.iter()
-                        .enumerate()
-                        .filter(|(_, t)| !to_close.contains(&t.id))
-                        .min_by_key(|(idx, _)| (*idx as isize - old_idx as isize).unsigned_abs())
-                        .map(|(_, t)| t.id);
+                    // Prefer prev/next sibling of the subtree root, then its
+                    // parent; fall back to nearest surviving tab by index.
+                    let (root_idx, root_parent) = self.tabs.iter()
+                        .position(|t| t.id == target_tab_id)
+                        .map(|i| (i, self.tabs[i].parent_id))
+                        .unwrap_or((0, None));
+                    let new_id = self
+                        .pick_focus_after_close(root_parent, root_idx, &to_close)
+                        .or_else(|| {
+                            self.tabs.iter()
+                                .enumerate()
+                                .filter(|(_, t)| !to_close.contains(&t.id))
+                                .min_by_key(|(idx, _)| {
+                                    (*idx as isize - root_idx as isize).unsigned_abs()
+                                })
+                                .map(|(_, t)| t.id)
+                        });
                     if let Some(id) = new_id {
                         self.focus_tab(id);
                     }
