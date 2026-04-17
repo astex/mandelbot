@@ -103,23 +103,19 @@ pub enum Message {
     },
     DismissToast(usize),
     SpawnFromToast(usize),
-    /// Result of a background checkpoint (snapshot + line-count).
-    /// Applied back on the UI thread.
     CheckpointDone {
         tab_id: usize,
         reason: CheckpointReason,
         result: Box<Result<CheckpointOutcome, String>>,
     },
-    /// Result of a background fork (git worktree add + jsonl copy).
-    /// Applied back on the UI thread.
     ForkDone {
         source_tab_id: usize,
         action: ForkAction,
         result: Box<Result<ForkOutcome, String>>,
     },
-    /// Completion of a background `save_tree` — result is discarded
-    /// (save failures are already ignored by the old synchronous code).
-    TreeSaved,
+    /// Completion signal for background work whose result we discard
+    /// (e.g. `save_tree`, or a dropped oneshot). No-op in `update`.
+    BackgroundDone,
 }
 
 #[derive(Debug, Clone)]
@@ -135,42 +131,22 @@ pub enum CheckpointReason {
 
 #[derive(Debug, Clone)]
 pub enum ForkAction {
-    /// Keep the source tab alive. Respond to the source tab over the
-    /// parent socket (MCP fork).
-    Fork { respond: bool, prompt: Option<String> },
-    /// Close the source tab after the new fork is wired up.
-    Replace { prompt: Option<String> },
-    /// `do_replace_preserving_redo` path — set `new_redo` on the new
-    /// tab before closing the source.
-    ReplaceWithRedo { new_redo: Vec<String> },
+    /// Spawn a new tab branched from the checkpoint; keep the source.
+    Fork { prompt: Option<String> },
+    /// Spawn, then close the source tab. `new_redo` is moved onto the
+    /// new tab before the close — non-empty only on undo/redo.
+    Replace { new_redo: Vec<String> },
 }
 
-/// Payload produced by the blocking checkpoint task.
 #[derive(Debug, Clone)]
 pub struct CheckpointOutcome {
-    /// When `head_of(tab)` was `None` at prep time we also snapshot
-    /// a root node here, in the same blocking batch.
-    pub root: Option<CheckpointNodeData>,
-    /// `None` means dup-skipped: parent line count already matched,
-    /// so we didn't take the snapshot at all.
-    pub new_node: Option<CheckpointNodeData>,
+    pub root: Option<crate::checkpoint_store::CheckpointNode>,
+    /// `None` means dup-skipped: parent line count already matched.
+    pub new_node: Option<crate::checkpoint_store::CheckpointNode>,
     pub parent_id: Option<String>,
     pub line_count: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct CheckpointNodeData {
-    pub id: String,
-    pub parent: Option<String>,
-    pub session_id: String,
-    pub shadow_commit: String,
-    pub jsonl_line_count: usize,
-    pub title: Option<String>,
-    pub worktree_dir: PathBuf,
-    pub created_at: std::time::SystemTime,
-}
-
-/// Payload produced by the blocking fork task.
 #[derive(Debug, Clone)]
 pub struct ForkOutcome {
     pub ckpt_id: String,
@@ -235,7 +211,7 @@ fn run_checkpoint_blocking(
         let root_commit =
             checkpoint::snapshot_worktree(&prep.wt, None, &root_ref, &root_msg)
                 .map_err(|e| e.to_string())?;
-        Some(CheckpointNodeData {
+        Some(crate::checkpoint_store::CheckpointNode {
             id: root_id,
             parent: None,
             session_id: prep.session_id.clone(),
@@ -297,7 +273,7 @@ fn run_checkpoint_blocking(
 
     Ok(CheckpointOutcome {
         root,
-        new_node: Some(CheckpointNodeData {
+        new_node: Some(crate::checkpoint_store::CheckpointNode {
             id: new_id,
             parent: parent_id.clone(),
             session_id: prep.session_id,
@@ -343,19 +319,6 @@ fn run_fork_blocking(prep: ForkPrep) -> Result<ForkOutcome, String> {
     })
 }
 
-fn node_from(data: CheckpointNodeData) -> crate::checkpoint_store::CheckpointNode {
-    crate::checkpoint_store::CheckpointNode {
-        id: data.id,
-        parent: data.parent,
-        session_id: data.session_id,
-        jsonl_line_count: data.jsonl_line_count,
-        shadow_commit: data.shadow_commit,
-        created_at: data.created_at,
-        title: data.title,
-        worktree_dir: data.worktree_dir,
-    }
-}
-
 /// Run a blocking closure off the UI thread and turn its output into a
 /// `Task<Message>`. Uses `std::thread::spawn` + a oneshot so we don't
 /// depend on any particular async executor being current — iced 0.14
@@ -378,14 +341,14 @@ where
         },
         move |res| match res {
             Ok(v) => on_done(v),
-            Err(_) => Message::TreeSaved,
+            Err(_) => Message::BackgroundDone,
         },
     )
 }
 
 /// Fire-and-forget variant for background work whose result we don't
 /// need back on the UI thread (e.g. persisting the checkpoint tree to
-/// disk). The completion message is `Message::TreeSaved`, which is a
+/// disk). The completion message is `Message::BackgroundDone`, which is a
 /// no-op in `update`.
 fn spawn_blocking_discard<F>(f: F) -> Task<Message>
 where
@@ -395,7 +358,7 @@ where
         move || {
             f();
         },
-        |()| Message::TreeSaved,
+        |()| Message::BackgroundDone,
     )
 }
 
@@ -1508,39 +1471,46 @@ impl App {
                         opened = true;
                     }
                 }
-                if opened {
-                    // Snapshot uncheckpointed tail on open so the tip
-                    // represents "now". dup-skip no-ops when nothing's
-                    // grown past the tip.
-                    let mut ckpt_task = Task::none();
-                    if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id)
-                        && let Some(tip) = self.ckpt_store.head_of(&tab.uuid).cloned()
-                        && crate::widget::timeline::has_uncheckpointed_tail(
-                            &self.ckpt_store, tab, &tip,
-                        )
-                    {
-                        ckpt_task =
-                            self.kick_checkpoint(tab_id, CheckpointReason::TimelineOpen);
-                    }
+                if !opened {
                     self.resize_tab_for_timeline(tab_id);
-                    // Initial scroll against the current (pre-snapshot)
-                    // tip so the UI responds immediately; the completion
-                    // handler for `TimelineOpen` scrolls again once the
-                    // new tip lands.
-                    let scroll_task =
-                        if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
-                            crate::widget::timeline::scroll_to_cursor(
+                    return Task::none();
+                }
+                // Snapshot the uncheckpointed tail on open so the tip
+                // represents "now". dup-skip no-ops when nothing's
+                // grown past the tip. When a snapshot is pending, its
+                // completion handler scrolls; otherwise we scroll now.
+                let need_ckpt = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.id == tab_id)
+                    .and_then(|tab| {
+                        self.ckpt_store.head_of(&tab.uuid).map(|tip| {
+                            crate::widget::timeline::has_uncheckpointed_tail(
                                 &self.ckpt_store,
                                 tab,
-                                &self.config,
+                                tip,
                             )
-                        } else {
-                            Task::none()
-                        };
-                    return Task::batch([ckpt_task, scroll_task]);
-                }
+                        })
+                    })
+                    .unwrap_or(false);
+                let ckpt_task = if need_ckpt {
+                    self.kick_checkpoint(tab_id, CheckpointReason::TimelineOpen)
+                } else {
+                    Task::none()
+                };
                 self.resize_tab_for_timeline(tab_id);
-                Task::none()
+                let scroll_task = if need_ckpt {
+                    Task::none()
+                } else if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+                    crate::widget::timeline::scroll_to_cursor(
+                        &self.ckpt_store,
+                        tab,
+                        &self.config,
+                    )
+                } else {
+                    Task::none()
+                };
+                Task::batch([ckpt_task, scroll_task])
             }
             Message::CheckpointDone { tab_id, reason, result } => {
                 self.finish_checkpoint(tab_id, reason, *result)
@@ -1548,7 +1518,7 @@ impl App {
             Message::ForkDone { source_tab_id, action, result } => {
                 self.finish_fork(source_tab_id, action, *result)
             }
-            Message::TreeSaved => Task::none(),
+            Message::BackgroundDone => Task::none(),
             Message::TimelineScrub(tab_id, dir) => {
                 let next = self
                     .tabs
@@ -1715,9 +1685,8 @@ impl App {
             .as_deref()
             .and_then(|pid| self.ckpt_store.node(pid))
             .map(|n| n.jsonl_line_count);
-        // Root-on-demand is handled by the blocking task when
-        // `parent_id.is_none()`: it snapshots twice, first for the
-        // synthetic root, then for the new checkpoint parented on it.
+        // Root-on-demand: the setup script runs in the PTY after
+        // TabReady, so the first checkpoint also synthesizes a root.
         let needs_root = parent_id.is_none();
 
         Ok(CheckpointPrep {
@@ -1756,28 +1725,23 @@ impl App {
             None => return Task::none(),
         };
 
-        // If the blocking task created a root for us (parent was
-        // None at prep time), insert it first.
         if let Some(root) = outcome.root {
             let root_id = root.id.clone();
-            self.ckpt_store.insert_node(node_from(root));
+            self.ckpt_store.insert_node(root);
             self.ckpt_store.set_head(&tab_uuid, root_id);
         }
 
         let response = match outcome.new_node {
-            None => {
-                // Dup-skip: matches the old synchronous response shape.
-                serde_json::json!({
-                    "skipped": "duplicate_of_parent",
-                    "parent_id": outcome.parent_id,
-                    "jsonl_line_count": outcome.line_count,
-                })
-            }
+            None => serde_json::json!({
+                "skipped": "duplicate_of_parent",
+                "parent_id": outcome.parent_id,
+                "jsonl_line_count": outcome.line_count,
+            }),
             Some(node) => {
                 let new_id = node.id.clone();
                 let shadow_commit = node.shadow_commit.clone();
                 let line_count = node.jsonl_line_count;
-                self.ckpt_store.insert_node(node_from(node));
+                self.ckpt_store.insert_node(node);
                 self.ckpt_store.set_head(&tab_uuid, new_id.clone());
                 if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
                     t.redo_path.clear();
@@ -1796,38 +1760,35 @@ impl App {
             }
         };
 
-        let save_task = self.schedule_save_tree(&tab_uuid);
-
-        let follow_up = match reason {
-            CheckpointReason::Auto => Task::none(),
-            CheckpointReason::Mcp => {
-                self.respond_to_tab(tab_id, response);
-                Task::none()
-            }
-            CheckpointReason::TimelineOpen => {
-                if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
-                    crate::widget::timeline::scroll_to_cursor(
-                        &self.ckpt_store,
-                        tab,
-                        &self.config,
-                    )
-                } else {
-                    Task::none()
-                }
-            }
+        let save_task = match self.ckpt_store.head_of(&tab_uuid).cloned() {
+            Some(head) => self.schedule_save_tree_at(&head),
+            None => Task::none(),
         };
-        Task::batch([save_task, follow_up])
+
+        if let CheckpointReason::Mcp = reason {
+            self.respond_to_tab(tab_id, response);
+        }
+        let scroll_task = if matches!(reason, CheckpointReason::TimelineOpen)
+            && let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id)
+        {
+            crate::widget::timeline::scroll_to_cursor(
+                &self.ckpt_store,
+                tab,
+                &self.config,
+            )
+        } else {
+            Task::none()
+        };
+        Task::batch([save_task, scroll_task])
     }
 
-    /// Clone the component containing `tab_uuid`'s head and persist it
-    /// off the UI thread. Returns `Task::none()` if nothing to save.
-    fn schedule_save_tree(&self, tab_uuid: &str) -> Task<Message> {
-        let Some(head) = self.ckpt_store.head_of(tab_uuid).cloned() else {
-            return Task::none();
-        };
+    /// Snapshot the checkpoint store and persist the tree containing
+    /// `any_id` off the UI thread.
+    fn schedule_save_tree_at(&self, any_id: &str) -> Task<Message> {
         let store = self.ckpt_store.clone();
+        let any_id = any_id.to_string();
         spawn_blocking_discard(move || {
-            let _ = crate::checkpoint_store::save_tree(&store, &head);
+            let _ = crate::checkpoint_store::save_tree(&store, &any_id);
         })
     }
 
@@ -1855,7 +1816,7 @@ impl App {
         self.kick_fork(
             tab_id,
             parent,
-            ForkAction::ReplaceWithRedo { new_redo },
+            ForkAction::Replace { new_redo },
         )
     }
 
@@ -1873,7 +1834,7 @@ impl App {
         self.kick_fork(
             tab_id,
             target,
-            ForkAction::ReplaceWithRedo { new_redo },
+            ForkAction::Replace { new_redo },
         )
     }
 
@@ -1884,7 +1845,7 @@ impl App {
         self.kick_fork(
             tab_id,
             ckpt_id,
-            ForkAction::Replace { prompt: None },
+            ForkAction::Replace { new_redo: Vec::new() },
         )
     }
 
@@ -1900,7 +1861,7 @@ impl App {
         self.kick_fork(
             tab_id,
             ckpt_id,
-            ForkAction::Fork { respond: true, prompt },
+            ForkAction::Fork { prompt },
         )
     }
 
@@ -1951,7 +1912,9 @@ impl App {
             .ok_or_else(|| E::CheckpointNotFound(ckpt_id.clone()))?;
         let project_dir = tab.project_dir.clone().ok_or(E::NoProjectDir)?;
 
-        // Uniqueness suffix — see note in the original do_fork_inner.
+        // Random suffix keeps the branch (and its derived worktree
+        // path) unique when the same (tab, checkpoint) is forked more
+        // than once — otherwise `git worktree add -b` rejects it.
         let suffix = &Uuid::new_v4().simple().to_string()[..6];
         let new_branch = format!(
             "fork-t{tab_id}-{}-{}",
@@ -2008,20 +1971,16 @@ impl App {
             return Task::none();
         };
 
-        // Re-read the ckpt — it may have been pruned while we were
-        // blocking. If gone, we still have the outcome bits we need
-        // (commit, etc.) recorded on the worktree we just created.
+        // Re-read the checkpoint's title — pruning may have dropped
+        // the node while we were blocking.
         let ckpt_title = self
             .ckpt_store
             .node(&outcome.ckpt_id)
             .and_then(|n| n.title.clone());
 
-        let (prompt, respond_mcp, keep_source, new_redo) = match action {
-            ForkAction::Fork { respond, prompt } => (prompt, respond, true, None),
-            ForkAction::Replace { prompt } => (prompt, true, false, None),
-            ForkAction::ReplaceWithRedo { new_redo } => {
-                (None, false, false, Some(new_redo))
-            }
+        let (prompt, keep_source, new_redo) = match action {
+            ForkAction::Fork { prompt } => (prompt, true, Vec::new()),
+            ForkAction::Replace { new_redo } => (None, false, new_redo),
         };
 
         let (new_tab_id, spawn_task) = self.spawn_tab_full(
@@ -2043,37 +2002,27 @@ impl App {
             if let Some(title) = ckpt_title {
                 new_tab.title = Some(title);
             }
-            if let Some(redo) = new_redo {
-                new_tab.redo_path = redo;
-            }
+            new_tab.redo_path = new_redo;
             let new_tab_uuid = new_tab.uuid.clone();
             self.ckpt_store
                 .set_head(&new_tab_uuid, outcome.ckpt_id.clone());
         }
 
-        let save_task = {
-            let store = self.ckpt_store.clone();
-            let any_id = outcome.ckpt_id.clone();
-            spawn_blocking_discard(move || {
-                let _ = crate::checkpoint_store::save_tree(&store, &any_id);
-            })
-        };
+        let save_task = self.schedule_save_tree_at(&outcome.ckpt_id);
 
         self.focus_tab(new_tab_id);
-        if respond_mcp {
-            self.respond_to_tab(
-                source_tab_id,
-                serde_json::json!({
-                    "new_tab_id": new_tab_id,
-                    "worktree": outcome.wt_path.to_string_lossy(),
-                }),
-            );
-        }
+        self.respond_to_tab(
+            source_tab_id,
+            serde_json::json!({
+                "new_tab_id": new_tab_id,
+                "worktree": outcome.wt_path.to_string_lossy(),
+            }),
+        );
 
-        let close_task = if !keep_source {
-            self.close_tab(source_tab_id)
-        } else {
+        let close_task = if keep_source {
             Task::none()
+        } else {
+            self.close_tab(source_tab_id)
         };
 
         Task::batch([spawn_task, save_task, close_task])
