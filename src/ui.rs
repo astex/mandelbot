@@ -1170,6 +1170,27 @@ impl App {
                         opened = true;
                     }
                 }
+                // Snapshot any uncheckpointed tail on open so the tip
+                // reflects current state. do_checkpoint's own dup-skip
+                // makes this a no-op when the jsonl hasn't grown past
+                // the existing tip.
+                if opened {
+                    let has_tail = self
+                        .tabs
+                        .iter()
+                        .find(|t| t.id == tab_id)
+                        .and_then(|tab| {
+                            self.ckpt_store.head_of(&tab.uuid).cloned().map(|tip| {
+                                crate::widget::timeline::has_uncheckpointed_tail(
+                                    &self.ckpt_store, tab, &tip,
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if has_tail {
+                        let _ = self.do_checkpoint(tab_id);
+                    }
+                }
                 self.resize_tab_for_timeline(tab_id);
                 if opened {
                     if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
@@ -1356,6 +1377,15 @@ impl App {
         }
         let title = tab.title.clone();
         let tab_uuid = tab.uuid.clone();
+
+        // Root-on-demand: TabReady fires before the worktree setup
+        // script has run inside the PTY, so the eager ensure_root at
+        // TabReady time snapshots against a not-yet-existing worktree
+        // and fails silently. Lazily create the root here on first
+        // checkpoint — by now the worktree is real.
+        if self.ckpt_store.head_of(&tab_uuid).is_none() {
+            self.ensure_root_checkpoint(tab_id)?;
+        }
 
         // Parent the new checkpoint on this tab's current head, if any.
         let parent_id = self.ckpt_store.head_of(&tab_uuid).cloned();
