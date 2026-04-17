@@ -1443,6 +1443,12 @@ impl App {
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             t.redo_path.clear();
         }
+        let extra_protected: std::collections::HashSet<String> = self
+            .tabs
+            .iter()
+            .flat_map(|t| t.redo_path.iter().cloned())
+            .collect();
+        self.ckpt_store.prune_tree(&new_id, &extra_protected);
         let _ = crate::checkpoint_store::save_tree(&self.ckpt_store, &new_id);
         Ok(serde_json::json!({
             "checkpoint_id": new_id,
@@ -1468,6 +1474,10 @@ impl App {
         };
         let mut new_redo = tab.redo_path.clone();
         new_redo.push(head);
+        let max = crate::checkpoint_store::REDO_PATH_MAX;
+        if new_redo.len() > max {
+            new_redo.drain(..new_redo.len() - max);
+        }
         self.do_replace_preserving_redo(tab_id, parent, new_redo)
     }
 
