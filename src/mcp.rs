@@ -185,6 +185,14 @@ fn handle_tools_list(id: Value) -> Response {
                     },
                 },
                 {
+                    "name": "list_tabs",
+                    "description": "List tabs visible to this agent: the caller itself and all of its descendant tabs. The home agent sees every tab. Returns id, parent_id, title, rank (home/project/task), status, is_claude, project_dir, worktree_dir, and pr for each tab.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+                {
                     "name": "notify",
                     "description": "Show a toast notification at the bottom-left of the tab bar. The toast is dismissed after 10 seconds or when the user clicks the close button. If a prompt is provided, the toast shows an Open button that spawns a child tab of this one with that prompt.",
                     "inputSchema": {
@@ -526,6 +534,29 @@ async fn handle_tools_call(
                 Err(e) => Response::err(id, -32000, e),
             }
         }
+        "list_tabs" => {
+            let msg = serde_json::json!({
+                "type": "list_tabs",
+                "tab_id": tab_id,
+            });
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    let text = if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+                        format!("list_tabs failed: {err}")
+                    } else {
+                        serde_json::to_string_pretty(&resp).unwrap_or_default()
+                    };
+                    Response::ok(
+                        id,
+                        serde_json::json!({"content": [{"type": "text", "text": text}]}),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
         "notify" => {
             let args = params.get("arguments");
             let message = args
@@ -698,7 +729,8 @@ mod tests {
         assert_eq!(resp["result"]["tools"][5]["name"], "checkpoint");
         assert_eq!(resp["result"]["tools"][6]["name"], "replace");
         assert_eq!(resp["result"]["tools"][7]["name"], "fork");
-        assert_eq!(resp["result"]["tools"][8]["name"], "notify");
+        assert_eq!(resp["result"]["tools"][8]["name"], "list_tabs");
+        assert_eq!(resp["result"]["tools"][9]["name"], "notify");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
