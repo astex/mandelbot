@@ -6,6 +6,10 @@ use uuid::Uuid;
 
 use crate::tab::AgentRank;
 
+/// Errors raised by the synchronous prep stage of a time-travel
+/// operation — the part that runs on the UI thread before any disk
+/// work is dispatched. Disk/git failures are reported as plain
+/// `String` by the blocking tasks.
 #[derive(Debug)]
 pub enum TimeTravelError {
     UnknownTab(usize),
@@ -13,9 +17,6 @@ pub enum TimeTravelError {
     NoSessionId,
     NoProjectDir,
     CheckpointNotFound(String),
-    GitFailed(String),
-    JsonlCopyFailed(String),
-    Io(std::io::Error),
     NotSupportedForRank(AgentRank),
 }
 
@@ -27,9 +28,6 @@ impl fmt::Display for TimeTravelError {
             Self::NoSessionId => write!(f, "tab has no claude session id"),
             Self::NoProjectDir => write!(f, "tab has no project directory"),
             Self::CheckpointNotFound(id) => write!(f, "checkpoint {id} not found on this tab"),
-            Self::GitFailed(s) => write!(f, "git: {s}"),
-            Self::JsonlCopyFailed(s) => write!(f, "jsonl copy: {s}"),
-            Self::Io(e) => write!(f, "io: {e}"),
             Self::NotSupportedForRank(r) => {
                 write!(f, "time-travel is not supported for {r:?} tabs")
             }
@@ -38,12 +36,6 @@ impl fmt::Display for TimeTravelError {
 }
 
 impl std::error::Error for TimeTravelError {}
-
-impl From<std::io::Error> for TimeTravelError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
 
 /// Translate a filesystem path into Claude Code's project slug.
 /// Both `/` and `.` map to `-`, matching Claude Code's own slug logic,
