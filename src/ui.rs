@@ -150,6 +150,7 @@ pub struct CheckpointOutcome {
 #[derive(Debug, Clone)]
 pub struct ForkOutcome {
     pub ckpt_id: String,
+    pub ckpt_title: Option<String>,
     pub new_branch: String,
     pub wt_path: PathBuf,
     pub resume_session_id: Option<String>,
@@ -169,8 +170,6 @@ pub enum TimelineMode {
     Fork,
 }
 
-/// Prep payload for the background checkpoint task. All owned data —
-/// nothing borrowed from `self`.
 #[derive(Debug, Clone)]
 struct CheckpointPrep {
     wt: PathBuf,
@@ -186,6 +185,7 @@ struct CheckpointPrep {
 struct ForkPrep {
     project_dir: PathBuf,
     ckpt_id: String,
+    ckpt_title: Option<String>,
     ckpt_shadow_commit: String,
     ckpt_session_id: String,
     ckpt_jsonl_line_count: usize,
@@ -194,16 +194,13 @@ struct ForkPrep {
     wt_path: PathBuf,
 }
 
-/// Run the blocking part of a checkpoint: optional root snapshot +
-/// jsonl line count + new-checkpoint snapshot. Returns early with
-/// `new_node: None` when the parent's line count already matches,
-/// signalling the dup-skip path.
+/// Returns `new_node: None` when the jsonl line count hasn't advanced
+/// past the parent's, signalling the dup-skip path to `finish_checkpoint`.
 fn run_checkpoint_blocking(
     prep: CheckpointPrep,
 ) -> Result<CheckpointOutcome, String> {
     let now = std::time::SystemTime::now;
 
-    // 1. Root snapshot, if this tab has no head yet.
     let root = if prep.needs_root {
         let root_id = Uuid::new_v4().to_string();
         let root_ref = crate::checkpoint_store::shadow_ref_for(&root_id);
@@ -241,12 +238,12 @@ fn run_checkpoint_blocking(
         ),
     };
 
-    // 2. Line count (file IO).
     let jsonl = checkpoint::jsonl_path_for(&prep.wt, &prep.session_id);
     let line_count =
         checkpoint::count_jsonl_lines(&jsonl).map_err(|e| e.to_string())?;
 
-    // 3. Dup-skip. Only when the node isn't the root we just made.
+    // Skip only when there's a real parent — a freshly synthesized root
+    // always needs a following node or the head stays at line_count=0.
     if root.is_none()
         && let Some(plc) = parent_line_count
         && plc == line_count
@@ -259,7 +256,6 @@ fn run_checkpoint_blocking(
         });
     }
 
-    // 4. Snapshot the new checkpoint.
     let new_id = Uuid::new_v4().to_string();
     let new_ref = crate::checkpoint_store::shadow_ref_for(&new_id);
     let message = format!("checkpoint-{new_id}");
@@ -313,6 +309,7 @@ fn run_fork_blocking(prep: ForkPrep) -> Result<ForkOutcome, String> {
 
     Ok(ForkOutcome {
         ckpt_id: prep.ckpt_id,
+        ckpt_title: prep.ckpt_title,
         new_branch: prep.new_branch,
         wt_path: prep.wt_path,
         resume_session_id,
@@ -1624,9 +1621,6 @@ impl App {
         });
     }
 
-    /// Gather the inputs needed for a checkpoint and spawn the blocking
-    /// snapshot/count off the UI thread. Result lands as
-    /// `Message::CheckpointDone`, which calls `finish_checkpoint`.
     fn kick_checkpoint(
         &mut self,
         tab_id: usize,
@@ -1654,10 +1648,6 @@ impl App {
         )
     }
 
-    /// Snapshot everything we need about the tab/store to run a
-    /// checkpoint without holding a `&self` reference. Returns `Err`
-    /// for the ineligible-tab cases that `do_checkpoint` used to raise
-    /// synchronously.
     fn prepare_checkpoint(
         &self,
         tab_id: usize,
@@ -1700,7 +1690,6 @@ impl App {
         })
     }
 
-    /// Apply a completed blocking checkpoint back onto `self`.
     fn finish_checkpoint(
         &mut self,
         tab_id: usize,
@@ -1865,9 +1854,6 @@ impl App {
         )
     }
 
-    /// Gather fork inputs and spawn the blocking `git worktree add` +
-    /// jsonl copy off the UI thread. Result lands as
-    /// `Message::ForkDone`, which calls `finish_fork`.
     fn kick_fork(
         &mut self,
         tab_id: usize,
@@ -1930,6 +1916,7 @@ impl App {
         Ok(ForkPrep {
             project_dir,
             ckpt_id,
+            ckpt_title: ckpt.title.clone(),
             ckpt_shadow_commit: ckpt.shadow_commit,
             ckpt_session_id: ckpt.session_id,
             ckpt_jsonl_line_count: ckpt.jsonl_line_count,
@@ -1956,9 +1943,8 @@ impl App {
             }
         };
 
-        // Re-resolve tab position: the blocking window may have
-        // reordered tabs. If the source tab vanished (unlikely but
-        // possible), bail without spawning.
+        // Tab list may have reordered while we were blocking, and the
+        // source tab may be gone entirely.
         let Some((idx, rank, project_dir)) = self
             .tabs
             .iter()
@@ -1971,12 +1957,7 @@ impl App {
             return Task::none();
         };
 
-        // Re-read the checkpoint's title — pruning may have dropped
-        // the node while we were blocking.
-        let ckpt_title = self
-            .ckpt_store
-            .node(&outcome.ckpt_id)
-            .and_then(|n| n.title.clone());
+        let ckpt_title = outcome.ckpt_title.clone();
 
         let (prompt, keep_source, new_redo) = match action {
             ForkAction::Fork { prompt } => (prompt, true, Vec::new()),
