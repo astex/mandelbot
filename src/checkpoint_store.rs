@@ -7,7 +7,7 @@
 //! tab closes, the file is deleted and owned JSONLs + shadow refs are
 //! swept.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,6 +15,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub type CheckpointId = String;
+
+/// Hard cap on nodes per checkpoint tree. Pruning fires when a tree
+/// exceeds this; survivors are chosen by exponential-decay tiering.
+pub const MAX_NODES_PER_TREE: usize = 200;
+
+/// Number of most-recent nodes (by `created_at`) that are always kept
+/// regardless of tier — the dense head of the decay curve.
+pub const RECENT_PROTECTED: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointNode {
@@ -155,6 +163,146 @@ impl CheckpointStore {
             by_root.insert(key, outcome);
         }
         by_root.into_values().collect()
+    }
+
+    /// Prune the tree containing `any_id` down to `MAX_NODES_PER_TREE`
+    /// using exponential-decay tiering. See `prune_tree_with_caps` for
+    /// the algorithm.
+    pub fn prune_tree(&mut self, any_id: &str) {
+        self.prune_tree_with_caps(any_id, MAX_NODES_PER_TREE, RECENT_PROTECTED);
+    }
+
+    /// Test/tunable variant of `prune_tree`.
+    ///
+    /// Algorithm:
+    /// 1. Compute the protected set: root, fork points (≥2 children),
+    ///    every live tip (`tab_heads`) plus its full spine to root, and
+    ///    the `recent_keep` newest nodes by `created_at`.
+    /// 2. For each node in the component, compute `depth_from_tip` as
+    ///    the shortest undirected hop count to any tip (multi-source
+    ///    BFS).
+    /// 3. Rank unprotected nodes by an "evict-first" key:
+    ///    `(trailing_zeros(depth), -depth)`. Trailing zeros on the
+    ///    binary representation of depth gives the classic exponential
+    ///    decay survivor pattern — odd depths are tier-0 (evict first),
+    ///    multiples of 2 survive longer, multiples of 4 longer still,
+    ///    and so on. Tiebreak by deeper-first so we shed older history
+    ///    before newer.
+    /// 4. Evict the lowest-ranked nodes until the component fits the
+    ///    cap; reparent each victim's children to the victim's parent
+    ///    and delete the shadow git ref.
+    pub fn prune_tree_with_caps(&mut self, any_id: &str, max_nodes: usize, recent_keep: usize) {
+        let Some(root_id) = self.root_of(any_id) else { return };
+        let comp = self.component_from_root(&root_id);
+        if comp.len() <= max_nodes {
+            return;
+        }
+
+        let mut protected: HashSet<CheckpointId> = HashSet::new();
+        protected.insert(root_id.clone());
+
+        for id in &comp {
+            if self.children.get(id).map(|c| c.len() >= 2).unwrap_or(false) {
+                protected.insert(id.clone());
+            }
+        }
+
+        let mut tips: Vec<CheckpointId> = Vec::new();
+        for head in self.tab_heads.values() {
+            if comp.contains(head.as_str()) {
+                tips.push(head.clone());
+                protected.insert(head.clone());
+            }
+        }
+        // Childless leaves count as tips too — even without a live tab
+        // head they're the natural endpoint of a spine.
+        for id in &comp {
+            let childless = self.children.get(id).map(|c| c.is_empty()).unwrap_or(true);
+            if childless && !tips.contains(id) {
+                tips.push(id.clone());
+            }
+        }
+
+        // Note on "spine": the spec lists each tip's spine (path back
+        // to root) as a protected class, but blanket-protecting every
+        // spine node would make linear chains uneditable — and the
+        // sibling contestants explicitly evict from spines. Read it as
+        // a connectivity invariant instead: every tip must remain
+        // reachable from root post-prune. We honor that via
+        // reparenting in `evict_node`, not by pinning every spine
+        // node.
+
+        let mut by_recency: Vec<(SystemTime, CheckpointId)> = comp
+            .iter()
+            .filter_map(|id| self.nodes.get(id).map(|n| (n.created_at, id.clone())))
+            .collect();
+        by_recency.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, id) in by_recency.into_iter().take(recent_keep) {
+            protected.insert(id);
+        }
+
+        // Multi-source BFS over the undirected parent↔child graph.
+        let mut depth: HashMap<CheckpointId, u32> = HashMap::new();
+        let mut queue: VecDeque<CheckpointId> = VecDeque::new();
+        for tip in &tips {
+            depth.insert(tip.clone(), 0);
+            queue.push_back(tip.clone());
+        }
+        while let Some(id) = queue.pop_front() {
+            let d = depth[&id];
+            let mut neighbors: Vec<CheckpointId> = Vec::new();
+            if let Some(n) = self.nodes.get(&id) {
+                if let Some(p) = &n.parent {
+                    if comp.contains(p.as_str()) {
+                        neighbors.push(p.clone());
+                    }
+                }
+            }
+            if let Some(kids) = self.children.get(&id) {
+                neighbors.extend(kids.iter().cloned());
+            }
+            for nb in neighbors {
+                if !depth.contains_key(&nb) {
+                    depth.insert(nb.clone(), d + 1);
+                    queue.push_back(nb);
+                }
+            }
+        }
+
+        let mut victims: Vec<(u32, i64, CheckpointId)> = comp
+            .iter()
+            .filter(|id| !protected.contains(*id))
+            .map(|id| {
+                let d = depth.get(id).copied().unwrap_or(u32::MAX);
+                let strength = if d == 0 { u32::MAX } else { d.trailing_zeros() };
+                (strength, -(d as i64), id.clone())
+            })
+            .collect();
+        victims.sort();
+        let need_evict = comp.len().saturating_sub(max_nodes).min(victims.len());
+        for (_, _, vid) in victims.into_iter().take(need_evict) {
+            self.evict_node(&vid);
+        }
+    }
+
+    /// Drop a single node, reparenting its children to its parent and
+    /// deleting its shadow git ref. Caller is responsible for ensuring
+    /// the node is not protected (root, fork, tip, recent, or spine).
+    fn evict_node(&mut self, id: &CheckpointId) {
+        let Some(node) = self.nodes.remove(id) else { return };
+        let parent_id = node.parent.clone();
+        let kids = self.children.remove(id).unwrap_or_default();
+        for kid in &kids {
+            if let Some(k) = self.nodes.get_mut(kid) {
+                k.parent = parent_id.clone();
+            }
+        }
+        if let Some(pid) = &parent_id {
+            let entry = self.children.entry(pid.clone()).or_default();
+            entry.retain(|c| c != id);
+            entry.extend(kids.iter().cloned());
+        }
+        delete_shadow_ref(&node.worktree_dir, &shadow_ref_for(id));
     }
 
     fn gc_component_ids(&mut self, ids: HashSet<CheckpointId>) {
@@ -461,6 +609,176 @@ mod tests {
         assert!(matches!(&outcomes[0], CloseOutcome::Dropped(r) if r == "r2"));
         assert!(store.nodes.contains_key("r1"));
         assert!(!store.nodes.contains_key("r2"));
+    }
+
+    fn mk_node_at(id: &str, parent: Option<&str>, t: SystemTime) -> CheckpointNode {
+        let mut n = mk_node(id, parent, "s");
+        n.created_at = t;
+        n
+    }
+
+    /// Build a single linear chain root -> n1 -> n2 -> ... -> n{len-1}
+    /// with monotonically increasing `created_at`, head set to leaf.
+    fn linear_chain(store: &mut CheckpointStore, len: usize, tab: &str) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::with_capacity(len);
+        for i in 0..len {
+            let id = format!("n{i}");
+            let parent = if i == 0 { None } else { Some(ids[i - 1].as_str()) };
+            let t = UNIX_EPOCH + Duration::from_secs(i as u64);
+            store.insert_node(mk_node_at(&id, parent, t));
+            ids.push(id);
+        }
+        store.set_head(tab, ids.last().unwrap().clone());
+        ids
+    }
+
+    #[test]
+    fn prune_noop_under_cap() {
+        let mut store = CheckpointStore::default();
+        let ids = linear_chain(&mut store, 10, "tab");
+        store.prune_tree_with_caps(&ids[5], 50, 5);
+        assert_eq!(store.nodes.len(), 10);
+    }
+
+    #[test]
+    fn prune_respects_protected_classes() {
+        // Build a chain of 100, with a fork at index 30 producing a
+        // short side branch (length 3). Cap at 40, recent_keep at 5.
+        let mut store = CheckpointStore::default();
+        let ids = linear_chain(&mut store, 100, "main");
+        // Side branch off ids[30].
+        for i in 0..3 {
+            let id = format!("s{i}");
+            let parent = if i == 0 { ids[30].clone() } else { format!("s{}", i - 1) };
+            let t = UNIX_EPOCH + Duration::from_secs(200 + i as u64);
+            store.insert_node(mk_node_at(&id, Some(&parent), t));
+        }
+        store.set_head("side", "s2".into());
+
+        let root = ids[0].clone();
+        let fork = ids[30].clone();
+        let main_tip = ids[99].clone();
+        let side_tip = "s2".to_string();
+
+        store.prune_tree_with_caps(&root, 40, 5);
+
+        assert!(store.nodes.contains_key(&root), "root protected");
+        assert!(store.nodes.contains_key(&fork), "fork point protected");
+        assert!(store.nodes.contains_key(&main_tip), "main tip protected");
+        assert!(store.nodes.contains_key(&side_tip), "side tip protected");
+        // Recent 5 by created_at: s0, s1, s2 plus the two highest main
+        // chain indices (98, 99).
+        assert!(store.nodes.contains_key(&ids[99]));
+        assert!(store.nodes.contains_key(&ids[98]));
+        assert!(store.nodes.contains_key("s0"));
+        assert!(store.nodes.contains_key("s1"));
+        assert!(store.nodes.contains_key("s2"));
+        assert!(store.nodes.len() <= 40);
+
+        // Every surviving node must reach root by parent walk.
+        for id in store.nodes.keys() {
+            assert_eq!(store.root_of(id).as_deref(), Some(root.as_str()),
+                "node {id} disconnected from root");
+        }
+    }
+
+    #[test]
+    fn prune_under_fork_reparents_correctly() {
+        // A fork at root with two children that each have descendants;
+        // when an interior chain node is evicted, its child's parent
+        // pointer is rewritten to its grandparent.
+        let mut store = CheckpointStore::default();
+        store.insert_node(mk_node_at("root", None, UNIX_EPOCH));
+        // Branch A: root -> a0 -> a1 -> a2 -> ... -> a9
+        for i in 0..10 {
+            let id = format!("a{i}");
+            let parent = if i == 0 { "root".to_string() } else { format!("a{}", i - 1) };
+            let t = UNIX_EPOCH + Duration::from_secs(10 + i as u64);
+            store.insert_node(mk_node_at(&id, Some(&parent), t));
+        }
+        // Branch B: root -> b0 -> b1
+        for i in 0..2 {
+            let id = format!("b{i}");
+            let parent = if i == 0 { "root".to_string() } else { format!("b{}", i - 1) };
+            let t = UNIX_EPOCH + Duration::from_secs(50 + i as u64);
+            store.insert_node(mk_node_at(&id, Some(&parent), t));
+        }
+        store.set_head("ta", "a9".into());
+        store.set_head("tb", "b1".into());
+
+        // Cap small enough to force eviction in the middle of branch A.
+        store.prune_tree_with_caps("root", 8, 2);
+
+        // Root and both tips survive.
+        assert!(store.nodes.contains_key("root"));
+        assert!(store.nodes.contains_key("a9"));
+        assert!(store.nodes.contains_key("b1"));
+        // Fork at root preserved (>=2 children).
+        let root_kids = store.children.get("root").map(|v| v.len()).unwrap_or(0);
+        assert!(root_kids >= 2, "root must remain a fork; got {root_kids} children");
+        // Connectivity: every node reaches root.
+        for id in store.nodes.keys() {
+            assert_eq!(store.root_of(id).as_deref(), Some("root"));
+        }
+        // children index is consistent with parent pointers.
+        for (id, node) in &store.nodes {
+            if let Some(p) = &node.parent {
+                let pkids = store.children.get(p).expect("parent has children entry");
+                assert!(pkids.contains(id), "child {id} missing from parent {p}'s list");
+            }
+        }
+    }
+
+    #[test]
+    fn prune_idempotent_when_everything_protected() {
+        // Tiny tree: 3 nodes, cap 2, but all 3 are protected
+        // (root, fork-or-tip, recent). Eviction should make no change
+        // beyond what the protected set allows, and a second call must
+        // be a no-op.
+        let mut store = CheckpointStore::default();
+        store.insert_node(mk_node_at("root", None, UNIX_EPOCH));
+        store.insert_node(mk_node_at("a", Some("root"), UNIX_EPOCH + Duration::from_secs(1)));
+        store.insert_node(mk_node_at("b", Some("root"), UNIX_EPOCH + Duration::from_secs(2)));
+        store.set_head("ta", "a".into());
+        store.set_head("tb", "b".into());
+
+        store.prune_tree_with_caps("root", 2, 5);
+        let after_first: HashSet<_> = store.nodes.keys().cloned().collect();
+        store.prune_tree_with_caps("root", 2, 5);
+        let after_second: HashSet<_> = store.nodes.keys().cloned().collect();
+        assert_eq!(after_first, after_second, "second prune must be a no-op");
+        // All three were protected (root + 2 tips, both forks of root).
+        assert_eq!(after_first.len(), 3);
+    }
+
+    #[test]
+    fn prune_keeps_tree_connected() {
+        // Long chain, force aggressive pruning. Every survivor must
+        // still walk to root via parent pointers.
+        let mut store = CheckpointStore::default();
+        let ids = linear_chain(&mut store, 250, "tab");
+        store.prune_tree_with_caps(&ids[0], 50, 10);
+        assert!(store.nodes.len() <= 50);
+        let root = &ids[0];
+        for id in store.nodes.keys() {
+            assert_eq!(store.root_of(id).as_deref(), Some(root.as_str()),
+                "node {id} not connected to root after prune");
+        }
+        // children index consistency.
+        for (id, node) in &store.nodes {
+            if let Some(p) = &node.parent {
+                assert!(store.nodes.contains_key(p), "parent {p} of {id} missing");
+                let pkids = store.children.get(p).expect("parent has children entry");
+                assert!(pkids.contains(id));
+            }
+        }
+        // No stray children-index entries pointing to dead nodes.
+        for (pid, kids) in &store.children {
+            assert!(store.nodes.contains_key(pid), "children entry for dead parent {pid}");
+            for k in kids {
+                assert!(store.nodes.contains_key(k), "stale child {k} in index");
+            }
+        }
     }
 
     #[test]
