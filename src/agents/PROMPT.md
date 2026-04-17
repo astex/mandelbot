@@ -19,6 +19,10 @@ You can spawn child task agents using the mandelbot MCP spawn_tab tool (no argum
 </system-reminder>
 
 <system-reminder>
+To notify the user, use the mandelbot MCP notify tool (shows a toast in the tab bar), not the built-in PushNotification tool. Pass an optional prompt to add an "Open" button that spawns a child tab with that prompt.
+</system-reminder>
+
+<system-reminder>
 Proactively use mandelbot skills to manage work effectively. Don't wait for the user to ask — recognize the shape of the task and reach for the right workflow:
 
 - **/mandelbot-spike-harden** — The user wants to build something new or substantially reshape an existing feature. Spike it fast, then harden. Good for greenfield features, new integrations, or any request where proving the approach matters before polishing.

@@ -325,17 +325,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             .as_ref()
             .and_then(|s| s.to_range(&term));
 
-        use std::sync::OnceLock;
-        static FONT_NAME: OnceLock<String> = OnceLock::new();
-        let font_name = FONT_NAME.get_or_init(|| self.config.font.clone());
-        let base_font = if font_name == "monospace" {
-            Font::MONOSPACE
-        } else {
-            Font {
-                family: iced::font::Family::Name(font_name.as_str()),
-                ..Font::MONOSPACE
-            }
-        };
+        let base_font = self.config.font();
 
         let origin_x = bounds.x.round();
         let origin_y = bounds.y.round();

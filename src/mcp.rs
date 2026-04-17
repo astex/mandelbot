@@ -184,6 +184,24 @@ fn handle_tools_list(id: Value) -> Response {
                         "required": ["checkpoint_id"],
                     },
                 },
+                {
+                    "name": "notify",
+                    "description": "Show a toast notification at the bottom-left of the tab bar. The toast is dismissed after 10 seconds or when the user clicks the close button. If a prompt is provided, the toast shows an Open button that spawns a child tab of this one with that prompt.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "description": "The message to display in the toast.",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Optional. If provided, the toast has an Open button that spawns a child tab under this one with this prompt.",
+                            },
+                        },
+                        "required": ["message"],
+                    },
+                },
             ],
         }),
     )
@@ -508,6 +526,36 @@ async fn handle_tools_call(
                 Err(e) => Response::err(id, -32000, e),
             }
         }
+        "notify" => {
+            let args = params.get("arguments");
+            let message = args
+                .and_then(|a| a.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let prompt = args
+                .and_then(|a| a.get("prompt"))
+                .and_then(|v| v.as_str());
+
+            let mut msg = serde_json::json!({
+                "type": "notify",
+                "tab_id": tab_id,
+                "message": message,
+            });
+            if let Some(p) = prompt {
+                msg["prompt"] = Value::String(p.to_string());
+            }
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            Response::ok(
+                id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": "Toast shown" }],
+                }),
+            )
+        }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
 }
@@ -650,6 +698,7 @@ mod tests {
         assert_eq!(resp["result"]["tools"][5]["name"], "checkpoint");
         assert_eq!(resp["result"]["tools"][6]["name"], "replace");
         assert_eq!(resp["result"]["tools"][7]["name"], "fork");
+        assert_eq!(resp["result"]["tools"][8]["name"], "notify");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -772,6 +821,44 @@ mod tests {
         child_reader.read_line(&mut resp_line).unwrap();
         let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
         assert_eq!(resp["result"]["content"][0]["text"], "Closed 1 tab(s)");
+
+        // -- tools/call notify (with prompt) --
+        let call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"notify","arguments":{"message":"build done","prompt":"review the diff"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Toast shown");
+
+        // Verify parent received the notify message.
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "notify");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["message"], "build done");
+        assert_eq!(parent_msg["prompt"], "review the diff");
+
+        // -- tools/call notify (message only) --
+        let call = r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"notify","arguments":{"message":"heads up"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Toast shown");
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "notify");
+        assert_eq!(parent_msg["message"], "heads up");
+        assert!(parent_msg.get("prompt").is_none());
 
         // Close stdin to shut down the server.
         drop(child_stdin);
