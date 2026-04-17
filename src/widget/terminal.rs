@@ -733,6 +733,16 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     return;
                 }
 
+                // When the timeline strip is open, intercept its nav keys
+                // before they reach the PTY input path.
+                if self.tab.timeline_visible {
+                    if let Some(msg) = super::timeline::handle_key(&key, *modifiers, self.tab.id) {
+                        shell.publish(msg);
+                        shell.capture_event();
+                        return;
+                    }
+                }
+
                 // Pending tab: route input to PendingInput messages.
                 if self.tab.is_pending() {
                     use crate::ui::PendingKey;
