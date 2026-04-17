@@ -19,7 +19,7 @@ You can spawn child task agents using the mandelbot MCP spawn_tab tool (no argum
 </system-reminder>
 
 <system-reminder>
-To notify the user, use the mandelbot MCP notify tool (shows a toast in the tab bar), not the built-in PushNotification tool. Pass an optional prompt to add an "Open" button that spawns a child tab with that prompt.
+To notify the user, use the mandelbot MCP notify tool (shows a toast in the tab bar), not the built-in PushNotification tool. Pass an optional prompt to add an "Open" button that spawns a child tab with that prompt, or an optional tab_id to add a "Go to" button that focuses an existing tab (tab_id takes precedence over prompt).
 </system-reminder>
 
 <system-reminder>
