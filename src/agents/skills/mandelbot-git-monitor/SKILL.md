@@ -1,7 +1,7 @@
 ---
 name: mandelbot-git-monitor
 description: Use this skill from a project tab when the user wants to be notified about GitHub PR activity in this project's repo — a PR newly requests their review, or a PR they authored gets a review decision change. Polls `gh` in the background and raises one toast per affected PR via the `notify` MCP tool; the Open button spawns a task-tab child in this project's worktree.
-allowed-tools: [Bash, BashOutput, KillBash, Read, mcp__mandelbot__notify]
+allowed-tools: [Bash, BashOutput, KillBash, Read, mcp__mandelbot__notify, mcp__mandelbot__list_tabs]
 ---
 
 # Git PR monitor
@@ -55,10 +55,11 @@ As soon as the watcher exits, capture its stdout, then **relaunch the watcher in
 
 ### 4. Notify once per line
 
-Now, for each TSV line captured from the previous run, call `mcp__mandelbot__notify` exactly once with:
+Before dispatching, call `mcp__mandelbot__list_tabs` once to get the set of visible tabs with their `pr` numbers. For each TSV line, extract the PR number from the URL and check whether any existing tab already has that `pr`. Then call `mcp__mandelbot__notify` exactly once per line with:
 
 - **message** — a short headline, e.g. `Review requested: <title>` or `<title>: <detail>`.
-- **prompt** — an instruction to the child task tab that opens when the user clicks the toast's Open button. The child spawns in this project's worktree, so it can `gh pr checkout` the PR directly. Example:
+- **tab_id** — if an existing tab matches the PR number, pass its id. The toast will show a "Go to" button that focuses that tab instead of spawning a new one. Do not also pass a prompt in this case.
+- **prompt** — only when no existing tab matches. An instruction to the child task tab that opens when the user clicks the toast's Open button. The child spawns in this project's worktree, so it can `gh pr checkout` the PR directly. Example:
 
     > A PR needs your attention in this project: <url> — "<title>" (<detail>). Run `gh pr checkout <number>` to bring it into this worktree, read through the diff, and then wait for the user. Do not take any action on the PR until they direct you.
 
