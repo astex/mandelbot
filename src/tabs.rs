@@ -271,6 +271,47 @@ impl Tabs {
         self.tabs[idx].parent_id = new_parent;
         self.recompute_all();
     }
+
+    pub fn has_claude_children(&self, parent_id: usize) -> bool {
+        self.children_of(Some(parent_id))
+            .iter()
+            .any(|&id| self.get(id).is_some_and(|t| t.is_claude))
+    }
+
+    /// Unfold `id` and every ancestor up to the root.
+    pub fn unfold_ancestors(&mut self, mut id: usize) {
+        loop {
+            self.unfold(id);
+            match self.get(id).and_then(|t| t.parent_id) {
+                Some(pid) => id = pid,
+                None => break,
+            }
+        }
+    }
+
+    /// Remove `tab_id`, promoting its first child into its slot in the parent
+    /// chain (inheriting its depth) and reparenting remaining children under
+    /// the promoted child. No-op if `tab_id` is unknown.
+    pub fn close_with_promotion(&mut self, tab_id: usize) {
+        let Some(closing) = self.get(tab_id) else { return };
+        let closing_parent_id = closing.parent_id;
+        let closing_depth = closing.depth;
+
+        let children: Vec<usize> = self.children_of(Some(tab_id)).to_vec();
+        let first_child_id = children.first().copied();
+
+        if let Some(promoted_id) = first_child_id {
+            if let Some(promoted) = self.get_mut(promoted_id) {
+                promoted.depth = closing_depth;
+            }
+            self.reparent(promoted_id, closing_parent_id);
+            for &cid in children.iter().skip(1) {
+                self.reparent(cid, Some(promoted_id));
+            }
+        }
+
+        self.remove(tab_id);
+    }
 }
 
 impl Default for Tabs {

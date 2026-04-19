@@ -16,7 +16,7 @@ impl App {
 
     pub(super) fn focus_tab(&mut self, id: usize) {
         if let Some(pid) = self.tabs.get(id).and_then(|t| t.parent_id) {
-            self.unfold_ancestors(pid);
+            self.tabs.unfold_ancestors(pid);
         }
         if id != self.active_tab_id {
             self.prev_active_tab_id = Some(self.active_tab_id);
@@ -57,7 +57,7 @@ impl App {
         insert_position: Option<usize>,
     ) -> (usize, Task<Message>) {
         if let Some(pid) = parent_id {
-            self.unfold_ancestors(pid);
+            self.tabs.unfold_ancestors(pid);
         }
 
         let Some(size) = self.window_size else {
@@ -180,23 +180,6 @@ impl App {
             .find(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
     }
 
-    pub(super) fn has_claude_children(&self, parent_id: usize) -> bool {
-        self.tabs
-            .children_of(Some(parent_id))
-            .iter()
-            .any(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
-    }
-
-    pub(super) fn unfold_ancestors(&mut self, mut id: usize) {
-        loop {
-            self.tabs.unfold(id);
-            match self.tabs.get(id).and_then(|t| t.parent_id) {
-                Some(pid) => id = pid,
-                None => break,
-            }
-        }
-    }
-
     pub(super) fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
         self.tabs.iter()
             .find(|t| t.rank == AgentRank::Project && t.project_dir.as_deref() == Some(dir))
@@ -241,26 +224,13 @@ impl App {
             return Task::none();
         };
 
-        let (tab_uuid, closing_parent_id, closing_depth) = {
+        let (tab_uuid, closing_parent_id) = {
             let closing = self.tabs.get(tab_id).expect("just found");
-            (closing.uuid.clone(), closing.parent_id, closing.depth)
+            (closing.uuid.clone(), closing.parent_id)
         };
         let _ = self.ckpt_store.close_tab(&tab_uuid).persist(&self.ckpt_store);
 
-        let children: Vec<usize> = self.tabs.children_of(Some(tab_id)).to_vec();
-        let first_child_id = children.first().copied();
-
-        if let Some(promoted_id) = first_child_id {
-            if let Some(promoted) = self.tabs.get_mut(promoted_id) {
-                promoted.depth = closing_depth;
-            }
-            self.tabs.reparent(promoted_id, closing_parent_id);
-            for &cid in children.iter().skip(1) {
-                self.tabs.reparent(cid, Some(promoted_id));
-            }
-        }
-
-        self.tabs.remove(tab_id);
+        self.tabs.close_with_promotion(tab_id);
 
         if self.prev_active_tab_id == Some(tab_id) {
             self.prev_active_tab_id = None;

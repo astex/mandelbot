@@ -90,13 +90,6 @@ impl<'a> TabBar<'a> {
         self.tabs.get(id)
     }
 
-    fn has_claude_children(&self, parent_id: usize) -> bool {
-        self.tabs
-            .children_of(Some(parent_id))
-            .iter()
-            .any(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
-    }
-
     /// Group separator: a 1px line with half-gap padding above and below,
     /// so callers can insert it between tab groups without extra spacers.
     fn separator(&self) -> Element<'a, Message> {
@@ -123,7 +116,7 @@ impl<'a> TabBar<'a> {
         let fg = self.terminal_theme.fg;
         let is_active = tab.id == self.tabs.active_id();
         let is_foldable = tab.is_claude && tab.rank != AgentRank::Home;
-        let has_children = is_foldable && self.has_claude_children(tab.id);
+        let has_children = is_foldable && self.tabs.has_claude_children(tab.id);
         let is_folded = self.tabs.is_folded(tab.id);
 
         let base_bg = if is_active { self.terminal_theme.bg } else { self.terminal_theme.black };
