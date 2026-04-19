@@ -44,9 +44,7 @@ impl<'a, 'b> TabBar<'a, 'b> {
                 continue;
             }
             if show_separators && tab.rank == AgentRank::Project {
-                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
                 tab_col = tab_col.push(self.separator());
-                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
             }
             let indent = tab.depth as f32 * INDENT_STEP;
             let num = self.number_assignments.get(&tab.id).copied();
@@ -63,9 +61,7 @@ impl<'a, 'b> TabBar<'a, 'b> {
             if first_shell {
                 first_shell = false;
                 if show_separators {
-                    tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
                     tab_col = tab_col.push(self.separator());
-                    tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
                 } else if has_agents {
                     tab_col = tab_col.push(vspace(TAB_GROUP_GAP));
                 }
@@ -104,16 +100,19 @@ impl<'a, 'b> TabBar<'a, 'b> {
             .any(|t| t.parent_id == Some(parent_id) && t.is_claude)
     }
 
+    /// Group separator: a 1px line with half-gap padding above and below,
+    /// so callers can insert it between tab groups without extra spacers.
     fn separator(&self) -> Element<'a, Message> {
         let muted = Color { a: 0.25, ..self.terminal_theme.fg };
-        container(Space::new())
+        let line: Element<'a, Message> = container(Space::new())
             .width(TAB_BAR_WIDTH)
             .height(1)
             .style(move |_theme: &Theme| container::Style {
                 background: Some(muted.into()),
                 ..Default::default()
             })
-            .into()
+            .into();
+        column![vspace(TAB_GROUP_GAP / 2.0), line, vspace(TAB_GROUP_GAP / 2.0)].into()
     }
 
     /// A single row in the tab bar. The row composes (from left to right):
