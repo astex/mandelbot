@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use iced::Task;
@@ -13,98 +12,6 @@ use super::super::{terminal_size, App, Message, PendingKey};
 impl App {
     pub(in crate::ui) fn active_tab(&self) -> Option<&TerminalTab> {
         self.tabs.get(self.active_tab_id)
-    }
-
-    pub(in crate::ui) fn tab_display_order(&self) -> Vec<usize> {
-        let mut order = Vec::new();
-        if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
-            order.push(home.id);
-            self.collect_children(home.id, &mut order);
-        }
-        for tab in self.tabs.iter().filter(|t| !t.is_claude) {
-            order.push(tab.id);
-        }
-        order
-    }
-
-    pub(in crate::ui) fn tab_number_assignments(&self) -> HashMap<usize, usize> {
-        let visible = self.tab_display_order();
-        let is_visible = |id: usize| visible.contains(&id);
-
-        let mut eligible: HashSet<usize> = HashSet::new();
-
-        if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
-            if is_visible(home.id) {
-                eligible.insert(home.id);
-            }
-        }
-
-        if eligible.len() < 10 {
-            if let Some(shell_id) = visible.iter().copied().find(|&id| {
-                self.tabs.get(id).map(|t| !t.is_claude).unwrap_or(false)
-            }) {
-                eligible.insert(shell_id);
-            }
-        }
-
-        if let Some(active_tab) = self.tabs.get(self.active_tab_id) {
-            let mut cur = active_tab.parent_id;
-            while let Some(pid) = cur {
-                if eligible.len() >= 10 { break; }
-                if is_visible(pid) {
-                    eligible.insert(pid);
-                }
-                cur = self.tabs.get(pid).and_then(|t| t.parent_id);
-            }
-
-            if eligible.len() < 10 && is_visible(active_tab.id) {
-                eligible.insert(active_tab.id);
-            }
-            let active_parent = active_tab.parent_id;
-            let active_is_claude = active_tab.is_claude;
-            for t in self.tabs.iter() {
-                if eligible.len() >= 10 { break; }
-                if t.id != active_tab.id
-                    && t.parent_id == active_parent
-                    && t.is_claude == active_is_claude
-                    && is_visible(t.id)
-                {
-                    eligible.insert(t.id);
-                }
-            }
-        }
-
-        let mut claude_by_depth: Vec<(usize, usize)> = visible.iter()
-            .filter_map(|&id| {
-                self.tabs.get(id)
-                    .filter(|t| t.is_claude)
-                    .map(|t| (t.depth, id))
-            })
-            .collect();
-        claude_by_depth.sort_by_key(|&(depth, _)| depth);
-        for (_, id) in claude_by_depth {
-            if eligible.len() >= 10 { break; }
-            eligible.insert(id);
-        }
-        for &id in &visible {
-            if eligible.len() >= 10 { break; }
-            if let Some(t) = self.tabs.get(id) {
-                if !t.is_claude {
-                    eligible.insert(id);
-                }
-            }
-        }
-
-        let mut assignments = HashMap::new();
-        let mut next = 0_usize;
-        for &id in &visible {
-            if next > 9 { break; }
-            if eligible.contains(&id) {
-                assignments.insert(id, next);
-                next += 1;
-            }
-        }
-        assignments
     }
 
     pub(in crate::ui) fn handle_tab_output(
@@ -374,11 +281,12 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_navigate_sibling(&mut self, delta: i32) -> Task<Message> {
-        let order = self.tab_display_order();
+        let order = self.tabs.display_order();
         if let Some(idx) = order.iter().position(|&id| id == self.active_tab_id) {
             let new_idx = (idx as i32 + delta)
                 .rem_euclid(order.len() as i32) as usize;
-            self.focus_tab(order[new_idx]);
+            let target = order[new_idx];
+            self.focus_tab(target);
         }
         Task::none()
     }
@@ -408,7 +316,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_next_idle(&mut self) -> Task<Message> {
-        let order = self.tab_display_order();
+        let order = self.tabs.display_order();
         let cur = order.iter().position(|&id| id == self.active_tab_id).unwrap_or(0);
 
         let candidates: Vec<usize> = order.iter()
@@ -535,9 +443,6 @@ impl App {
             i += 1;
         }
 
-        for &id in &to_close {
-            self.folded_tabs.remove(&id);
-        }
         if to_close.contains(&self.active_tab_id) {
             let (root_idx, root_parent) = self.tabs.index_of(target_tab_id)
                 .and_then(|i| self.tabs.get_by_index(i).map(|t| (i, t.parent_id)))
@@ -582,8 +487,11 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_select_tab_by_index(&mut self, index: usize) -> Task<Message> {
-        let assignments = self.tab_number_assignments();
-        if let Some((&tab_id, _)) = assignments.iter().find(|&(_, &n)| n == index) {
+        let target = self.tabs.number_assignments()
+            .iter()
+            .find(|&(_, &n)| n == index)
+            .map(|(&id, _)| id);
+        if let Some(tab_id) = target {
             self.focus_tab(tab_id);
         }
         Task::none()
@@ -595,10 +503,10 @@ impl App {
         if !foldable {
             return Task::none();
         }
-        if self.folded_tabs.contains(&tab_id) {
-            self.folded_tabs.remove(&tab_id);
+        if self.tabs.is_folded(tab_id) {
+            self.tabs.unfold(tab_id);
         } else if self.has_claude_children(tab_id) {
-            self.folded_tabs.insert(tab_id);
+            self.tabs.fold(tab_id);
         }
         Task::none()
     }
