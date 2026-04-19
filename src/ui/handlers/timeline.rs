@@ -7,13 +7,14 @@ use super::super::{
 impl App {
     pub(in crate::ui) fn handle_toggle_timeline(&mut self, tab_id: usize) -> Task<Message> {
         let mut opened = false;
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.timeline_visible = !tab.timeline_visible;
             if !tab.timeline_visible {
                 tab.timeline_cursor = None;
             } else {
                 opened = true;
             }
+            self.tabs.write(tab);
         }
         if !opened {
             self.resize_tab_for_timeline(tab_id);
@@ -41,7 +42,7 @@ impl App {
         self.resize_tab_for_timeline(tab_id);
         let scroll_task = if need_ckpt {
             Task::none()
-        } else if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+        } else if let Some(tab) = self.tabs.get(tab_id) {
             crate::widget::timeline::scroll_to_cursor(
                 &self.ckpt_store,
                 tab,
@@ -64,11 +65,12 @@ impl App {
             .find(|t| t.id == tab_id)
             .and_then(|tab| crate::widget::timeline::move_cursor(&self.ckpt_store, tab, dir));
         if let Some(id) = next {
-            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            if let Some(mut tab) = self.tabs.snapshot(tab_id) {
                 tab.timeline_cursor = Some(id);
                 tab.redo_path.clear();
+                self.tabs.write(tab);
             }
-            if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+            if let Some(tab) = self.tabs.get(tab_id) {
                 return crate::widget::timeline::scroll_to_cursor(
                     &self.ckpt_store,
                     tab,
@@ -84,7 +86,7 @@ impl App {
         tab_id: usize,
         mode: TimelineMode,
     ) -> Task<Message> {
-        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+        let Some(tab) = self.tabs.get(tab_id) else {
             return Task::none();
         };
         let tip = self.ckpt_store.head_of(&tab.uuid).cloned();
@@ -109,13 +111,13 @@ impl App {
         let cw = self.config.char_width();
         let ch = self.config.char_height();
         let reserved = {
-            let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+            let Some(tab) = self.tabs.get(tab_id) else {
                 return;
             };
             crate::widget::timeline::pixel_height(&self.ckpt_store, tab, &self.config)
         };
         let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+        let Some(tab) = self.tabs.get(tab_id) else {
             return;
         };
         tab.resize(rows, cols, size.width as u16, size.height as u16);

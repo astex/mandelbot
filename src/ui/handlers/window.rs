@@ -24,8 +24,9 @@ impl App {
             };
             let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, first_run_prompt, None, None, None);
             self.focus_tab(id);
-            if let Some(tab) = self.active_tab_mut() {
+            if let Some(mut tab) = self.tabs.snapshot(self.active_tab_id) {
                 tab.title = Some("home".into());
+                self.tabs.write(tab);
             }
             return task;
         }
@@ -35,7 +36,7 @@ impl App {
         let ch = self.config.char_height();
         let store = &self.ckpt_store;
         let cfg = &self.config;
-        for tab in &mut self.tabs {
+        for tab in self.tabs.iter() {
             let reserved = crate::widget::timeline::pixel_height(store, tab, cfg);
             let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
             tab.resize(rows, cols, size.width as u16, size.height as u16);

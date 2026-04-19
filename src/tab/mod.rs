@@ -104,7 +104,10 @@ pub struct TabSpawnParams {
     pub existing_worktree: Option<PathBuf>,
 }
 
-pub struct TerminalTab {
+/// Mutable per-tab state. Cloning produces an inert data-only snapshot
+/// (no PTY ties) — safe for copy→mutate→write via `Tabs::snapshot`/`write`.
+#[derive(Clone)]
+pub struct TabMeta {
     pub id: usize,
     /// Stable per-tab UUID. Unlike the numeric `id`, this survives across
     /// mandelbot restarts when a tab's durable state is rehydrated.
@@ -146,9 +149,32 @@ pub struct TerminalTab {
     /// Stack of checkpoint ids to redo back into. Pushed on undo, popped
     /// on redo, cleared on any non-undo/non-redo activity. In-memory only.
     pub redo_path: Vec<String>,
+}
+
+impl TabMeta {
+    /// The effective PR number for this tab: the agent-set override
+    /// if present, otherwise whatever the status-line scraper saw.
+    pub fn pr_number(&self) -> Option<u32> {
+        self.pr_override.or(self.pr_scraped)
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.pending_input.is_some()
+    }
+}
+
+pub struct TerminalTab {
+    pub(crate) meta: TabMeta,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
+}
+
+impl std::ops::Deref for TerminalTab {
+    type Target = TabMeta;
+    fn deref(&self) -> &TabMeta {
+        &self.meta
+    }
 }
 
 impl TerminalTab {
@@ -164,7 +190,7 @@ impl TerminalTab {
         project_id: Option<usize>,
     ) -> Self {
         let (term, listener) = new_term(cols, rows);
-        Self {
+        let meta = TabMeta {
             id,
             uuid: uuid::Uuid::new_v4().to_string(),
             is_claude,
@@ -193,6 +219,9 @@ impl TerminalTab {
             timeline_visible: false,
             timeline_cursor: None,
             redo_path: Vec::new(),
+        };
+        Self {
+            meta,
             term: Arc::new(Mutex::new(term)),
             listener,
             event_tx: None,
@@ -216,9 +245,9 @@ impl TerminalTab {
             1,
             Some(id),
         );
-        tab.pending_input = Some(String::new());
+        tab.meta.pending_input = Some(String::new());
         // Pending tab is waiting on the user, not running claude yet.
-        tab.status = AgentStatus::Idle;
+        tab.meta.status = AgentStatus::Idle;
         tab
     }
 
@@ -227,16 +256,6 @@ impl TerminalTab {
         tx: mpsc::Sender<TabEvent>,
     ) {
         self.event_tx = Some(tx);
-    }
-
-    pub fn is_pending(&self) -> bool {
-        self.pending_input.is_some()
-    }
-
-    /// The effective PR number for this tab: the agent-set override
-    /// if present, otherwise whatever the status-line scraper saw.
-    pub fn pr_number(&self) -> Option<u32> {
-        self.pr_override.or(self.pr_scraped)
     }
 
     pub(crate) fn lock_term(

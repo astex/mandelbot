@@ -14,7 +14,8 @@ use alacritty_terminal::selection::Selection;
 
 use crate::animation::FlashState;
 use crate::config::Config;
-use crate::tab::{AgentStatus, TerminalTab};
+use crate::tab::AgentStatus;
+use crate::tabs::Tabs;
 use crate::theme::TerminalTheme;
 use crate::toast::Toast;
 use crate::widget::terminal::{self, TerminalWidget};
@@ -219,7 +220,7 @@ type ResponseWriters = Arc<Mutex<HashMap<usize, unix::UnixStream>>>;
 
 pub struct App {
     config: Config,
-    tabs: Vec<TerminalTab>,
+    tabs: Tabs,
     active_tab_id: usize,
     prev_active_tab_id: Option<usize>,
     next_tab_id: usize,
@@ -261,7 +262,7 @@ impl App {
 
         let app = Self {
             config,
-            tabs: Vec::new(),
+            tabs: Tabs::new(),
             active_tab_id: 0,
             prev_active_tab_id: None,
             next_tab_id: 0,

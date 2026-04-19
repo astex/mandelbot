@@ -9,6 +9,7 @@ use iced::{Alignment, Border, Color, Element, Fill, Font, Theme};
 use crate::animation::FlashState;
 use crate::config::Config;
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
+use crate::tabs::Tabs;
 use crate::theme::TerminalTheme;
 use crate::ui::{Message, PADDING, TAB_BAR_WIDTH, TAB_GROUP_GAP};
 
@@ -18,7 +19,7 @@ const SUFFIX_SPACING: f32 = 6.0;
 /// View-model for the tab bar: bundles the `App` refs the view reads from
 /// and hangs the render helpers off a single `self`.
 pub struct TabBar<'a, 'b> {
-    pub tabs: &'a [TerminalTab],
+    pub tabs: &'a Tabs,
     pub active_tab_id: usize,
     pub display_order: &'b [usize],
     pub number_assignments: &'b HashMap<usize, usize>,
@@ -91,13 +92,14 @@ impl<'a, 'b> TabBar<'a, 'b> {
     }
 
     fn tab_by_id(&self, id: usize) -> Option<&'a TerminalTab> {
-        self.tabs.iter().find(|t| t.id == id)
+        self.tabs.get(id)
     }
 
     fn has_claude_children(&self, parent_id: usize) -> bool {
         self.tabs
+            .children_of(Some(parent_id))
             .iter()
-            .any(|t| t.parent_id == Some(parent_id) && t.is_claude)
+            .any(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
     }
 
     /// Group separator: a 1px line with half-gap padding above and below,

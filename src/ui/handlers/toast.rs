@@ -33,7 +33,7 @@ impl App {
         let Some(target) = toast.target_tab_id else {
             return Task::none();
         };
-        if self.tabs.iter().any(|t| t.id == target) {
+        if self.tabs.contains(target) {
             self.focus_tab(target);
         }
         Task::none()
@@ -52,7 +52,7 @@ impl App {
         let Some(prompt) = toast.prompt else {
             return Task::none();
         };
-        let Some(source) = self.tabs.iter().find(|t| t.id == toast.source_tab_id) else {
+        let Some(source) = self.tabs.get(toast.source_tab_id) else {
             return Task::none();
         };
         let (rank, project_dir, parent_id) = match source.rank {
