@@ -22,6 +22,7 @@ impl App {
             self.prev_active_tab_id = Some(self.active_tab_id);
         }
         self.active_tab_id = id;
+        self.tabs.set_active(id);
     }
 
     pub(super) fn spawn_tab(
@@ -179,19 +180,6 @@ impl App {
             .find(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
     }
 
-    pub(super) fn collect_children(&self, parent_id: usize, order: &mut Vec<usize>) {
-        for &child_id in self.tabs.children_of(Some(parent_id)) {
-            let Some(tab) = self.tabs.get(child_id) else { continue };
-            if !tab.is_claude {
-                continue;
-            }
-            order.push(tab.id);
-            if !self.folded_tabs.contains(&tab.id) {
-                self.collect_children(tab.id, order);
-            }
-        }
-    }
-
     pub(super) fn has_claude_children(&self, parent_id: usize) -> bool {
         self.tabs
             .children_of(Some(parent_id))
@@ -201,7 +189,7 @@ impl App {
 
     pub(super) fn unfold_ancestors(&mut self, mut id: usize) {
         loop {
-            self.folded_tabs.remove(&id);
+            self.tabs.unfold(id);
             match self.tabs.get(id).and_then(|t| t.parent_id) {
                 Some(pid) => id = pid,
                 None => break,
@@ -249,8 +237,6 @@ impl App {
     }
 
     pub(in crate::ui) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
-        self.folded_tabs.remove(&tab_id);
-
         let Some(idx) = self.tabs.index_of(tab_id) else {
             return Task::none();
         };
