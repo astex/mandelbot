@@ -4,17 +4,13 @@ use iced::widget::{button, column, container, row, text};
 use iced::{Alignment, Border, Color, Element, Fill};
 
 use crate::config::Config;
-use crate::theme::TerminalTheme;
 use crate::toast::Toast;
 use crate::ui::Message;
 
 const PADDING: f32 = 4.0;
 
-pub fn view<'a>(
-    toast: &'a Toast,
-    terminal_theme: &TerminalTheme,
-    config: &Config,
-) -> Element<'a, Message> {
+pub fn view<'a>(toast: &'a Toast, config: &Config) -> Element<'a, Message> {
+    let terminal_theme = config.terminal_theme();
     let fg = terminal_theme.fg;
     let muted_fg = Color { a: 0.6, ..fg };
     let toast_bg = terminal_theme.bg;

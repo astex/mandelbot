@@ -2149,11 +2149,7 @@ impl App {
             tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
             let mut toast_col = column![].spacing(PADDING);
             for toast in &self.toasts {
-                toast_col = toast_col.push(crate::widget::toast::view(
-                    toast,
-                    &self.terminal_theme,
-                    &self.config,
-                ));
+                toast_col = toast_col.push(crate::widget::toast::view(toast, &self.config));
             }
             tab_col = tab_col.push(
                 container(toast_col)
