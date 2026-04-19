@@ -35,7 +35,7 @@ impl App {
         let ch = self.config.char_height();
         let store = &self.ckpt_store;
         let cfg = &self.config;
-        for tab in &mut self.tabs {
+        for tab in self.tabs.iter_mut() {
             let reserved = crate::widget::timeline::pixel_height(store, tab, cfg);
             let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
             tab.resize(rows, cols, size.width as u16, size.height as u16);

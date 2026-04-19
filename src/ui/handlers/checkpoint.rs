@@ -24,7 +24,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_undo(&mut self, tab_id: usize) -> Task<Message> {
-        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+        let Some(tab) = self.tabs.get(tab_id) else {
             return Task::none();
         };
         let tab_uuid = tab.uuid.clone();
@@ -52,7 +52,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_redo(&mut self, tab_id: usize) -> Task<Message> {
-        let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
+        let Some(tab) = self.tabs.get(tab_id) else {
             return Task::none();
         };
         let mut new_redo = tab.redo_path.clone();
@@ -70,7 +70,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
-        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(t) = self.tabs.get_mut(tab_id) {
             t.redo_path.clear();
         }
         self.kick_fork(
@@ -86,7 +86,7 @@ impl App {
         ckpt_id: String,
         prompt: Option<String>,
     ) -> Task<Message> {
-        if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(t) = self.tabs.get_mut(tab_id) {
             t.redo_path.clear();
         }
         self.kick_fork(
@@ -130,8 +130,7 @@ impl App {
         use checkpoint::TimeTravelError as E;
         let tab = self
             .tabs
-            .iter()
-            .find(|t| t.id == tab_id)
+            .get(tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
         if tab.rank == AgentRank::Home {
             return Err(E::NotSupportedForRank(tab.rank));
@@ -182,7 +181,7 @@ impl App {
             }
         };
 
-        let tab_uuid = match self.tabs.iter().find(|t| t.id == tab_id) {
+        let tab_uuid = match self.tabs.get(tab_id) {
             Some(t) => t.uuid.clone(),
             None => return Task::none(),
         };
@@ -205,7 +204,7 @@ impl App {
                 let line_count = node.jsonl_line_count;
                 self.ckpt_store.insert_node(node);
                 self.ckpt_store.set_head(&tab_uuid, new_id.clone());
-                if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                if let Some(t) = self.tabs.get_mut(tab_id) {
                     t.redo_path.clear();
                 }
                 let extra_protected: HashSet<String> = self
@@ -231,7 +230,7 @@ impl App {
             self.respond_to_tab(tab_id, response);
         }
         let scroll_task = if matches!(reason, CheckpointReason::TimelineOpen)
-            && let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id)
+            && let Some(tab) = self.tabs.get(tab_id)
         {
             crate::widget::timeline::scroll_to_cursor(
                 &self.ckpt_store,
@@ -288,8 +287,7 @@ impl App {
         use checkpoint::TimeTravelError as E;
         let tab = self
             .tabs
-            .iter()
-            .find(|t| t.id == tab_id)
+            .get(tab_id)
             .ok_or(E::UnknownTab(tab_id))?;
         let ckpt = self
             .ckpt_store
@@ -342,9 +340,8 @@ impl App {
 
         let Some((idx, rank, project_dir)) = self
             .tabs
-            .iter()
-            .enumerate()
-            .find(|(_, t)| t.id == source_tab_id)
+            .index_of(source_tab_id)
+            .and_then(|i| self.tabs.get_by_index(i).map(|t| (i, t)))
             .and_then(|(i, t)| {
                 t.project_dir.clone().map(|d| (i, t.rank, d))
             })
@@ -373,7 +370,7 @@ impl App {
             Some(idx + 1),
         );
 
-        if let Some(new_tab) = self.tabs.iter_mut().find(|t| t.id == new_tab_id) {
+        if let Some(new_tab) = self.tabs.get_mut(new_tab_id) {
             new_tab.worktree_dir = Some(outcome.wt_path.clone());
             if let Some(title) = ckpt_title {
                 new_tab.title = Some(title);

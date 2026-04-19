@@ -12,7 +12,7 @@ use super::super::{terminal_size, App, Message, PendingKey};
 
 impl App {
     pub(in crate::ui) fn active_tab(&self) -> Option<&TerminalTab> {
-        self.tabs.iter().find(|t| t.id == self.active_tab_id)
+        self.tabs.get(self.active_tab_id)
     }
 
     pub(in crate::ui) fn tab_display_order(&self) -> Vec<usize> {
@@ -41,20 +41,20 @@ impl App {
 
         if eligible.len() < 10 {
             if let Some(shell_id) = visible.iter().copied().find(|&id| {
-                self.tabs.iter().find(|t| t.id == id).map(|t| !t.is_claude).unwrap_or(false)
+                self.tabs.get(id).map(|t| !t.is_claude).unwrap_or(false)
             }) {
                 eligible.insert(shell_id);
             }
         }
 
-        if let Some(active_tab) = self.tabs.iter().find(|t| t.id == self.active_tab_id) {
+        if let Some(active_tab) = self.tabs.get(self.active_tab_id) {
             let mut cur = active_tab.parent_id;
             while let Some(pid) = cur {
                 if eligible.len() >= 10 { break; }
                 if is_visible(pid) {
                     eligible.insert(pid);
                 }
-                cur = self.tabs.iter().find(|t| t.id == pid).and_then(|t| t.parent_id);
+                cur = self.tabs.get(pid).and_then(|t| t.parent_id);
             }
 
             if eligible.len() < 10 && is_visible(active_tab.id) {
@@ -76,8 +76,7 @@ impl App {
 
         let mut claude_by_depth: Vec<(usize, usize)> = visible.iter()
             .filter_map(|&id| {
-                self.tabs.iter()
-                    .find(|t| t.id == id)
+                self.tabs.get(id)
                     .filter(|t| t.is_claude)
                     .map(|t| (t.depth, id))
             })
@@ -89,7 +88,7 @@ impl App {
         }
         for &id in &visible {
             if eligible.len() >= 10 { break; }
-            if let Some(t) = self.tabs.iter().find(|t| t.id == id) {
+            if let Some(t) = self.tabs.get(id) {
                 if !t.is_claude {
                     eligible.insert(id);
                 }
@@ -115,7 +114,7 @@ impl App {
         pr_number: Option<u32>,
     ) -> Task<Message> {
         let mut tasks: Vec<Task<Message>> = Vec::new();
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.background_tasks = bg_tasks;
             tab.pr_scraped = pr_number;
             if !tab.is_claude {
@@ -166,7 +165,7 @@ impl App {
         match exit_code {
             Some(0) | None => self.close_tab(tab_id),
             Some(_code) => {
-                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+                if let Some(tab) = self.tabs.get_mut(tab_id) {
                     tab.status = AgentStatus::Error;
                 }
                 Task::none()
@@ -175,7 +174,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_set_title(&mut self, tab_id: usize, title: String) -> Task<Message> {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.title = Some(title);
         }
         Task::none()
@@ -191,7 +190,7 @@ impl App {
         model_override: Option<String>,
         base: Option<String>,
     ) -> Task<Message> {
-        let requester = self.tabs.iter().find(|t| t.id == requesting_tab_id);
+        let requester = self.tabs.get(requesting_tab_id);
         let Some(requester) = requester else {
             self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown tab"}));
             return Task::none();
@@ -200,7 +199,7 @@ impl App {
         let (rank, project_dir, parent_id) = match requester.rank {
             AgentRank::Home => {
                 if let Some(ptid) = project_tab_id {
-                    let project = self.tabs.iter().find(|t| t.id == ptid);
+                    let project = self.tabs.get(ptid);
                     let Some(project) = project else {
                         self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown project tab"}));
                         return Task::none();
@@ -241,23 +240,21 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_set_status(&mut self, tab_id: usize, status: AgentStatus) -> Task<Message> {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.status = status;
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_set_pr(&mut self, tab_id: usize, pr: Option<u32>) -> Task<Message> {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.pr_override = pr;
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_wakeup_at(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
-        if let Some(tab) =
-            self.tabs.iter_mut().find(|t| t.id == tab_id)
-        {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.next_wakeup_at_ms = Some(epoch_ms);
         }
         let now_ms = std::time::SystemTime::now()
@@ -286,9 +283,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_wakeup_expired(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
-        if let Some(tab) =
-            self.tabs.iter_mut().find(|t| t.id == tab_id)
-        {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             if tab.next_wakeup_at_ms == Some(epoch_ms) {
                 tab.next_wakeup_at_ms = None;
             }
@@ -405,7 +400,7 @@ impl App {
 
     pub(in crate::ui) fn handle_focus_previous_tab(&mut self) -> Task<Message> {
         if let Some(prev) = self.prev_active_tab_id {
-            if self.tabs.iter().any(|t| t.id == prev) {
+            if self.tabs.contains(prev) {
                 self.focus_tab(prev);
             }
         }
@@ -424,7 +419,7 @@ impl App {
             .collect();
 
         let status_of = |id: usize| -> Option<(AgentStatus, AgentRank)> {
-            self.tabs.iter().find(|t| t.id == id).map(|t| (t.status, t.rank))
+            self.tabs.get(id).map(|t| (t.status, t.rank))
         };
 
         let target = candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::Blocked, _))))
@@ -440,7 +435,7 @@ impl App {
 
     pub(in crate::ui) fn handle_pending_input(&mut self, key: PendingKey) -> Task<Message> {
         let tab_id = self.active_tab_id;
-        let tab = self.tabs.iter_mut().find(|t| t.id == tab_id);
+        let tab = self.tabs.get_mut(tab_id);
         let Some(tab) = tab else { return Task::none() };
         let Some(input) = &mut tab.pending_input else { return Task::none() };
 
@@ -473,11 +468,11 @@ impl App {
                     return self.close_tab(tab_id);
                 }
 
-                let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
-                    return Task::none();
+                let parent_id = match self.tabs.get(tab_id) {
+                    Some(t) => t.parent_id,
+                    None => return Task::none(),
                 };
-                let parent_id = self.tabs[idx].parent_id;
-                self.tabs.remove(idx);
+                self.tabs.remove(tab_id);
 
                 let (id, task) = self.spawn_tab(
                     true,
@@ -506,7 +501,7 @@ impl App {
             let mut current = Some(target_tab_id);
             let mut found = false;
             while let Some(id) = current {
-                let tab = self.tabs.iter().find(|t| t.id == id);
+                let tab = self.tabs.get(id);
                 match tab {
                     Some(t) => {
                         if t.parent_id == Some(requesting_tab_id) {
@@ -532,7 +527,7 @@ impl App {
         let mut i = 0;
         while i < to_close.len() {
             let parent = to_close[i];
-            for tab in &self.tabs {
+            for tab in self.tabs.iter() {
                 if tab.parent_id == Some(parent) && !to_close.contains(&tab.id) {
                     to_close.push(tab.id);
                 }
@@ -544,9 +539,8 @@ impl App {
             self.folded_tabs.remove(&id);
         }
         if to_close.contains(&self.active_tab_id) {
-            let (root_idx, root_parent) = self.tabs.iter()
-                .position(|t| t.id == target_tab_id)
-                .map(|i| (i, self.tabs[i].parent_id))
+            let (root_idx, root_parent) = self.tabs.index_of(target_tab_id)
+                .and_then(|i| self.tabs.get_by_index(i).map(|t| (i, t.parent_id)))
                 .unwrap_or((0, None));
             let new_id = self
                 .pick_focus_after_close(root_parent, root_idx, &to_close)
@@ -581,7 +575,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_select_tab(&mut self, tab_id: usize) -> Task<Message> {
-        if self.tabs.iter().any(|t| t.id == tab_id) {
+        if self.tabs.contains(tab_id) {
             self.focus_tab(tab_id);
         }
         Task::none()
@@ -596,8 +590,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_toggle_fold_tab(&mut self, tab_id: usize) -> Task<Message> {
-        let foldable = self.tabs.iter()
-            .find(|t| t.id == tab_id)
+        let foldable = self.tabs.get(tab_id)
             .is_some_and(|t| t.is_claude && t.rank != AgentRank::Home);
         if !foldable {
             return Task::none();
@@ -630,7 +623,7 @@ impl App {
         response: Option<String>,
     ) -> Task<Message> {
         if let Some(response) = response {
-            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            if let Some(tab) = self.tabs.get_mut(tab_id) {
                 tab.write_input(response.as_bytes());
             }
         }
@@ -638,7 +631,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_open_pr(&mut self, tab_id: usize) -> Task<Message> {
-        if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
+        if let Some(tab) = self.tabs.get(tab_id) {
             if let (Some(pr), Some(dir)) = (tab.pr_number(), &tab.project_dir) {
                 if let Some(slug) = crate::links::github_slug_for_dir(dir) {
                     let url = format!("https://github.com/{slug}/pull/{pr}");
@@ -655,7 +648,7 @@ impl App {
         worktree_dir: Option<PathBuf>,
         session_id: Option<String>,
     ) -> Task<Message> {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.worktree_dir = worktree_dir;
             tab.session_id = session_id;
         }
@@ -663,8 +656,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_mcp_list_tabs(&mut self, requesting_tab_id: usize) -> Task<Message> {
-        let is_home = self.tabs.iter()
-            .find(|t| t.id == requesting_tab_id)
+        let is_home = self.tabs.get(requesting_tab_id)
             .is_some_and(|t| t.rank == AgentRank::Home);
 
         let mut visible: Vec<usize> = vec![requesting_tab_id];
@@ -674,7 +666,7 @@ impl App {
             let mut i = 0;
             while i < visible.len() {
                 let parent = visible[i];
-                for t in &self.tabs {
+                for t in self.tabs.iter() {
                     if t.parent_id == Some(parent) && !visible.contains(&t.id) {
                         visible.push(t.id);
                     }
