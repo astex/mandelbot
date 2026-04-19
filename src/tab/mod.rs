@@ -104,6 +104,7 @@ pub struct TabSpawnParams {
     pub existing_worktree: Option<PathBuf>,
 }
 
+#[derive(Clone)]
 pub struct TerminalTab {
     pub id: usize,
     /// Stable per-tab UUID. Unlike the numeric `id`, this survives across

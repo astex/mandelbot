@@ -10,12 +10,8 @@ use crate::tab::{AgentRank, TerminalTab};
 use super::super::{terminal_size, App, Message};
 
 impl App {
-    pub(super) fn active_tab_mut(&mut self) -> Option<&mut TerminalTab> {
-        self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
-    }
-
     pub(super) fn focus_tab(&mut self, id: usize) {
-        if let Some(pid) = self.tabs.iter().find(|t| t.id == id).and_then(|t| t.parent_id) {
+        if let Some(pid) = self.tabs.get(id).and_then(|t| t.parent_id) {
             self.unfold_ancestors(pid);
         }
         if id != self.active_tab_id {
@@ -65,7 +61,7 @@ impl App {
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let parent = parent_id.and_then(|pid| self.tabs.iter().find(|t| t.id == pid));
+        let parent = parent_id.and_then(|pid| self.tabs.get(pid));
         let depth = parent.map_or(0, |p| p.depth + 1);
         let project_id = match rank {
             AgentRank::Home => None,
@@ -98,7 +94,7 @@ impl App {
             }
         };
 
-        if let Some(tab) = self.tabs.get(inserted_idx) {
+        if let Some(tab) = self.tabs.get_by_index(inserted_idx) {
             tab.set_colors(
                 self.terminal_theme.fg,
                 self.terminal_theme.bg,
@@ -141,7 +137,7 @@ impl App {
             existing_worktree,
         };
 
-        let tab = &self.tabs[inserted_idx];
+        let tab = self.tabs.get_by_index(inserted_idx).expect("just inserted");
         let tab_task = Task::run(
             crate::tab::tab_stream(
                 params,
@@ -167,18 +163,24 @@ impl App {
     }
 
     pub(super) fn project_dir_for_tab(&self, tab_id: usize) -> Option<PathBuf> {
-        let project_id = self.tabs.iter().find(|t| t.id == tab_id)?.project_id?;
-        self.tabs.iter().find(|t| t.id == project_id)?.project_dir.clone()
+        let project_id = self.tabs.get(tab_id)?.project_id?;
+        self.tabs.get(project_id)?.project_dir.clone()
     }
 
     pub(super) fn first_child(&self, tab_id: usize) -> Option<usize> {
-        self.tabs.iter()
-            .find(|t| t.parent_id == Some(tab_id) && t.is_claude)
-            .map(|t| t.id)
+        self.tabs
+            .children_of(Some(tab_id))
+            .iter()
+            .copied()
+            .find(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
     }
 
     pub(super) fn collect_children(&self, parent_id: usize, order: &mut Vec<usize>) {
-        for tab in self.tabs.iter().filter(|t| t.parent_id == Some(parent_id) && t.is_claude) {
+        for &child_id in self.tabs.children_of(Some(parent_id)) {
+            let Some(tab) = self.tabs.get(child_id) else { continue };
+            if !tab.is_claude {
+                continue;
+            }
             order.push(tab.id);
             if !self.folded_tabs.contains(&tab.id) {
                 self.collect_children(tab.id, order);
@@ -187,13 +189,16 @@ impl App {
     }
 
     pub(super) fn has_claude_children(&self, parent_id: usize) -> bool {
-        self.tabs.iter().any(|t| t.parent_id == Some(parent_id) && t.is_claude)
+        self.tabs
+            .children_of(Some(parent_id))
+            .iter()
+            .any(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
     }
 
     pub(super) fn unfold_ancestors(&mut self, mut id: usize) {
         loop {
             self.folded_tabs.remove(&id);
-            match self.tabs.iter().find(|t| t.id == id).and_then(|t| t.parent_id) {
+            match self.tabs.get(id).and_then(|t| t.parent_id) {
                 Some(pid) => id = pid,
                 None => break,
             }
@@ -223,7 +228,7 @@ impl App {
     ) -> Option<usize> {
         let sibling_at =
             |pos: usize| -> Option<usize> {
-                self.tabs.get(pos).and_then(|t| {
+                self.tabs.get_by_index(pos).and_then(|t| {
                     (t.parent_id == closing_parent_id
                         && !closing_ids.contains(&t.id))
                     .then_some(t.id)
@@ -242,33 +247,31 @@ impl App {
     pub(in crate::ui) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         self.folded_tabs.remove(&tab_id);
 
-        let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+        let Some(idx) = self.tabs.index_of(tab_id) else {
             return Task::none();
         };
 
-        let tab_uuid = self.tabs[idx].uuid.clone();
+        let (tab_uuid, closing_parent_id, closing_depth) = {
+            let closing = self.tabs.get(tab_id).expect("just found");
+            (closing.uuid.clone(), closing.parent_id, closing.depth)
+        };
         let _ = self.ckpt_store.close_tab(&tab_uuid).persist(&self.ckpt_store);
 
-        let closing_parent_id = self.tabs[idx].parent_id;
-        let closing_depth = self.tabs[idx].depth;
-
-        let first_child_id = self.tabs.iter()
-            .find(|t| t.parent_id == Some(tab_id))
-            .map(|t| t.id);
+        let children: Vec<usize> = self.tabs.children_of(Some(tab_id)).to_vec();
+        let first_child_id = children.first().copied();
 
         if let Some(promoted_id) = first_child_id {
-            if let Some(promoted) = self.tabs.iter_mut().find(|t| t.id == promoted_id) {
-                promoted.parent_id = closing_parent_id;
+            if let Some(mut promoted) = self.tabs.snapshot(promoted_id) {
                 promoted.depth = closing_depth;
+                self.tabs.write(promoted);
             }
-            for tab in self.tabs.iter_mut() {
-                if tab.parent_id == Some(tab_id) && tab.id != promoted_id {
-                    tab.parent_id = Some(promoted_id);
-                }
+            self.tabs.reparent(promoted_id, closing_parent_id);
+            for &cid in children.iter().skip(1) {
+                self.tabs.reparent(cid, Some(promoted_id));
             }
         }
 
-        self.tabs.remove(idx);
+        self.tabs.remove(tab_id);
 
         if self.prev_active_tab_id == Some(tab_id) {
             self.prev_active_tab_id = None;
@@ -283,7 +286,7 @@ impl App {
                 .pick_focus_after_close(closing_parent_id, idx, &[tab_id])
                 .unwrap_or_else(|| {
                     let fallback = idx.min(self.tabs.len() - 1);
-                    self.tabs[fallback].id
+                    self.tabs.get_by_index(fallback).expect("non-empty").id
                 });
             self.focus_tab(new_id);
         }

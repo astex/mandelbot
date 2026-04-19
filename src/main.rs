@@ -7,6 +7,7 @@ mod links;
 mod mcp;
 mod pty;
 mod tab;
+mod tabs;
 mod theme;
 mod toast;
 mod worktree;
