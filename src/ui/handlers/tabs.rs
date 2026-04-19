@@ -114,7 +114,7 @@ impl App {
         pr_number: Option<u32>,
     ) -> Task<Message> {
         let mut tasks: Vec<Task<Message>> = Vec::new();
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.background_tasks = bg_tasks;
             tab.pr_scraped = pr_number;
             if !tab.is_claude {
@@ -122,11 +122,16 @@ impl App {
                     tab.title = Some(title);
                 }
             }
-            if tab.take_bell() {
+            let bell = tab.take_bell();
+            let stores = tab.take_clipboard_stores();
+            let loads = tab.take_clipboard_loads();
+            self.tabs.write(tab);
+
+            if bell {
                 return self.bell_flashes.trigger(tab_id);
             }
 
-            for store in tab.take_clipboard_stores() {
+            for store in stores {
                 let task = match store.clipboard_type {
                     alacritty_terminal::term::ClipboardType::Clipboard => {
                         iced::clipboard::write(store.text)
@@ -138,7 +143,7 @@ impl App {
                 tasks.push(task);
             }
 
-            for load in tab.take_clipboard_loads() {
+            for load in loads {
                 let task = match load.clipboard_type {
                     alacritty_terminal::term::ClipboardType::Clipboard => {
                         iced::clipboard::read()
@@ -165,8 +170,9 @@ impl App {
         match exit_code {
             Some(0) | None => self.close_tab(tab_id),
             Some(_code) => {
-                if let Some(tab) = self.tabs.get_mut(tab_id) {
+                if let Some(mut tab) = self.tabs.snapshot(tab_id) {
                     tab.status = AgentStatus::Error;
+                    self.tabs.write(tab);
                 }
                 Task::none()
             }
@@ -174,8 +180,9 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_set_title(&mut self, tab_id: usize, title: String) -> Task<Message> {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.title = Some(title);
+            self.tabs.write(tab);
         }
         Task::none()
     }
@@ -240,22 +247,25 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_set_status(&mut self, tab_id: usize, status: AgentStatus) -> Task<Message> {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.status = status;
+            self.tabs.write(tab);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_set_pr(&mut self, tab_id: usize, pr: Option<u32>) -> Task<Message> {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.pr_override = pr;
+            self.tabs.write(tab);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_wakeup_at(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.next_wakeup_at_ms = Some(epoch_ms);
+            self.tabs.write(tab);
         }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -283,36 +293,41 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_wakeup_expired(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             if tab.next_wakeup_at_ms == Some(epoch_ms) {
                 tab.next_wakeup_at_ms = None;
+                self.tabs.write(tab);
             }
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_pty_input(&mut self, bytes: Vec<u8>) -> Task<Message> {
-        if let Some(tab) = self.active_tab_mut() {
+        let tab_id = self.active_tab_id;
+        let transition = if let Some(tab) = self.tabs.get(tab_id) {
             tab.write_input(&bytes);
-            if tab.is_claude
-                && tab.status == AgentStatus::NeedsReview
-                && bytes == b"\r"
-            {
+            tab.is_claude && tab.status == AgentStatus::NeedsReview && bytes == b"\r"
+        } else {
+            false
+        };
+        if transition {
+            if let Some(mut tab) = self.tabs.snapshot(tab_id) {
                 tab.status = AgentStatus::Working;
+                self.tabs.write(tab);
             }
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_scroll(&mut self, delta: i32) -> Task<Message> {
-        if let Some(tab) = self.active_tab_mut() {
+        if let Some(tab) = self.active_tab() {
             tab.scroll(delta);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_scroll_to(&mut self, offset: usize) -> Task<Message> {
-        if let Some(tab) = self.active_tab_mut() {
+        if let Some(tab) = self.active_tab() {
             tab.scroll_to(offset);
         }
         Task::none()
@@ -435,17 +450,18 @@ impl App {
 
     pub(in crate::ui) fn handle_pending_input(&mut self, key: PendingKey) -> Task<Message> {
         let tab_id = self.active_tab_id;
-        let tab = self.tabs.get_mut(tab_id);
-        let Some(tab) = tab else { return Task::none() };
+        let Some(mut tab) = self.tabs.snapshot(tab_id) else { return Task::none() };
         let Some(input) = &mut tab.pending_input else { return Task::none() };
 
         match key {
             PendingKey::Char(c) => {
                 input.push(c);
+                self.tabs.write(tab);
                 Task::none()
             }
             PendingKey::Backspace => {
                 input.pop();
+                self.tabs.write(tab);
                 Task::none()
             }
             PendingKey::Cancel => {
@@ -604,14 +620,14 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_set_selection(&mut self, sel: Option<Selection>) -> Task<Message> {
-        if let Some(tab) = self.active_tab_mut() {
+        if let Some(tab) = self.active_tab() {
             tab.set_selection(sel);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_update_selection(&mut self, point: GridPoint, side: Side) -> Task<Message> {
-        if let Some(tab) = self.active_tab_mut() {
+        if let Some(tab) = self.active_tab() {
             tab.update_selection(point, side);
         }
         Task::none()
@@ -623,7 +639,7 @@ impl App {
         response: Option<String>,
     ) -> Task<Message> {
         if let Some(response) = response {
-            if let Some(tab) = self.tabs.get_mut(tab_id) {
+            if let Some(tab) = self.tabs.get(tab_id) {
                 tab.write_input(response.as_bytes());
             }
         }
@@ -648,9 +664,10 @@ impl App {
         worktree_dir: Option<PathBuf>,
         session_id: Option<String>,
     ) -> Task<Message> {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.worktree_dir = worktree_dir;
             tab.session_id = session_id;
+            self.tabs.write(tab);
         }
         Task::none()
     }

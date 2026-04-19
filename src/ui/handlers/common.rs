@@ -10,10 +10,6 @@ use crate::tab::{AgentRank, TerminalTab};
 use super::super::{terminal_size, App, Message};
 
 impl App {
-    pub(super) fn active_tab_mut(&mut self) -> Option<&mut TerminalTab> {
-        self.tabs.get_mut(self.active_tab_id)
-    }
-
     pub(super) fn focus_tab(&mut self, id: usize) {
         if let Some(pid) = self.tabs.get(id).and_then(|t| t.parent_id) {
             self.unfold_ancestors(pid);
@@ -265,8 +261,9 @@ impl App {
         let first_child_id = children.first().copied();
 
         if let Some(promoted_id) = first_child_id {
-            if let Some(promoted) = self.tabs.get_mut(promoted_id) {
+            if let Some(mut promoted) = self.tabs.snapshot(promoted_id) {
                 promoted.depth = closing_depth;
+                self.tabs.write(promoted);
             }
             self.tabs.reparent(promoted_id, closing_parent_id);
             for &cid in children.iter().skip(1) {

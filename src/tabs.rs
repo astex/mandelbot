@@ -47,9 +47,21 @@ impl Tabs {
         self.by_id.get(&id).map(|&i| &self.tabs[i])
     }
 
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut TerminalTab> {
-        let i = *self.by_id.get(&id)?;
-        Some(&mut self.tabs[i])
+    /// Clone the tab with `id`. Combined with [`write`] this is the
+    /// copy→mutate→write pattern: take an owned snapshot, mutate it,
+    /// then `write` it back — the write unconditionally rebuilds the
+    /// indexes, so `by_id` and `children` stay consistent even if the
+    /// caller changed `parent_id`.
+    pub fn snapshot(&self, id: usize) -> Option<TerminalTab> {
+        self.get(id).cloned()
+    }
+
+    /// Replace the existing tab with the same `id`. Rebuilds indexes.
+    /// Silently no-ops if no tab with that id exists.
+    pub fn write(&mut self, tab: TerminalTab) {
+        let Some(&idx) = self.by_id.get(&tab.id) else { return };
+        self.tabs[idx] = tab;
+        self.rebuild();
     }
 
     pub fn index_of(&self, id: usize) -> Option<usize> {
@@ -62,10 +74,6 @@ impl Tabs {
 
     pub fn iter(&self) -> std::slice::Iter<'_, TerminalTab> {
         self.tabs.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, TerminalTab> {
-        self.tabs.iter_mut()
     }
 
     /// Child ids of `parent_id` in vec order. Root tabs are keyed under `None`.

@@ -70,8 +70,9 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
-        if let Some(t) = self.tabs.get_mut(tab_id) {
+        if let Some(mut t) = self.tabs.snapshot(tab_id) {
             t.redo_path.clear();
+            self.tabs.write(t);
         }
         self.kick_fork(
             tab_id,
@@ -86,8 +87,9 @@ impl App {
         ckpt_id: String,
         prompt: Option<String>,
     ) -> Task<Message> {
-        if let Some(t) = self.tabs.get_mut(tab_id) {
+        if let Some(mut t) = self.tabs.snapshot(tab_id) {
             t.redo_path.clear();
+            self.tabs.write(t);
         }
         self.kick_fork(
             tab_id,
@@ -204,8 +206,9 @@ impl App {
                 let line_count = node.jsonl_line_count;
                 self.ckpt_store.insert_node(node);
                 self.ckpt_store.set_head(&tab_uuid, new_id.clone());
-                if let Some(t) = self.tabs.get_mut(tab_id) {
+                if let Some(mut t) = self.tabs.snapshot(tab_id) {
                     t.redo_path.clear();
+                    self.tabs.write(t);
                 }
                 let extra_protected: HashSet<String> = self
                     .tabs
@@ -370,13 +373,14 @@ impl App {
             Some(idx + 1),
         );
 
-        if let Some(new_tab) = self.tabs.get_mut(new_tab_id) {
+        if let Some(mut new_tab) = self.tabs.snapshot(new_tab_id) {
             new_tab.worktree_dir = Some(outcome.wt_path.clone());
             if let Some(title) = ckpt_title {
                 new_tab.title = Some(title);
             }
             new_tab.redo_path = new_redo;
             let new_tab_uuid = new_tab.uuid.clone();
+            self.tabs.write(new_tab);
             self.ckpt_store
                 .set_head(&new_tab_uuid, outcome.ckpt_id.clone());
         }
