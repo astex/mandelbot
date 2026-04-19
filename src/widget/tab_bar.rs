@@ -15,9 +15,9 @@ use crate::ui::{Message, PADDING, TAB_BAR_WIDTH, TAB_GROUP_GAP};
 const INDENT_STEP: f32 = 20.0;
 const SUFFIX_SPACING: f32 = 6.0;
 
-/// Bundle of refs the tab bar reads off of `App`. Grouping these keeps the
-/// public `view` signature small and lets helpers hang off a single `self`.
-pub struct TabBarProps<'a, 'b> {
+/// View-model for the tab bar: bundles the `App` refs the view reads from
+/// and hangs the render helpers off a single `self`.
+pub struct TabBar<'a, 'b> {
     pub tabs: &'a [TerminalTab],
     pub active_tab_id: usize,
     pub display_order: &'b [usize],
@@ -28,82 +28,72 @@ pub struct TabBarProps<'a, 'b> {
     pub config: &'a Config,
 }
 
-pub fn view<'a, 'b>(
-    props: TabBarProps<'a, 'b>,
-    toast_elements: Vec<Element<'a, Message>>,
-) -> Element<'a, Message> {
-    let inactive_bg = props.terminal_theme.black;
+impl<'a, 'b> TabBar<'a, 'b> {
+    pub fn view(self, toast_elements: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+        let inactive_bg = self.terminal_theme.black;
+        let has_agents = self.tabs.iter().any(|t| t.is_claude);
+        let show_separators = self.tabs.len() > 1;
 
-    let has_agents = props.tabs.iter().any(|t| t.is_claude);
-    let show_separators = props.tabs.len() > 1;
+        let mut tab_col = column![];
+        tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
 
-    let mut tab_col = column![];
-    tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
-
-    // Agent tree: Home → Projects → Tasks.
-    for &tab_id in props.display_order.iter() {
-        let Some(tab) = props.tab_by_id(tab_id) else { continue };
-        if !tab.is_claude {
-            continue;
-        }
-        if show_separators && tab.rank == AgentRank::Project {
-            tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
-            tab_col = tab_col.push(props.separator());
-            tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
-        }
-        let indent = tab.depth as f32 * INDENT_STEP;
-        let num = props.number_assignments.get(&tab.id).copied();
-        tab_col = tab_col.push(props.tab_button(tab, num, indent));
-    }
-
-    // Shell tabs, flat.
-    let mut first_shell = true;
-    for &tab_id in props.display_order.iter() {
-        let Some(tab) = props.tab_by_id(tab_id) else { continue };
-        if tab.is_claude {
-            continue;
-        }
-        if first_shell {
-            first_shell = false;
-            if show_separators {
-                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
-                tab_col = tab_col.push(props.separator());
-                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
-            } else if has_agents {
-                tab_col = tab_col.push(vspace(TAB_GROUP_GAP));
+        // Agent tree: Home → Projects → Tasks.
+        for &tab_id in self.display_order.iter() {
+            let Some(tab) = self.tab_by_id(tab_id) else { continue };
+            if !tab.is_claude {
+                continue;
             }
+            if show_separators && tab.rank == AgentRank::Project {
+                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+                tab_col = tab_col.push(self.separator());
+                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+            }
+            let indent = tab.depth as f32 * INDENT_STEP;
+            let num = self.number_assignments.get(&tab.id).copied();
+            tab_col = tab_col.push(self.tab_button(tab, num, indent));
         }
-        let num = props.number_assignments.get(&tab.id).copied();
-        tab_col = tab_col.push(props.tab_button(tab, num, 0.0));
+
+        // Shell tabs, flat.
+        let mut first_shell = true;
+        for &tab_id in self.display_order.iter() {
+            let Some(tab) = self.tab_by_id(tab_id) else { continue };
+            if tab.is_claude {
+                continue;
+            }
+            if first_shell {
+                first_shell = false;
+                if show_separators {
+                    tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+                    tab_col = tab_col.push(self.separator());
+                    tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+                } else if has_agents {
+                    tab_col = tab_col.push(vspace(TAB_GROUP_GAP));
+                }
+            }
+            let num = self.number_assignments.get(&tab.id).copied();
+            tab_col = tab_col.push(self.tab_button(tab, num, 0.0));
+        }
+
+        // Toasts anchored to the bottom.
+        if !toast_elements.is_empty() {
+            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
+            let mut toast_col = column![].spacing(PADDING);
+            for t in toast_elements {
+                toast_col = toast_col.push(t);
+            }
+            tab_col = tab_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
+        }
+
+        container(tab_col.height(Fill))
+            .width(TAB_BAR_WIDTH)
+            .height(Fill)
+            .style(move |_theme| container::Style {
+                background: Some(inactive_bg.into()),
+                ..Default::default()
+            })
+            .into()
     }
 
-    // Toasts anchored to the bottom.
-    if !toast_elements.is_empty() {
-        tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
-        let mut toast_col = column![].spacing(PADDING);
-        for t in toast_elements {
-            toast_col = toast_col.push(t);
-        }
-        tab_col = tab_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
-    }
-
-    let tab_col = tab_col.height(Fill);
-
-    container(tab_col)
-        .width(TAB_BAR_WIDTH)
-        .height(Fill)
-        .style(move |_theme| container::Style {
-            background: Some(inactive_bg.into()),
-            ..Default::default()
-        })
-        .into()
-}
-
-fn vspace(h: f32) -> Element<'static, Message> {
-    Space::new().width(TAB_BAR_WIDTH).height(h).into()
-}
-
-impl<'a, 'b> TabBarProps<'a, 'b> {
     fn tab_by_id(&self, id: usize) -> Option<&'a TerminalTab> {
         self.tabs.iter().find(|t| t.id == id)
     }
@@ -315,6 +305,10 @@ impl<'a, 'b> TabBarProps<'a, 'b> {
 
         suffix
     }
+}
+
+fn vspace(h: f32) -> Element<'static, Message> {
+    Space::new().width(TAB_BAR_WIDTH).height(h).into()
 }
 
 fn has_pending_wakeup(tab: &TerminalTab) -> bool {

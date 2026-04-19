@@ -1917,19 +1917,17 @@ impl App {
             .map(|t| crate::widget::toast::view(t, &self.config))
             .collect();
 
-        let tab_bar = crate::widget::tab_bar::view(
-            crate::widget::tab_bar::TabBarProps {
-                tabs: &self.tabs,
-                active_tab_id: self.active_tab_id,
-                display_order: &display_order,
-                number_assignments: &number_assignments,
-                bell_flashes: &self.bell_flashes,
-                folded_tabs: &self.folded_tabs,
-                terminal_theme: &self.terminal_theme,
-                config: &self.config,
-            },
-            toast_elements,
-        );
+        let tab_bar = crate::widget::tab_bar::TabBar {
+            tabs: &self.tabs,
+            active_tab_id: self.active_tab_id,
+            display_order: &display_order,
+            number_assignments: &number_assignments,
+            bell_flashes: &self.bell_flashes,
+            folded_tabs: &self.folded_tabs,
+            terminal_theme: &self.terminal_theme,
+            config: &self.config,
+        }
+        .view(toast_elements);
 
         let (term_element, timeline_element): (Element<'_, Message>, Option<Element<'_, Message>>) =
             if let Some(tab) = self.active_tab() {
