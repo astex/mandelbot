@@ -1906,84 +1906,6 @@ impl App {
         Task::batch([spawn_task, save_task, close_task])
     }
 
-    fn toast_view(&self, toast: &Toast) -> Element<'_, Message> {
-        let fg = self.terminal_theme.fg;
-        let muted_fg = Color { a: 0.6, ..fg };
-        let toast_bg = self.terminal_theme.bg;
-        let ui_font = self.config.font();
-
-        let message_text = text(toast.message.clone())
-            .size(self.config.font_size)
-            .font(ui_font)
-            .color(fg);
-
-        let close_btn = button(
-            text("×")
-                .size(self.config.font_size)
-                .font(ui_font)
-                .color(muted_fg),
-        )
-            .on_press(Message::DismissToast(toast.id))
-            .padding([0, 4])
-            .style(move |_theme, _status| button::Style {
-                background: None,
-                border: Border::default(),
-                ..Default::default()
-            });
-
-        let header = row![
-            container(message_text).width(Fill).clip(true),
-            close_btn,
-        ]
-            .align_y(Alignment::Start)
-            .spacing(PADDING);
-
-        let mut col = column![header].spacing(PADDING);
-
-        let action: Option<(&'static str, Message)> = if toast.target_tab_id.is_some() {
-            Some(("Go to", Message::FocusFromToast(toast.id)))
-        } else if toast.prompt.is_some() {
-            Some(("Open", Message::SpawnFromToast(toast.id)))
-        } else {
-            None
-        };
-
-        if let Some((label, on_press)) = action {
-            let open_label = text(label)
-                .size(self.config.font_size)
-                .font(ui_font)
-                .color(fg);
-            let open_btn = button(open_label)
-                .on_press(on_press)
-                .padding([2, 8])
-                .style(move |_theme, _status| button::Style {
-                    background: Some(Color { a: 0.15, ..fg }.into()),
-                    text_color: fg,
-                    border: Border {
-                        color: Color { a: 0.3, ..fg },
-                        width: 1.0,
-                        radius: 3.0.into(),
-                    },
-                    ..Default::default()
-                });
-            col = col.push(row![open_btn]);
-        }
-
-        container(col)
-            .padding(8)
-            .width(Fill)
-            .style(move |_theme| container::Style {
-                background: Some(toast_bg.into()),
-                border: Border {
-                    color: Color { a: 0.3, ..fg },
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..Default::default()
-            })
-            .into()
-    }
-
     pub fn view(&self) -> Element<'_, Message> {
         let active_bg = self.terminal_theme.bg;
         let inactive_bg = self.terminal_theme.black;
@@ -2227,7 +2149,7 @@ impl App {
             tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
             let mut toast_col = column![].spacing(PADDING);
             for toast in &self.toasts {
-                toast_col = toast_col.push(self.toast_view(toast));
+                toast_col = toast_col.push(crate::widget::toast::view(toast, &self.config));
             }
             tab_col = tab_col.push(
                 container(toast_col)
