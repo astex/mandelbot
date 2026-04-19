@@ -114,3 +114,90 @@ impl Default for Tabs {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tab::{AgentRank, TerminalTab};
+
+    fn tab(id: usize, parent_id: Option<usize>) -> TerminalTab {
+        TerminalTab::new(id, 24, 80, true, AgentRank::Task, None, parent_id, 0, None)
+    }
+
+    #[test]
+    fn push_builds_indexes() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(10, None));
+        tabs.push(tab(20, Some(10)));
+        tabs.push(tab(30, Some(10)));
+
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs.get(10).map(|t| t.id), Some(10));
+        assert_eq!(tabs.get(20).unwrap().parent_id, Some(10));
+        assert!(tabs.get(999).is_none());
+        assert_eq!(tabs.index_of(30), Some(2));
+        assert_eq!(tabs.children_of(None), &[10]);
+        assert_eq!(tabs.children_of(Some(10)), &[20, 30]);
+    }
+
+    #[test]
+    fn insert_preserves_order_in_children_of() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(4, Some(1)));
+        // Insert child 3 between 2 and 4 in vec order.
+        tabs.insert(2, tab(3, Some(1)));
+
+        assert_eq!(tabs.children_of(Some(1)), &[2, 3, 4]);
+        assert_eq!(tabs.index_of(3), Some(2));
+        assert_eq!(tabs.index_of(4), Some(3));
+    }
+
+    #[test]
+    fn remove_clears_from_indexes_and_shifts() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+
+        let removed = tabs.remove(2).map(|t| t.id);
+        assert_eq!(removed, Some(2));
+        assert!(!tabs.contains(2));
+        assert_eq!(tabs.index_of(3), Some(1));
+        assert_eq!(tabs.children_of(Some(1)), &[3]);
+    }
+
+    #[test]
+    fn reparent_updates_children_map() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, None));
+        tabs.push(tab(3, Some(1)));
+
+        tabs.reparent(3, Some(2));
+        assert_eq!(tabs.get(3).unwrap().parent_id, Some(2));
+        assert_eq!(tabs.children_of(Some(1)), &[] as &[usize]);
+        assert_eq!(tabs.children_of(Some(2)), &[3]);
+    }
+
+    #[test]
+    fn retain_rebuilds_indexes() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+
+        tabs.retain(|t| t.id != 2);
+        assert!(!tabs.contains(2));
+        assert_eq!(tabs.children_of(Some(1)), &[3]);
+        assert_eq!(tabs.index_of(3), Some(1));
+    }
+
+    #[test]
+    fn children_of_unknown_parent_is_empty() {
+        let tabs = Tabs::new();
+        assert_eq!(tabs.children_of(Some(42)), &[] as &[usize]);
+        assert_eq!(tabs.children_of(None), &[] as &[usize]);
+    }
+}
