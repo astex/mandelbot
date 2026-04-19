@@ -1918,14 +1918,16 @@ impl App {
             .collect();
 
         let tab_bar = crate::widget::tab_bar::view(
-            &self.tabs,
-            self.active_tab_id,
-            &display_order,
-            &number_assignments,
-            &self.bell_flashes,
-            &self.folded_tabs,
-            &self.terminal_theme,
-            &self.config,
+            crate::widget::tab_bar::TabBarProps {
+                tabs: &self.tabs,
+                active_tab_id: self.active_tab_id,
+                display_order: &display_order,
+                number_assignments: &number_assignments,
+                bell_flashes: &self.bell_flashes,
+                folded_tabs: &self.folded_tabs,
+                terminal_theme: &self.terminal_theme,
+                config: &self.config,
+            },
             toast_elements,
         );
 

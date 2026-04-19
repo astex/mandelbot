@@ -12,254 +12,79 @@ use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::ui::{Message, PADDING, TAB_BAR_WIDTH, TAB_GROUP_GAP};
 
-pub fn view<'a>(
-    tabs: &'a [TerminalTab],
-    active_tab_id: usize,
-    display_order: &[usize],
-    number_assignments: &HashMap<usize, usize>,
-    bell_flashes: &'a FlashState,
-    folded_tabs: &'a HashSet<usize>,
-    terminal_theme: &'a TerminalTheme,
-    config: &'a Config,
+const INDENT_STEP: f32 = 20.0;
+const SUFFIX_SPACING: f32 = 6.0;
+
+/// Bundle of refs the tab bar reads off of `App`. Grouping these keeps the
+/// public `view` signature small and lets helpers hang off a single `self`.
+pub struct TabBarProps<'a, 'b> {
+    pub tabs: &'a [TerminalTab],
+    pub active_tab_id: usize,
+    pub display_order: &'b [usize],
+    pub number_assignments: &'b HashMap<usize, usize>,
+    pub bell_flashes: &'a FlashState,
+    pub folded_tabs: &'a HashSet<usize>,
+    pub terminal_theme: &'a TerminalTheme,
+    pub config: &'a Config,
+}
+
+pub fn view<'a, 'b>(
+    props: TabBarProps<'a, 'b>,
     toast_elements: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
-    let active_bg = terminal_theme.bg;
-    let inactive_bg = terminal_theme.black;
-    let fg = terminal_theme.fg;
+    let inactive_bg = props.terminal_theme.black;
 
-    let has_claude_children = |parent_id: usize| -> bool {
-        tabs.iter().any(|t| t.parent_id == Some(parent_id) && t.is_claude)
-    };
-
-    let tab_button = |tab: &TerminalTab, display_number: Option<usize>, indent: f32| {
-        let is_active = tab.id == active_tab_id;
-        let tab_id = tab.id;
-        let is_foldable = tab.is_claude && tab.rank != AgentRank::Home;
-        let has_children = is_foldable && has_claude_children(tab_id);
-        let is_folded = folded_tabs.contains(&tab_id);
-
-        let base_bg = if is_active { active_bg } else { inactive_bg };
-        let bg = bell_flashes.blend(tab_id, base_bg, terminal_theme.yellow);
-
-        let cw = config.char_width();
-        let avail = TAB_BAR_WIDTH - indent - PADDING * 2.0 - cw * 3.0;
-        let max_label_chars = (avail / cw) as usize;
-
-        let label_text: String = if tab.is_pending() {
-            "new project...".into()
-        } else if let Some(title) = &tab.title {
-            if !tab.is_claude {
-                format_shell_title(title, max_label_chars)
-            } else {
-                title.clone()
-            }
-        } else if tab.rank == AgentRank::Project {
-            if let Some(dir) = &tab.project_dir {
-                dir.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| dir.to_string_lossy().into_owned())
-            } else {
-                String::new()
-            }
-        } else if !tab.is_claude {
-            "shell".into()
-        } else {
-            String::new()
-        };
-
-        let number_text = match display_number {
-            Some(n) => format!("{n}"),
-            None => " ".into(),
-        };
-
-        let label_len = label_text.len();
-        let label = text(label_text)
-            .size(config.font_size)
-            .font(Font::MONOSPACE)
-            .color(fg);
-        let number = text(number_text)
-            .size(config.font_size)
-            .font(Font::MONOSPACE)
-            .color(fg);
-
-        let label = container(label).width(Fill).clip(true);
-
-        let toggle_slot_width = config.char_width() + 8.0;
-        let toggle: Element<'_, Message> = if has_children {
-            let icon = if is_folded { "+" } else { "-" };
-            let icon_text = text(icon)
-                .size(config.font_size)
-                .font(Font::MONOSPACE)
-                .color(fg);
-            let icon_container = container(icon_text)
-                .width(toggle_slot_width)
-                .align_x(Alignment::Center);
-            mouse_area(icon_container)
-                .on_press(Message::ToggleFoldTab(tab_id))
-                .into()
-        } else if is_foldable {
-            Space::new().width(toggle_slot_width).into()
-        } else {
-            Space::new().width(0).into()
-        };
-
-        const SUFFIX_SPACING: f32 = 6.0;
-        let mut suffix = row![]
-            .align_y(Alignment::Center)
-            .spacing(SUFFIX_SPACING);
-        if label_len + 2 >= max_label_chars {
-            let muted_fg = Color { a: 0.4, ..fg };
-            suffix = suffix.push(
-                text("|")
-                    .size(config.font_size)
-                    .font(Font::MONOSPACE)
-                    .color(muted_fg),
-            );
-        }
-
-        if tab.is_claude && tab.pr_number().is_some() {
-            let muted_fg = Color { a: 0.7, ..fg };
-            let pr_icon = text("⎇")
-                .size(config.font_size)
-                .font(Font::MONOSPACE)
-                .color(muted_fg);
-            let pr_btn = button(pr_icon)
-                .on_press(Message::OpenPr(tab_id))
-                .padding(0)
-                .style(move |_theme, _status| button::Style {
-                    background: Some(bg.into()),
-                    border: Border::default(),
-                    ..Default::default()
-                });
-            suffix = suffix.push(pr_btn);
-        }
-        if tab.is_claude && tab.background_tasks > 0 {
-            let bg_label = format!("+{}", tab.background_tasks);
-            suffix = suffix.push(
-                text(bg_label)
-                    .size(config.font_size * 0.75)
-                    .font(Font::MONOSPACE)
-                    .color(terminal_theme.cyan),
-            );
-        }
-        if tab.is_claude {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let has_pending_wakeup = matches!(
-                tab.next_wakeup_at_ms,
-                Some(t) if t > now_ms,
-            );
-            if has_pending_wakeup {
-                suffix = suffix.push(
-                    text("⏱")
-                        .size(config.font_size * 0.75)
-                        .color(terminal_theme.cyan),
-                );
-            }
-        }
-        {
-            let dot_size = config.font_size * 0.6;
-            let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
-            let dot_color = status_dot_color(tab.status, fg);
-            suffix = suffix.push(text(dot_char).size(dot_size).color(dot_color));
-        }
-        let suffix = suffix.push(number);
-
-        let toggle_gap = if is_foldable { PADDING } else { 0.0 };
-        let content = row![
-            Space::new().width(PADDING),
-            toggle,
-            Space::new().width(toggle_gap),
-            label,
-            suffix,
-            Space::new().width(PADDING),
-        ]
-            .align_y(Alignment::Center);
-
-        let styled = container(content)
-            .width(TAB_BAR_WIDTH - indent)
-            .padding([5, 10])
-            .style(move |_theme: &Theme| container::Style {
-                background: Some(bg.into()),
-                border: Border::default(),
-                ..Default::default()
-            });
-
-        let tab_elem: Element<'_, Message> = mouse_area(styled)
-            .on_press(Message::SelectTab(tab_id))
-            .into();
-
-        if indent > 0.0 {
-            row![Space::new().width(indent), tab_elem].width(TAB_BAR_WIDTH).into()
-        } else {
-            tab_elem
-        }
-    };
-
-    let has_agents = tabs.iter().any(|t| t.is_claude);
-    let show_separators = tabs.len() > 1;
-
-    let separator = || -> Element<'_, Message> {
-        let muted = Color { a: 0.25, ..fg };
-        container(Space::new())
-            .width(TAB_BAR_WIDTH)
-            .height(1)
-            .style(move |_theme: &Theme| container::Style {
-                background: Some(muted.into()),
-                ..Default::default()
-            })
-            .into()
-    };
-
-    let indent_step = 20.0_f32;
+    let has_agents = props.tabs.iter().any(|t| t.is_claude);
+    let show_separators = props.tabs.len() > 1;
 
     let mut tab_col = column![];
-    tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+    tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
 
-    for &tab_id in display_order.iter() {
-        let Some(tab) = tabs.iter().find(|t| t.id == tab_id) else { continue };
-        if !tab.is_claude { continue; }
-        if show_separators && tab.rank == AgentRank::Project {
-            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
-            tab_col = tab_col.push(separator());
-            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+    // Agent tree: Home → Projects → Tasks.
+    for &tab_id in props.display_order.iter() {
+        let Some(tab) = props.tab_by_id(tab_id) else { continue };
+        if !tab.is_claude {
+            continue;
         }
-        let indent = tab.depth as f32 * indent_step;
-        let num = number_assignments.get(&tab.id).copied();
-        tab_col = tab_col.push(tab_button(tab, num, indent));
+        if show_separators && tab.rank == AgentRank::Project {
+            tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+            tab_col = tab_col.push(props.separator());
+            tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+        }
+        let indent = tab.depth as f32 * INDENT_STEP;
+        let num = props.number_assignments.get(&tab.id).copied();
+        tab_col = tab_col.push(props.tab_button(tab, num, indent));
     }
 
+    // Shell tabs, flat.
     let mut first_shell = true;
-    for &tab_id in display_order.iter() {
-        let Some(tab) = tabs.iter().find(|t| t.id == tab_id) else { continue };
-        if tab.is_claude { continue; }
+    for &tab_id in props.display_order.iter() {
+        let Some(tab) = props.tab_by_id(tab_id) else { continue };
+        if tab.is_claude {
+            continue;
+        }
         if first_shell {
             first_shell = false;
             if show_separators {
-                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
-                tab_col = tab_col.push(separator());
-                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP / 2.0));
+                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+                tab_col = tab_col.push(props.separator());
+                tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
             } else if has_agents {
-                tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(TAB_GROUP_GAP));
+                tab_col = tab_col.push(vspace(TAB_GROUP_GAP));
             }
         }
-        let num = number_assignments.get(&tab.id).copied();
-        tab_col = tab_col.push(tab_button(tab, num, 0.0));
+        let num = props.number_assignments.get(&tab.id).copied();
+        tab_col = tab_col.push(props.tab_button(tab, num, 0.0));
     }
 
+    // Toasts anchored to the bottom.
     if !toast_elements.is_empty() {
         tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
         let mut toast_col = column![].spacing(PADDING);
         for t in toast_elements {
             toast_col = toast_col.push(t);
         }
-        tab_col = tab_col.push(
-            container(toast_col)
-                .width(TAB_BAR_WIDTH)
-                .padding(PADDING),
-        );
+        tab_col = tab_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
     }
 
     let tab_col = tab_col.height(Fill);
@@ -272,6 +97,232 @@ pub fn view<'a>(
             ..Default::default()
         })
         .into()
+}
+
+fn vspace(h: f32) -> Element<'static, Message> {
+    Space::new().width(TAB_BAR_WIDTH).height(h).into()
+}
+
+impl<'a, 'b> TabBarProps<'a, 'b> {
+    fn tab_by_id(&self, id: usize) -> Option<&'a TerminalTab> {
+        self.tabs.iter().find(|t| t.id == id)
+    }
+
+    fn has_claude_children(&self, parent_id: usize) -> bool {
+        self.tabs
+            .iter()
+            .any(|t| t.parent_id == Some(parent_id) && t.is_claude)
+    }
+
+    fn separator(&self) -> Element<'a, Message> {
+        let muted = Color { a: 0.25, ..self.terminal_theme.fg };
+        container(Space::new())
+            .width(TAB_BAR_WIDTH)
+            .height(1)
+            .style(move |_theme: &Theme| container::Style {
+                background: Some(muted.into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    /// A single row in the tab bar. The row composes (from left to right):
+    /// indent spacer, fold toggle slot, label, suffix chips, trailing pad.
+    fn tab_button(
+        &self,
+        tab: &'a TerminalTab,
+        display_number: Option<usize>,
+        indent: f32,
+    ) -> Element<'a, Message> {
+        let fg = self.terminal_theme.fg;
+        let is_active = tab.id == self.active_tab_id;
+        let is_foldable = tab.is_claude && tab.rank != AgentRank::Home;
+        let has_children = is_foldable && self.has_claude_children(tab.id);
+        let is_folded = self.folded_tabs.contains(&tab.id);
+
+        let base_bg = if is_active { self.terminal_theme.bg } else { self.terminal_theme.black };
+        let bg = self.bell_flashes.blend(tab.id, base_bg, self.terminal_theme.yellow);
+
+        let max_label_chars = self.max_label_chars(indent);
+        let label_str = self.label_text(tab, max_label_chars);
+        let label_len = label_str.len();
+        let label = container(
+            text(label_str)
+                .size(self.config.font_size)
+                .font(Font::MONOSPACE)
+                .color(fg),
+        )
+        .width(Fill)
+        .clip(true);
+
+        let toggle = self.toggle_element(tab.id, is_foldable, has_children, is_folded);
+        let suffix = self.suffix_row(tab, display_number, bg, label_len >= max_label_chars.saturating_sub(2));
+
+        let toggle_gap = if is_foldable { PADDING } else { 0.0 };
+        let content = row![
+            Space::new().width(PADDING),
+            toggle,
+            Space::new().width(toggle_gap),
+            label,
+            suffix,
+            Space::new().width(PADDING),
+        ]
+        .align_y(Alignment::Center);
+
+        let styled = container(content)
+            .width(TAB_BAR_WIDTH - indent)
+            .padding([5, 10])
+            .style(move |_theme: &Theme| container::Style {
+                background: Some(bg.into()),
+                border: Border::default(),
+                ..Default::default()
+            });
+
+        let tab_elem: Element<'a, Message> = mouse_area(styled)
+            .on_press(Message::SelectTab(tab.id))
+            .into();
+
+        if indent > 0.0 {
+            row![Space::new().width(indent), tab_elem]
+                .width(TAB_BAR_WIDTH)
+                .into()
+        } else {
+            tab_elem
+        }
+    }
+
+    fn max_label_chars(&self, indent: f32) -> usize {
+        let cw = self.config.char_width();
+        let avail = TAB_BAR_WIDTH - indent - PADDING * 2.0 - cw * 3.0;
+        (avail / cw) as usize
+    }
+
+    fn label_text(&self, tab: &TerminalTab, max_chars: usize) -> String {
+        if tab.is_pending() {
+            return "new project...".into();
+        }
+        if let Some(title) = &tab.title {
+            return if tab.is_claude {
+                title.clone()
+            } else {
+                format_shell_title(title, max_chars)
+            };
+        }
+        if tab.rank == AgentRank::Project {
+            if let Some(dir) = &tab.project_dir {
+                return dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+            }
+            return String::new();
+        }
+        if !tab.is_claude {
+            return "shell".into();
+        }
+        String::new()
+    }
+
+    fn toggle_element(
+        &self,
+        tab_id: usize,
+        is_foldable: bool,
+        has_children: bool,
+        is_folded: bool,
+    ) -> Element<'a, Message> {
+        let fg = self.terminal_theme.fg;
+        let slot_w = self.config.char_width() + 8.0;
+        if has_children {
+            let icon = if is_folded { "+" } else { "-" };
+            let icon_text = text(icon)
+                .size(self.config.font_size)
+                .font(Font::MONOSPACE)
+                .color(fg);
+            let icon_container = container(icon_text).width(slot_w).align_x(Alignment::Center);
+            mouse_area(icon_container)
+                .on_press(Message::ToggleFoldTab(tab_id))
+                .into()
+        } else if is_foldable {
+            Space::new().width(slot_w).into()
+        } else {
+            Space::new().width(0).into()
+        }
+    }
+
+    /// Right-aligned chips: overflow bar, PR icon, background-task count,
+    /// pending-wakeup indicator, status dot, digit shortcut.
+    fn suffix_row(
+        &self,
+        tab: &'a TerminalTab,
+        display_number: Option<usize>,
+        bg: Color,
+        label_overflows: bool,
+    ) -> iced::widget::Row<'a, Message> {
+        let fg = self.terminal_theme.fg;
+        let size = self.config.font_size;
+
+        let mut suffix = row![].align_y(Alignment::Center).spacing(SUFFIX_SPACING);
+
+        if label_overflows {
+            let muted = Color { a: 0.4, ..fg };
+            suffix = suffix.push(text("|").size(size).font(Font::MONOSPACE).color(muted));
+        }
+
+        if tab.is_claude && tab.pr_number().is_some() {
+            let muted = Color { a: 0.7, ..fg };
+            let pr_icon = text("⎇").size(size).font(Font::MONOSPACE).color(muted);
+            let pr_btn = button(pr_icon)
+                .on_press(Message::OpenPr(tab.id))
+                .padding(0)
+                .style(move |_theme, _status| button::Style {
+                    background: Some(bg.into()),
+                    border: Border::default(),
+                    ..Default::default()
+                });
+            suffix = suffix.push(pr_btn);
+        }
+
+        if tab.is_claude && tab.background_tasks > 0 {
+            suffix = suffix.push(
+                text(format!("+{}", tab.background_tasks))
+                    .size(size * 0.75)
+                    .font(Font::MONOSPACE)
+                    .color(self.terminal_theme.cyan),
+            );
+        }
+
+        if tab.is_claude && has_pending_wakeup(tab) {
+            suffix = suffix.push(text("⏱").size(size * 0.75).color(self.terminal_theme.cyan));
+        }
+
+        let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
+        suffix = suffix.push(
+            text(dot_char)
+                .size(size * 0.6)
+                .color(status_dot_color(tab.status, fg)),
+        );
+
+        let number_text = match display_number {
+            Some(n) => format!("{n}"),
+            None => " ".into(),
+        };
+        suffix = suffix.push(
+            text(number_text)
+                .size(size)
+                .font(Font::MONOSPACE)
+                .color(fg),
+        );
+
+        suffix
+    }
+}
+
+fn has_pending_wakeup(tab: &TerminalTab) -> bool {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    matches!(tab.next_wakeup_at_ms, Some(t) if t > now_ms)
 }
 
 fn status_dot_color(status: AgentStatus, fg: Color) -> Color {
