@@ -297,8 +297,8 @@ impl App {
             Message::WakeupExpired(tab_id, epoch_ms) => {
                 self.handle_wakeup_expired(tab_id, epoch_ms)
             }
-            Message::Bell(tab_id) => self.handle_bell(tab_id),
-            Message::BellTick => self.handle_bell_tick(),
+            Message::Bell(tab_id) => self.bell_flashes.trigger(tab_id),
+            Message::BellTick => self.bell_flashes.tick(),
             Message::PtyInput(bytes) => self.handle_pty_input(bytes),
             Message::Scroll(delta) => self.handle_scroll(delta),
             Message::ScrollTo(offset) => self.handle_scroll_to(offset),

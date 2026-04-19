@@ -108,8 +108,6 @@ impl App {
         assignments
     }
 
-    // ---- Per-message handlers ----
-
     pub(in crate::ui) fn handle_tab_output(
         &mut self,
         tab_id: usize,
@@ -298,14 +296,6 @@ impl App {
         Task::none()
     }
 
-    pub(in crate::ui) fn handle_bell(&mut self, tab_id: usize) -> Task<Message> {
-        self.bell_flashes.trigger(tab_id)
-    }
-
-    pub(in crate::ui) fn handle_bell_tick(&mut self) -> Task<Message> {
-        self.bell_flashes.tick()
-    }
-
     pub(in crate::ui) fn handle_pty_input(&mut self, bytes: Vec<u8>) -> Task<Message> {
         if let Some(tab) = self.active_tab_mut() {
             tab.write_input(&bytes);
@@ -341,19 +331,7 @@ impl App {
 
     pub(in crate::ui) fn handle_spawn_agent(&mut self) -> Task<Message> {
         match self.active_rank() {
-            Some(AgentRank::Home) => {
-                let Some(size) = self.window_size else {
-                    return Task::none();
-                };
-                let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-                let home_id = self.active_tab_id;
-                let id = self.next_tab_id;
-                self.next_tab_id += 1;
-                let tab = TerminalTab::new_pending(id, rows, cols, home_id);
-                self.tabs.push(tab);
-                self.focus_tab(id);
-                Task::none()
-            }
+            Some(AgentRank::Home) => self.spawn_pending_project_tab(),
             Some(AgentRank::Project | AgentRank::Task) => {
                 let parent_id = self.active_tab()
                     .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
@@ -372,19 +350,7 @@ impl App {
 
     pub(in crate::ui) fn handle_spawn_child(&mut self) -> Task<Message> {
         match self.active_rank() {
-            Some(AgentRank::Home) => {
-                let Some(size) = self.window_size else {
-                    return Task::none();
-                };
-                let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-                let home_id = self.active_tab_id;
-                let id = self.next_tab_id;
-                self.next_tab_id += 1;
-                let tab = TerminalTab::new_pending(id, rows, cols, home_id);
-                self.tabs.push(tab);
-                self.focus_tab(id);
-                Task::none()
-            }
+            Some(AgentRank::Home) => self.spawn_pending_project_tab(),
             Some(AgentRank::Project | AgentRank::Task) => {
                 if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
                     let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None, None, None, None);
@@ -396,6 +362,20 @@ impl App {
             }
             None => Task::none(),
         }
+    }
+
+    fn spawn_pending_project_tab(&mut self) -> Task<Message> {
+        let Some(size) = self.window_size else {
+            return Task::none();
+        };
+        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
+        let home_id = self.active_tab_id;
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        let tab = TerminalTab::new_pending(id, rows, cols, home_id);
+        self.tabs.push(tab);
+        self.focus_tab(id);
+        Task::none()
     }
 
     pub(in crate::ui) fn handle_navigate_sibling(&mut self, delta: i32) -> Task<Message> {

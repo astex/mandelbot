@@ -14,7 +14,6 @@ use super::super::{
     spawn_blocking_discard, spawn_blocking_task, App, CheckpointReason, ForkAction, Message,
 };
 
-
 impl App {
     pub(in crate::ui) fn handle_auto_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
         if self.config.auto_checkpoint {
