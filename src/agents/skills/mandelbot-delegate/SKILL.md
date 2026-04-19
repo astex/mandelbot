@@ -68,3 +68,5 @@ Then re-arm that child's watcher in the background. (See `_shared/coord.md` for 
 When every child has reached a settled state — `awaiting_review` (the default), `done` (in autonomous-review projects), or `failed` — handle failures (retry, reassign, or escalate) and wrap up however is appropriate for this project: merge branches, open PRs, report results, etc.
 
 Children in `awaiting_review` are mid-PR-review and will close themselves once their PRs merge — leave their tabs alone. Close any other remaining child tabs via `close_tab`.
+
+If something chain-wide changes after children reach `awaiting_review` — an upstream merge that forces a rebase across the whole chain, a decision to abort a PR, a sibling's approach shifting in a way that affects others — append a `[DIRECTIVE]` into the relevant child's coord file. The child keeps a watcher armed through review and will act on it. Reserve this for things only you can coordinate across siblings; direct code-review feedback on a PR flows through the tab's chat, not here.

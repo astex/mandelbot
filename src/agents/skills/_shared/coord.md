@@ -86,11 +86,16 @@ The lifecycle:
 
 1. Implementation done, branch pushed, PR opened.
 2. Child appends `- [...] awaiting_review: <PR link>` and sets `**State:** awaiting_review`. **Does not close the tab.**
-3. Child returns control. The tab idles until the human prompts it.
-4. The child stays in `awaiting_review` for the entire review cycle, even while actively addressing review feedback and pushing changes — the parent doesn't need to know whether the agent is mid-edit or idle. **Do not append log entries during the review cycle** — every write to the coord file wakes the parent's watcher, and there's nothing for the parent to do. Stay quiet until the PR is settled.
+3. Child returns control, but **arms a watcher on its own coord file** before doing so. The tab idles until either the human prompts it (chat) or a parent `[DIRECTIVE]` wakes the watcher.
+4. The child stays in `awaiting_review` for the entire review cycle, even while actively addressing review feedback and pushing changes — the parent doesn't need to know whether the agent is mid-edit or idle. **Do not append routine progress entries during the review cycle** — every write wakes the parent's watcher, and there's nothing for the parent to do. Stay quiet until the PR is settled.
 5. Once the PR is merged (the human will say so, or instruct the child to do the merge itself), the child appends `- [...] done`, sets `**State:** done`, and closes its tab. (This single write is the parent's signal that the child is fully settled.)
 
-The parent treats `awaiting_review` as terminal-for-its-purposes — the same bucket as `done` for "no further parent action needed right now." The parent's watcher will eventually see `done` when the PR merges. The parent does not append `[DIRECTIVE]` entries to push a review-staying-alive child along; review feedback flows through the tab's chat, not the coord file.
+Two channels are live during review:
+
+- **Chat (human → child)** — code review feedback, fixup requests, "push this change." This is the dominant channel.
+- **Coord file `[DIRECTIVE]` (parent → child)** — cross-cutting, chain-wide directives: "something merged upstream, rebase onto new base," "abort, we're dropping this PR," "the sibling's approach changed, update your branch." Reserved for things only the parent can coordinate across siblings. Review feedback itself flows through chat, not here.
+
+The parent treats `awaiting_review` as terminal-for-its-purposes — the same bucket as `done` for "no further parent action needed right now" — but may still append a `[DIRECTIVE]` when a chain-wide change forces it. The child's armed watcher catches those; re-arm after handling each one.
 
 ## The watcher
 
