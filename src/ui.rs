@@ -310,7 +310,7 @@ impl App {
             Message::FocusPreviousTab => self.handle_focus_previous_tab(),
             Message::NextIdle => self.handle_next_idle(),
             Message::PendingInput(key) => self.handle_pending_input(key),
-            Message::CloseTab(tab_id) => self.handle_close_tab(tab_id),
+            Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::McpCloseTab(rtid, target) => self.handle_mcp_close_tab(rtid, target),
             Message::SelectTab(tab_id) => self.handle_select_tab(tab_id),
             Message::SelectTabByIndex(index) => self.handle_select_tab_by_index(index),
@@ -324,19 +324,21 @@ impl App {
             Message::TabReady { tab_id, worktree_dir, session_id } => {
                 self.handle_tab_ready(tab_id, worktree_dir, session_id)
             }
-            Message::McpCheckpoint(tab_id) => self.handle_mcp_checkpoint(tab_id),
-            Message::McpReplace(tab_id, ckpt_id) => self.handle_mcp_replace(tab_id, ckpt_id),
+            Message::McpCheckpoint(tab_id) => {
+                self.kick_checkpoint(tab_id, CheckpointReason::Mcp)
+            }
+            Message::McpReplace(tab_id, ckpt_id) => self.handle_replace(tab_id, ckpt_id),
             Message::McpFork(tab_id, ckpt_id, prompt) => {
-                self.handle_mcp_fork(tab_id, ckpt_id, prompt)
+                self.handle_fork(tab_id, ckpt_id, prompt)
             }
             Message::McpListTabs(tab_id) => self.handle_mcp_list_tabs(tab_id),
             Message::AutoCheckpoint(tab_id) => self.handle_auto_checkpoint(tab_id),
             Message::ToggleTimeline(tab_id) => self.handle_toggle_timeline(tab_id),
             Message::CheckpointDone { tab_id, reason, result } => {
-                self.handle_checkpoint_done(tab_id, reason, *result)
+                self.finish_checkpoint(tab_id, reason, *result)
             }
             Message::ForkDone { source_tab_id, action, result } => {
-                self.handle_fork_done(source_tab_id, action, *result)
+                self.finish_fork(source_tab_id, action, *result)
             }
             Message::BackgroundDone => Task::none(),
             Message::TimelineScrub(tab_id, dir) => self.handle_timeline_scrub(tab_id, dir),

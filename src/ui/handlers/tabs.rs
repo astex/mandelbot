@@ -515,10 +515,6 @@ impl App {
         }
     }
 
-    pub(in crate::ui) fn handle_close_tab(&mut self, tab_id: usize) -> Task<Message> {
-        self.close_tab(tab_id)
-    }
-
     pub(in crate::ui) fn handle_mcp_close_tab(
         &mut self,
         requesting_tab_id: usize,

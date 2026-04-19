@@ -239,7 +239,7 @@ impl App {
         })
     }
 
-    pub(super) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         self.folded_tabs.remove(&tab_id);
 
         let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {

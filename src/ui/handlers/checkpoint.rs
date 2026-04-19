@@ -16,34 +16,12 @@ use super::super::{
 
 
 impl App {
-    pub(in crate::ui) fn handle_mcp_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
-        self.kick_checkpoint(tab_id, CheckpointReason::Mcp)
-    }
-
     pub(in crate::ui) fn handle_auto_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
         if self.config.auto_checkpoint {
             self.kick_checkpoint(tab_id, CheckpointReason::Auto)
         } else {
             Task::none()
         }
-    }
-
-    pub(in crate::ui) fn handle_checkpoint_done(
-        &mut self,
-        tab_id: usize,
-        reason: CheckpointReason,
-        result: Result<CheckpointOutcome, String>,
-    ) -> Task<Message> {
-        self.finish_checkpoint(tab_id, reason, result)
-    }
-
-    pub(in crate::ui) fn handle_fork_done(
-        &mut self,
-        source_tab_id: usize,
-        action: ForkAction,
-        result: Result<ForkOutcome, String>,
-    ) -> Task<Message> {
-        self.finish_fork(source_tab_id, action, result)
     }
 
     pub(in crate::ui) fn handle_undo(&mut self, tab_id: usize) -> Task<Message> {
@@ -92,23 +70,6 @@ impl App {
         )
     }
 
-    pub(in crate::ui) fn handle_mcp_replace(
-        &mut self,
-        tab_id: usize,
-        ckpt_id: String,
-    ) -> Task<Message> {
-        self.handle_replace(tab_id, ckpt_id)
-    }
-
-    pub(in crate::ui) fn handle_mcp_fork(
-        &mut self,
-        tab_id: usize,
-        ckpt_id: String,
-        prompt: Option<String>,
-    ) -> Task<Message> {
-        self.handle_fork(tab_id, ckpt_id, prompt)
-    }
-
     pub(in crate::ui) fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             t.redo_path.clear();
@@ -136,7 +97,7 @@ impl App {
         )
     }
 
-    pub(super) fn kick_checkpoint(
+    pub(in crate::ui) fn kick_checkpoint(
         &mut self,
         tab_id: usize,
         reason: CheckpointReason,
@@ -203,7 +164,7 @@ impl App {
         })
     }
 
-    pub(super) fn finish_checkpoint(
+    pub(in crate::ui) fn finish_checkpoint(
         &mut self,
         tab_id: usize,
         reason: CheckpointReason,
@@ -363,7 +324,7 @@ impl App {
         })
     }
 
-    pub(super) fn finish_fork(
+    pub(in crate::ui) fn finish_fork(
         &mut self,
         source_tab_id: usize,
         action: ForkAction,
