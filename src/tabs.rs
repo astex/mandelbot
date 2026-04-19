@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::tab::TerminalTab;
+use crate::tab::{TabMeta, TerminalTab};
 
 /// Collection of `TerminalTab`s with O(1) id lookup and indexed children.
 ///
@@ -47,20 +47,22 @@ impl Tabs {
         self.by_id.get(&id).map(|&i| &self.tabs[i])
     }
 
-    /// Clone the tab with `id`. Combined with [`write`] this is the
-    /// copy→mutate→write pattern: take an owned snapshot, mutate it,
-    /// then `write` it back — the write unconditionally rebuilds the
-    /// indexes, so `by_id` and `children` stay consistent even if the
-    /// caller changed `parent_id`.
-    pub fn snapshot(&self, id: usize) -> Option<TerminalTab> {
-        self.get(id).cloned()
+    /// Clone the mutable metadata of tab `id`. Combined with [`write`]
+    /// this is the copy→mutate→write pattern: take an owned snapshot,
+    /// mutate it, then `write` it back. The write unconditionally
+    /// rebuilds `by_id`/`children`, so they stay consistent even if
+    /// the caller changed `parent_id`. Snapshots are data-only — no
+    /// event sender, no term handle — so dropping one is harmless.
+    pub fn snapshot(&self, id: usize) -> Option<TabMeta> {
+        self.get(id).map(|t| t.meta.clone())
     }
 
-    /// Replace the existing tab with the same `id`. Rebuilds indexes.
-    /// Silently no-ops if no tab with that id exists.
-    pub fn write(&mut self, tab: TerminalTab) {
-        let Some(&idx) = self.by_id.get(&tab.id) else { return };
-        self.tabs[idx] = tab;
+    /// Replace the stored metadata for the tab with the same `id`.
+    /// The runtime (term/listener/event_tx) is left intact. Rebuilds
+    /// indexes. Silently no-ops if no tab with that id exists.
+    pub fn write(&mut self, meta: TabMeta) {
+        let Some(&idx) = self.by_id.get(&meta.id) else { return };
+        self.tabs[idx].meta = meta;
         self.rebuild();
     }
 
@@ -94,16 +96,16 @@ impl Tabs {
         self.rebuild();
     }
 
+    pub fn retain<F: FnMut(&TerminalTab) -> bool>(&mut self, f: F) {
+        self.tabs.retain(f);
+        self.rebuild();
+    }
+
     pub fn remove(&mut self, id: usize) -> Option<TerminalTab> {
         let idx = self.by_id.get(&id).copied()?;
         let tab = self.tabs.remove(idx);
         self.rebuild();
         Some(tab)
-    }
-
-    pub fn retain<F: FnMut(&TerminalTab) -> bool>(&mut self, f: F) {
-        self.tabs.retain(f);
-        self.rebuild();
     }
 
     /// Change `id`'s parent. Keeps `children` consistent.
@@ -112,7 +114,7 @@ impl Tabs {
         if self.tabs[idx].parent_id == new_parent {
             return;
         }
-        self.tabs[idx].parent_id = new_parent;
+        self.tabs[idx].meta.parent_id = new_parent;
         self.rebuild();
     }
 }
@@ -177,19 +179,6 @@ mod tests {
     }
 
     #[test]
-    fn reparent_updates_children_map() {
-        let mut tabs = Tabs::new();
-        tabs.push(tab(1, None));
-        tabs.push(tab(2, None));
-        tabs.push(tab(3, Some(1)));
-
-        tabs.reparent(3, Some(2));
-        assert_eq!(tabs.get(3).unwrap().parent_id, Some(2));
-        assert_eq!(tabs.children_of(Some(1)), &[] as &[usize]);
-        assert_eq!(tabs.children_of(Some(2)), &[3]);
-    }
-
-    #[test]
     fn retain_rebuilds_indexes() {
         let mut tabs = Tabs::new();
         tabs.push(tab(1, None));
@@ -203,6 +192,19 @@ mod tests {
     }
 
     #[test]
+    fn reparent_updates_children_map() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, None));
+        tabs.push(tab(3, Some(1)));
+
+        tabs.reparent(3, Some(2));
+        assert_eq!(tabs.get(3).unwrap().parent_id, Some(2));
+        assert_eq!(tabs.children_of(Some(1)), &[] as &[usize]);
+        assert_eq!(tabs.children_of(Some(2)), &[3]);
+    }
+
+#[test]
     fn children_of_unknown_parent_is_empty() {
         let tabs = Tabs::new();
         assert_eq!(tabs.children_of(Some(42)), &[] as &[usize]);

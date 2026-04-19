@@ -114,18 +114,24 @@ impl App {
         pr_number: Option<u32>,
     ) -> Task<Message> {
         let mut tasks: Vec<Task<Message>> = Vec::new();
+        let (bell, stores, loads, osc_title) = match self.tabs.get(tab_id) {
+            Some(t) => (
+                t.take_bell(),
+                t.take_clipboard_stores(),
+                t.take_clipboard_loads(),
+                (!t.is_claude).then(|| t.take_osc_title()).flatten(),
+            ),
+            None => return Task::none(),
+        };
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.background_tasks = bg_tasks;
             tab.pr_scraped = pr_number;
-            if !tab.is_claude {
-                if let Some(title) = tab.take_osc_title() {
-                    tab.title = Some(title);
-                }
+            if let Some(title) = osc_title {
+                tab.title = Some(title);
             }
-            let bell = tab.take_bell();
-            let stores = tab.take_clipboard_stores();
-            let loads = tab.take_clipboard_loads();
             self.tabs.write(tab);
+        }
+        {
 
             if bell {
                 return self.bell_flashes.trigger(tab_id);
