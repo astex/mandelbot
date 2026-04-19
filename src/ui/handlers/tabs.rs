@@ -505,7 +505,7 @@ impl App {
         }
         if self.tabs.is_folded(tab_id) {
             self.tabs.unfold(tab_id);
-        } else if self.has_claude_children(tab_id) {
+        } else if self.tabs.has_claude_children(tab_id) {
             self.tabs.fold(tab_id);
         }
         Task::none()
