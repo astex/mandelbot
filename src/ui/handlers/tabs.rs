@@ -131,39 +131,34 @@ impl App {
             }
             self.tabs.write(tab);
         }
-        {
-
-            if bell {
-                return self.bell_flashes.trigger(tab_id);
-            }
-
-            for store in stores {
-                let task = match store.clipboard_type {
-                    alacritty_terminal::term::ClipboardType::Clipboard => {
-                        iced::clipboard::write(store.text)
-                    }
-                    alacritty_terminal::term::ClipboardType::Selection => {
-                        iced::clipboard::write_primary(store.text)
-                    }
-                };
-                tasks.push(task);
-            }
-
-            for load in loads {
-                let task = match load.clipboard_type {
-                    alacritty_terminal::term::ClipboardType::Clipboard => {
-                        iced::clipboard::read()
-                    }
-                    alacritty_terminal::term::ClipboardType::Selection => {
-                        iced::clipboard::read_primary()
-                    }
-                };
-                let task = task.map(move |content| {
-                    let response = content.map(|text| (load.formatter)(&text));
-                    Message::ClipboardLoadResult(tab_id, response)
-                });
-                tasks.push(task);
-            }
+        if bell {
+            return self.bell_flashes.trigger(tab_id);
+        }
+        for store in stores {
+            let task = match store.clipboard_type {
+                alacritty_terminal::term::ClipboardType::Clipboard => {
+                    iced::clipboard::write(store.text)
+                }
+                alacritty_terminal::term::ClipboardType::Selection => {
+                    iced::clipboard::write_primary(store.text)
+                }
+            };
+            tasks.push(task);
+        }
+        for load in loads {
+            let task = match load.clipboard_type {
+                alacritty_terminal::term::ClipboardType::Clipboard => {
+                    iced::clipboard::read()
+                }
+                alacritty_terminal::term::ClipboardType::Selection => {
+                    iced::clipboard::read_primary()
+                }
+            };
+            let task = task.map(move |content| {
+                let response = content.map(|text| (load.formatter)(&text));
+                Message::ClipboardLoadResult(tab_id, response)
+            });
+            tasks.push(task);
         }
         Task::batch(tasks)
     }
@@ -549,11 +544,7 @@ impl App {
         let mut i = 0;
         while i < to_close.len() {
             let parent = to_close[i];
-            for tab in self.tabs.iter() {
-                if tab.parent_id == Some(parent) && !to_close.contains(&tab.id) {
-                    to_close.push(tab.id);
-                }
-            }
+            to_close.extend_from_slice(self.tabs.children_of(Some(parent)));
             i += 1;
         }
 
@@ -689,11 +680,7 @@ impl App {
             let mut i = 0;
             while i < visible.len() {
                 let parent = visible[i];
-                for t in self.tabs.iter() {
-                    if t.parent_id == Some(parent) && !visible.contains(&t.id) {
-                        visible.push(t.id);
-                    }
-                }
+                visible.extend_from_slice(self.tabs.children_of(Some(parent)));
                 i += 1;
             }
         }

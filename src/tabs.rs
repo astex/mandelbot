@@ -3,10 +3,7 @@ use std::collections::HashMap;
 use crate::tab::{TabMeta, TerminalTab};
 
 /// Collection of `TerminalTab`s with O(1) id lookup and indexed children.
-///
-/// The underlying `Vec` is the authoritative ordering used by the tab bar
-/// (insertion order, respected by `children_of`). `by_id` and `children`
-/// are derived indexes rebuilt on every mutation.
+/// `by_id` and `children` are indexes derived from `tabs`.
 pub struct Tabs {
     tabs: Vec<TerminalTab>,
     by_id: HashMap<usize, usize>,
@@ -47,23 +44,20 @@ impl Tabs {
         self.by_id.get(&id).map(|&i| &self.tabs[i])
     }
 
-    /// Clone the mutable metadata of tab `id`. Combined with [`write`]
-    /// this is the copy→mutate→write pattern: take an owned snapshot,
-    /// mutate it, then `write` it back. The write unconditionally
-    /// rebuilds `by_id`/`children`, so they stay consistent even if
-    /// the caller changed `parent_id`. Snapshots are data-only — no
-    /// event sender, no term handle — so dropping one is harmless.
+    /// Snapshot of tab `id`'s metadata. Pair with [`write`] for copy→mutate→write.
     pub fn snapshot(&self, id: usize) -> Option<TabMeta> {
         self.get(id).map(|t| t.meta.clone())
     }
 
-    /// Replace the stored metadata for the tab with the same `id`.
-    /// The runtime (term/listener/event_tx) is left intact. Rebuilds
-    /// indexes. Silently no-ops if no tab with that id exists.
+    /// Store `meta` back on the tab with matching id. Rebuilds indexes only
+    /// if `parent_id` changed. Silently no-ops if no tab has that id.
     pub fn write(&mut self, meta: TabMeta) {
         let Some(&idx) = self.by_id.get(&meta.id) else { return };
+        let parent_changed = self.tabs[idx].meta.parent_id != meta.parent_id;
         self.tabs[idx].meta = meta;
-        self.rebuild();
+        if parent_changed {
+            self.rebuild();
+        }
     }
 
     pub fn index_of(&self, id: usize) -> Option<usize> {
@@ -204,7 +198,7 @@ mod tests {
         assert_eq!(tabs.children_of(Some(2)), &[3]);
     }
 
-#[test]
+    #[test]
     fn children_of_unknown_parent_is_empty() {
         let tabs = Tabs::new();
         assert_eq!(tabs.children_of(Some(42)), &[] as &[usize]);

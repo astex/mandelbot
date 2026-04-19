@@ -104,13 +104,8 @@ pub struct TabSpawnParams {
     pub existing_worktree: Option<PathBuf>,
 }
 
-/// Mutable per-tab state — permutable after construction.
-///
-/// Lives inside [`TerminalTab`] alongside the immutable runtime
-/// (term/listener/event_tx). `Clone` is safe: copying a `TabMeta`
-/// creates an inert data-only snapshot with no ties to any PTY
-/// thread, so dropping one never affects the live tab. Writes go
-/// through [`Tabs::snapshot`] + [`Tabs::write`].
+/// Mutable per-tab state. Cloning produces an inert data-only snapshot
+/// (no PTY ties) — safe for copy→mutate→write via `Tabs::snapshot`/`write`.
 #[derive(Clone)]
 pub struct TabMeta {
     pub id: usize,
@@ -169,7 +164,7 @@ impl TabMeta {
 }
 
 pub struct TerminalTab {
-    pub meta: TabMeta,
+    pub(crate) meta: TabMeta,
     term: Arc<Mutex<TermInstance>>,
     listener: TermEventListener,
     event_tx: Option<mpsc::Sender<TabEvent>>,
@@ -263,7 +258,7 @@ impl TerminalTab {
         self.event_tx = Some(tx);
     }
 
-pub(crate) fn lock_term(
+    pub(crate) fn lock_term(
         &self,
     ) -> std::sync::MutexGuard<'_, TermInstance> {
         self.term.lock().unwrap()
