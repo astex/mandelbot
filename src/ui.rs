@@ -108,12 +108,12 @@ pub enum Message {
     CheckpointDone {
         tab_id: usize,
         reason: CheckpointReason,
-        result: Box<Result<CheckpointOutcome, String>>,
+        result: Box<Result<checkpoint::CheckpointOutcome, String>>,
     },
     ForkDone {
         source_tab_id: usize,
         action: ForkAction,
-        result: Box<Result<ForkOutcome, String>>,
+        result: Box<Result<checkpoint::ForkOutcome, String>>,
     },
     /// Completion signal for background work whose result we discard
     /// (e.g. `save_tree`, or a dropped oneshot). No-op in `update`.
@@ -140,24 +140,6 @@ pub enum ForkAction {
     Replace { new_redo: Vec<String> },
 }
 
-#[derive(Debug, Clone)]
-pub struct CheckpointOutcome {
-    pub root: Option<crate::checkpoint_store::CheckpointNode>,
-    /// `None` means dup-skipped: parent line count already matched.
-    pub new_node: Option<crate::checkpoint_store::CheckpointNode>,
-    pub parent_id: Option<String>,
-    pub line_count: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct ForkOutcome {
-    pub ckpt_id: String,
-    pub ckpt_title: Option<String>,
-    pub new_branch: String,
-    pub wt_path: PathBuf,
-    pub resume_session_id: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum TimelineDir {
     Left,
@@ -170,152 +152,6 @@ pub enum TimelineDir {
 pub enum TimelineMode {
     Replace,
     Fork,
-}
-
-#[derive(Debug, Clone)]
-struct CheckpointPrep {
-    wt: PathBuf,
-    session_id: String,
-    title: Option<String>,
-    parent_id: Option<String>,
-    parent_commit: Option<String>,
-    parent_line_count: Option<usize>,
-    needs_root: bool,
-}
-
-#[derive(Debug, Clone)]
-struct ForkPrep {
-    project_dir: PathBuf,
-    ckpt_id: String,
-    ckpt_title: Option<String>,
-    ckpt_shadow_commit: String,
-    ckpt_session_id: String,
-    ckpt_jsonl_line_count: usize,
-    src_worktree: PathBuf,
-    new_branch: String,
-    wt_path: PathBuf,
-}
-
-/// Returns `new_node: None` when the jsonl line count hasn't advanced
-/// past the parent's, signalling the dup-skip path to `finish_checkpoint`.
-fn run_checkpoint_blocking(
-    prep: CheckpointPrep,
-) -> Result<CheckpointOutcome, String> {
-    let now = std::time::SystemTime::now;
-
-    let root = if prep.needs_root {
-        let root_id = Uuid::new_v4().to_string();
-        let root_ref = crate::checkpoint_store::shadow_ref_for(&root_id);
-        let root_msg = format!("checkpoint-{root_id}");
-        let root_commit =
-            checkpoint::snapshot_worktree(&prep.wt, None, &root_ref, &root_msg)
-                .map_err(|e| e.to_string())?;
-        Some(crate::checkpoint_store::CheckpointNode {
-            id: root_id,
-            parent: None,
-            session_id: prep.session_id.clone(),
-            shadow_commit: root_commit,
-            jsonl_line_count: 0,
-            title: None,
-            worktree_dir: prep.wt.clone(),
-            created_at: now(),
-        })
-    } else {
-        None
-    };
-
-    // The effective parent for the new node: the root we just
-    // created, or the preexisting head. When we synthesized a root
-    // this turn, the jsonl line count is 0 by construction.
-    let (parent_id, parent_commit, parent_line_count) = match &root {
-        Some(r) => (
-            Some(r.id.clone()),
-            Some(r.shadow_commit.clone()),
-            Some(0_usize),
-        ),
-        None => (
-            prep.parent_id.clone(),
-            prep.parent_commit.clone(),
-            prep.parent_line_count,
-        ),
-    };
-
-    let jsonl = checkpoint::jsonl_path_for(&prep.wt, &prep.session_id);
-    let line_count =
-        checkpoint::count_jsonl_lines(&jsonl).map_err(|e| e.to_string())?;
-
-    // Skip only when there's a real parent — a freshly synthesized root
-    // always needs a following node or the head stays at line_count=0.
-    if root.is_none()
-        && let Some(plc) = parent_line_count
-        && plc == line_count
-    {
-        return Ok(CheckpointOutcome {
-            root,
-            new_node: None,
-            parent_id,
-            line_count,
-        });
-    }
-
-    let new_id = Uuid::new_v4().to_string();
-    let new_ref = crate::checkpoint_store::shadow_ref_for(&new_id);
-    let message = format!("checkpoint-{new_id}");
-    let shadow_commit = checkpoint::snapshot_worktree(
-        &prep.wt,
-        parent_commit.as_deref(),
-        &new_ref,
-        &message,
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(CheckpointOutcome {
-        root,
-        new_node: Some(crate::checkpoint_store::CheckpointNode {
-            id: new_id,
-            parent: parent_id.clone(),
-            session_id: prep.session_id,
-            shadow_commit,
-            jsonl_line_count: line_count,
-            title: prep.title,
-            worktree_dir: prep.wt,
-            created_at: now(),
-        }),
-        parent_id,
-        line_count,
-    })
-}
-
-fn run_fork_blocking(prep: ForkPrep) -> Result<ForkOutcome, String> {
-    checkpoint::fork_worktree(
-        &prep.project_dir,
-        &prep.wt_path,
-        &prep.new_branch,
-        &prep.ckpt_shadow_commit,
-    )?;
-
-    let resume_session_id = if prep.ckpt_jsonl_line_count == 0 {
-        None
-    } else {
-        let new_session = Uuid::new_v4().to_string();
-        let src_jsonl =
-            checkpoint::jsonl_path_for(&prep.src_worktree, &prep.ckpt_session_id);
-        let dst_jsonl = checkpoint::jsonl_path_for(&prep.wt_path, &new_session);
-        checkpoint::copy_truncated_jsonl(
-            &src_jsonl,
-            &dst_jsonl,
-            prep.ckpt_jsonl_line_count,
-        )?;
-        Some(new_session)
-    };
-
-    Ok(ForkOutcome {
-        ckpt_id: prep.ckpt_id,
-        ckpt_title: prep.ckpt_title,
-        new_branch: prep.new_branch,
-        wt_path: prep.wt_path,
-        resume_session_id,
-    })
 }
 
 /// Run a blocking closure off the UI thread and turn its output into a
@@ -1700,7 +1536,7 @@ impl App {
             }
         };
         spawn_blocking_task(
-            move || run_checkpoint_blocking(prep),
+            move || checkpoint::run_checkpoint_blocking(prep),
             move |result| Message::CheckpointDone {
                 tab_id,
                 reason,
@@ -1712,7 +1548,7 @@ impl App {
     fn prepare_checkpoint(
         &self,
         tab_id: usize,
-    ) -> Result<CheckpointPrep, checkpoint::TimeTravelError> {
+    ) -> Result<checkpoint::CheckpointPrep, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
         let tab = self
             .tabs
@@ -1740,7 +1576,7 @@ impl App {
         // TabReady, so the first checkpoint also synthesizes a root.
         let needs_root = parent_id.is_none();
 
-        Ok(CheckpointPrep {
+        Ok(checkpoint::CheckpointPrep {
             wt,
             session_id,
             title,
@@ -1755,7 +1591,7 @@ impl App {
         &mut self,
         tab_id: usize,
         reason: CheckpointReason,
-        result: Result<CheckpointOutcome, String>,
+        result: Result<checkpoint::CheckpointOutcome, String>,
     ) -> Task<Message> {
         let outcome = match result {
             Ok(o) => o,
@@ -1932,7 +1768,7 @@ impl App {
             }
         };
         spawn_blocking_task(
-            move || run_fork_blocking(prep),
+            move || checkpoint::run_fork_blocking(prep),
             move |result| Message::ForkDone {
                 source_tab_id: tab_id,
                 action,
@@ -1945,7 +1781,7 @@ impl App {
         &self,
         tab_id: usize,
         ckpt_id: String,
-    ) -> Result<ForkPrep, checkpoint::TimeTravelError> {
+    ) -> Result<checkpoint::ForkPrep, checkpoint::TimeTravelError> {
         use checkpoint::TimeTravelError as E;
         let tab = self
             .tabs
@@ -1974,7 +1810,7 @@ impl App {
             &new_branch,
         );
 
-        Ok(ForkPrep {
+        Ok(checkpoint::ForkPrep {
             project_dir,
             ckpt_id,
             ckpt_title: ckpt.title.clone(),
@@ -1991,7 +1827,7 @@ impl App {
         &mut self,
         source_tab_id: usize,
         action: ForkAction,
-        result: Result<ForkOutcome, String>,
+        result: Result<checkpoint::ForkOutcome, String>,
     ) -> Task<Message> {
         let outcome = match result {
             Ok(o) => o,
