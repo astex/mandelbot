@@ -1,8 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-
-use uuid::Uuid;
+use std::path::PathBuf;
 
 use iced::Task;
 
@@ -11,181 +8,14 @@ use alacritty_terminal::selection::Selection;
 
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 
-use super::{terminal_size, App, Message, PendingKey};
+use super::super::{terminal_size, App, Message, PendingKey};
 
 impl App {
-    pub(super) fn active_tab(&self) -> Option<&TerminalTab> {
+    pub(in crate::ui) fn active_tab(&self) -> Option<&TerminalTab> {
         self.tabs.iter().find(|t| t.id == self.active_tab_id)
     }
 
-    pub(super) fn active_tab_mut(&mut self) -> Option<&mut TerminalTab> {
-        self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
-    }
-
-    pub(super) fn focus_tab(&mut self, id: usize) {
-        if let Some(pid) = self.tabs.iter().find(|t| t.id == id).and_then(|t| t.parent_id) {
-            self.unfold_ancestors(pid);
-        }
-        if id != self.active_tab_id {
-            self.prev_active_tab_id = Some(self.active_tab_id);
-        }
-        self.active_tab_id = id;
-    }
-
-    pub(super) fn spawn_tab(
-        &mut self,
-        is_claude: bool,
-        rank: AgentRank,
-        project_dir: Option<PathBuf>,
-        parent_id: Option<usize>,
-        prompt: Option<String>,
-        branch: Option<String>,
-        model_override: Option<String>,
-        base: Option<String>,
-    ) -> (usize, Task<Message>) {
-        self.spawn_tab_full(
-            is_claude, rank, project_dir, parent_id, prompt,
-            branch, model_override, base, None, None, None,
-        )
-    }
-
-    pub(super) fn spawn_tab_full(
-        &mut self,
-        is_claude: bool,
-        rank: AgentRank,
-        project_dir: Option<PathBuf>,
-        parent_id: Option<usize>,
-        prompt: Option<String>,
-        branch: Option<String>,
-        model_override: Option<String>,
-        base: Option<String>,
-        resume_session_id: Option<String>,
-        existing_worktree: Option<PathBuf>,
-        insert_position: Option<usize>,
-    ) -> (usize, Task<Message>) {
-        if let Some(pid) = parent_id {
-            self.unfold_ancestors(pid);
-        }
-
-        let Some(size) = self.window_size else {
-            return (0, Task::none());
-        };
-        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-        let id = self.next_tab_id;
-        self.next_tab_id += 1;
-        let parent = parent_id.and_then(|pid| self.tabs.iter().find(|t| t.id == pid));
-        let depth = parent.map_or(0, |p| p.depth + 1);
-        let project_id = match rank {
-            AgentRank::Home => None,
-            AgentRank::Project => Some(id),
-            AgentRank::Task => parent.and_then(|p| p.project_id),
-        };
-        let model = model_override.unwrap_or_else(|| match rank {
-            AgentRank::Home => self.config.models.home.clone(),
-            AgentRank::Project => self.config.models.project.clone(),
-            AgentRank::Task => self.config.models.task.clone(),
-        });
-
-        let mut tab = TerminalTab::new(
-            id, rows, cols, is_claude, rank,
-            project_dir.clone(), parent_id, depth, project_id,
-        );
-
-        let (event_tx, event_rx) = std::sync::mpsc::channel();
-        let pty_tx = event_tx.clone();
-        tab.set_event_tx(event_tx);
-
-        let inserted_idx = match insert_position {
-            Some(pos) if pos <= self.tabs.len() => {
-                self.tabs.insert(pos, tab);
-                pos
-            }
-            _ => {
-                self.tabs.push(tab);
-                self.tabs.len() - 1
-            }
-        };
-
-        if let Some(tab) = self.tabs.get(inserted_idx) {
-            tab.set_colors(
-                self.terminal_theme.fg,
-                self.terminal_theme.bg,
-                self.terminal_theme.fg,
-            );
-            let cw = self.config.char_width();
-            let ch = self.config.char_height();
-            tab.set_window_size(alacritty_terminal::event::WindowSize {
-                num_lines: rows as u16,
-                num_cols: cols as u16,
-                cell_width: cw as u16,
-                cell_height: ch as u16,
-            });
-        }
-
-        let session_id = if is_claude && resume_session_id.is_none() {
-            Some(Uuid::new_v4().to_string())
-        } else {
-            None
-        };
-
-        let params = crate::tab::TabSpawnParams {
-            id,
-            rows,
-            cols,
-            is_claude,
-            rank,
-            project_dir,
-            shell: self.config.shell.clone(),
-            workflow: self.config.workflow.clone(),
-            worktree_location: self.config.worktree_location.clone(),
-            model,
-            parent_socket: self.parent_socket_path.clone(),
-            prompt,
-            branch,
-            base,
-            control_prefix: self.config.control_prefix.to_string(),
-            session_id,
-            resume_session_id,
-            existing_worktree,
-        };
-
-        let tab = &self.tabs[inserted_idx];
-        let tab_task = Task::run(
-            crate::tab::tab_stream(
-                params,
-                event_rx,
-                pty_tx,
-                tab.term_arc(),
-                tab.listener(),
-            ),
-            |msg| msg,
-        );
-
-        let fifo_path = crate::tab::runtime_dir().join(format!("{id}.fifo"));
-        crate::tab::create_fifo(&fifo_path);
-        let fifo_task = Task::run(
-            crate::tab::fifo_stream(id, fifo_path),
-            |msg| msg,
-        );
-        (id, Task::batch([tab_task, fifo_task]))
-    }
-
-    pub(super) fn active_rank(&self) -> Option<AgentRank> {
-        self.active_tab().map(|t| t.rank)
-    }
-
-    pub(super) fn project_dir_for_tab(&self, tab_id: usize) -> Option<PathBuf> {
-        let project_id = self.tabs.iter().find(|t| t.id == tab_id)?.project_id?;
-        self.tabs.iter().find(|t| t.id == project_id)?.project_dir.clone()
-    }
-
-    pub(super) fn first_child(&self, tab_id: usize) -> Option<usize> {
-        self.tabs.iter()
-            .find(|t| t.parent_id == Some(tab_id) && t.is_claude)
-            .map(|t| t.id)
-    }
-
-    pub(super) fn tab_display_order(&self) -> Vec<usize> {
+    pub(in crate::ui) fn tab_display_order(&self) -> Vec<usize> {
         let mut order = Vec::new();
         if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
             order.push(home.id);
@@ -197,7 +27,7 @@ impl App {
         order
     }
 
-    pub(super) fn tab_number_assignments(&self) -> HashMap<usize, usize> {
+    pub(in crate::ui) fn tab_number_assignments(&self) -> HashMap<usize, usize> {
         let visible = self.tab_display_order();
         let is_visible = |id: usize| visible.contains(&id);
 
@@ -278,123 +108,9 @@ impl App {
         assignments
     }
 
-    pub(super) fn collect_children(&self, parent_id: usize, order: &mut Vec<usize>) {
-        for tab in self.tabs.iter().filter(|t| t.parent_id == Some(parent_id) && t.is_claude) {
-            order.push(tab.id);
-            if !self.folded_tabs.contains(&tab.id) {
-                self.collect_children(tab.id, order);
-            }
-        }
-    }
-
-    pub(super) fn has_claude_children(&self, parent_id: usize) -> bool {
-        self.tabs.iter().any(|t| t.parent_id == Some(parent_id) && t.is_claude)
-    }
-
-    pub(super) fn unfold_ancestors(&mut self, mut id: usize) {
-        loop {
-            self.folded_tabs.remove(&id);
-            match self.tabs.iter().find(|t| t.id == id).and_then(|t| t.parent_id) {
-                Some(pid) => id = pid,
-                None => break,
-            }
-        }
-    }
-
-    pub(super) fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
-        self.tabs.iter()
-            .find(|t| t.rank == AgentRank::Project && t.project_dir.as_deref() == Some(dir))
-            .map(|t| t.id)
-    }
-
-    pub(super) fn respond_to_tab(&self, tab_id: usize, response: serde_json::Value) {
-        if let Some(mut stream) = self.response_writers.lock().unwrap().remove(&tab_id) {
-            let mut msg = serde_json::to_string(&response).unwrap();
-            msg.push('\n');
-            let _ = stream.write_all(msg.as_bytes());
-            let _ = stream.flush();
-        }
-    }
-
-    pub(super) fn pick_focus_after_close(
-        &self,
-        closing_parent_id: Option<usize>,
-        anchor_idx: usize,
-        closing_ids: &[usize],
-    ) -> Option<usize> {
-        let sibling_at =
-            |pos: usize| -> Option<usize> {
-                self.tabs.get(pos).and_then(|t| {
-                    (t.parent_id == closing_parent_id
-                        && !closing_ids.contains(&t.id))
-                    .then_some(t.id)
-                })
-            };
-        let prev = (0..anchor_idx)
-            .rev()
-            .find_map(sibling_at);
-        let next = (anchor_idx..self.tabs.len())
-            .find_map(sibling_at);
-        prev.or(next).or_else(|| {
-            closing_parent_id.filter(|p| !closing_ids.contains(p))
-        })
-    }
-
-    pub(super) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
-        self.folded_tabs.remove(&tab_id);
-
-        let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
-            return Task::none();
-        };
-
-        let tab_uuid = self.tabs[idx].uuid.clone();
-        let _ = self.ckpt_store.close_tab(&tab_uuid).persist(&self.ckpt_store);
-
-        let closing_parent_id = self.tabs[idx].parent_id;
-        let closing_depth = self.tabs[idx].depth;
-
-        let first_child_id = self.tabs.iter()
-            .find(|t| t.parent_id == Some(tab_id))
-            .map(|t| t.id);
-
-        if let Some(promoted_id) = first_child_id {
-            if let Some(promoted) = self.tabs.iter_mut().find(|t| t.id == promoted_id) {
-                promoted.parent_id = closing_parent_id;
-                promoted.depth = closing_depth;
-            }
-            for tab in self.tabs.iter_mut() {
-                if tab.parent_id == Some(tab_id) && tab.id != promoted_id {
-                    tab.parent_id = Some(promoted_id);
-                }
-            }
-        }
-
-        self.tabs.remove(idx);
-
-        if self.prev_active_tab_id == Some(tab_id) {
-            self.prev_active_tab_id = None;
-        }
-
-        if self.tabs.is_empty() {
-            return iced::exit();
-        }
-
-        if self.active_tab_id == tab_id {
-            let new_id = self
-                .pick_focus_after_close(closing_parent_id, idx, &[tab_id])
-                .unwrap_or_else(|| {
-                    let fallback = idx.min(self.tabs.len() - 1);
-                    self.tabs[fallback].id
-                });
-            self.focus_tab(new_id);
-        }
-
-        Task::none()
-    }
-
     // ---- Per-message handlers ----
 
-    pub(super) fn handle_tab_output(
+    pub(in crate::ui) fn handle_tab_output(
         &mut self,
         tab_id: usize,
         bg_tasks: usize,
@@ -444,7 +160,7 @@ impl App {
         Task::batch(tasks)
     }
 
-    pub(super) fn handle_shell_exited(
+    pub(in crate::ui) fn handle_shell_exited(
         &mut self,
         tab_id: usize,
         exit_code: Option<u32>,
@@ -460,14 +176,14 @@ impl App {
         }
     }
 
-    pub(super) fn handle_set_title(&mut self, tab_id: usize, title: String) -> Task<Message> {
+    pub(in crate::ui) fn handle_set_title(&mut self, tab_id: usize, title: String) -> Task<Message> {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.title = Some(title);
         }
         Task::none()
     }
 
-    pub(super) fn handle_mcp_spawn_agent(
+    pub(in crate::ui) fn handle_mcp_spawn_agent(
         &mut self,
         requesting_tab_id: usize,
         working_directory: Option<PathBuf>,
@@ -526,21 +242,21 @@ impl App {
         task
     }
 
-    pub(super) fn handle_set_status(&mut self, tab_id: usize, status: AgentStatus) -> Task<Message> {
+    pub(in crate::ui) fn handle_set_status(&mut self, tab_id: usize, status: AgentStatus) -> Task<Message> {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.status = status;
         }
         Task::none()
     }
 
-    pub(super) fn handle_set_pr(&mut self, tab_id: usize, pr: Option<u32>) -> Task<Message> {
+    pub(in crate::ui) fn handle_set_pr(&mut self, tab_id: usize, pr: Option<u32>) -> Task<Message> {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.pr_override = pr;
         }
         Task::none()
     }
 
-    pub(super) fn handle_wakeup_at(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
+    pub(in crate::ui) fn handle_wakeup_at(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
         if let Some(tab) =
             self.tabs.iter_mut().find(|t| t.id == tab_id)
         {
@@ -571,7 +287,7 @@ impl App {
         )
     }
 
-    pub(super) fn handle_wakeup_expired(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
+    pub(in crate::ui) fn handle_wakeup_expired(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
         if let Some(tab) =
             self.tabs.iter_mut().find(|t| t.id == tab_id)
         {
@@ -582,15 +298,15 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_bell(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_bell(&mut self, tab_id: usize) -> Task<Message> {
         self.bell_flashes.trigger(tab_id)
     }
 
-    pub(super) fn handle_bell_tick(&mut self) -> Task<Message> {
+    pub(in crate::ui) fn handle_bell_tick(&mut self) -> Task<Message> {
         self.bell_flashes.tick()
     }
 
-    pub(super) fn handle_pty_input(&mut self, bytes: Vec<u8>) -> Task<Message> {
+    pub(in crate::ui) fn handle_pty_input(&mut self, bytes: Vec<u8>) -> Task<Message> {
         if let Some(tab) = self.active_tab_mut() {
             tab.write_input(&bytes);
             if tab.is_claude
@@ -603,27 +319,27 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_scroll(&mut self, delta: i32) -> Task<Message> {
+    pub(in crate::ui) fn handle_scroll(&mut self, delta: i32) -> Task<Message> {
         if let Some(tab) = self.active_tab_mut() {
             tab.scroll(delta);
         }
         Task::none()
     }
 
-    pub(super) fn handle_scroll_to(&mut self, offset: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_scroll_to(&mut self, offset: usize) -> Task<Message> {
         if let Some(tab) = self.active_tab_mut() {
             tab.scroll_to(offset);
         }
         Task::none()
     }
 
-    pub(super) fn handle_new_tab(&mut self) -> Task<Message> {
+    pub(in crate::ui) fn handle_new_tab(&mut self) -> Task<Message> {
         let (id, task) = self.spawn_tab(false, AgentRank::Home, None, None, None, None, None, None);
         self.focus_tab(id);
         task
     }
 
-    pub(super) fn handle_spawn_agent(&mut self) -> Task<Message> {
+    pub(in crate::ui) fn handle_spawn_agent(&mut self) -> Task<Message> {
         match self.active_rank() {
             Some(AgentRank::Home) => {
                 let Some(size) = self.window_size else {
@@ -654,7 +370,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_spawn_child(&mut self) -> Task<Message> {
+    pub(in crate::ui) fn handle_spawn_child(&mut self) -> Task<Message> {
         match self.active_rank() {
             Some(AgentRank::Home) => {
                 let Some(size) = self.window_size else {
@@ -682,7 +398,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_navigate_sibling(&mut self, delta: i32) -> Task<Message> {
+    pub(in crate::ui) fn handle_navigate_sibling(&mut self, delta: i32) -> Task<Message> {
         let order = self.tab_display_order();
         if let Some(idx) = order.iter().position(|&id| id == self.active_tab_id) {
             let new_idx = (idx as i32 + delta)
@@ -692,7 +408,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_navigate_rank(&mut self, delta: i32) -> Task<Message> {
+    pub(in crate::ui) fn handle_navigate_rank(&mut self, delta: i32) -> Task<Message> {
         if delta > 0 {
             if let Some(child) = self.first_child(self.active_tab_id) {
                 self.focus_tab(child);
@@ -707,7 +423,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_focus_previous_tab(&mut self) -> Task<Message> {
+    pub(in crate::ui) fn handle_focus_previous_tab(&mut self) -> Task<Message> {
         if let Some(prev) = self.prev_active_tab_id {
             if self.tabs.iter().any(|t| t.id == prev) {
                 self.focus_tab(prev);
@@ -716,7 +432,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_next_idle(&mut self) -> Task<Message> {
+    pub(in crate::ui) fn handle_next_idle(&mut self) -> Task<Message> {
         let order = self.tab_display_order();
         let cur = order.iter().position(|&id| id == self.active_tab_id).unwrap_or(0);
 
@@ -742,7 +458,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_pending_input(&mut self, key: PendingKey) -> Task<Message> {
+    pub(in crate::ui) fn handle_pending_input(&mut self, key: PendingKey) -> Task<Message> {
         let tab_id = self.active_tab_id;
         let tab = self.tabs.iter_mut().find(|t| t.id == tab_id);
         let Some(tab) = tab else { return Task::none() };
@@ -799,11 +515,11 @@ impl App {
         }
     }
 
-    pub(super) fn handle_close_tab(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_close_tab(&mut self, tab_id: usize) -> Task<Message> {
         self.close_tab(tab_id)
     }
 
-    pub(super) fn handle_mcp_close_tab(
+    pub(in crate::ui) fn handle_mcp_close_tab(
         &mut self,
         requesting_tab_id: usize,
         target_tab_id: usize,
@@ -888,14 +604,14 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_select_tab(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_select_tab(&mut self, tab_id: usize) -> Task<Message> {
         if self.tabs.iter().any(|t| t.id == tab_id) {
             self.focus_tab(tab_id);
         }
         Task::none()
     }
 
-    pub(super) fn handle_select_tab_by_index(&mut self, index: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_select_tab_by_index(&mut self, index: usize) -> Task<Message> {
         let assignments = self.tab_number_assignments();
         if let Some((&tab_id, _)) = assignments.iter().find(|&(_, &n)| n == index) {
             self.focus_tab(tab_id);
@@ -903,7 +619,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_toggle_fold_tab(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_toggle_fold_tab(&mut self, tab_id: usize) -> Task<Message> {
         let foldable = self.tabs.iter()
             .find(|t| t.id == tab_id)
             .is_some_and(|t| t.is_claude && t.rank != AgentRank::Home);
@@ -918,21 +634,21 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_set_selection(&mut self, sel: Option<Selection>) -> Task<Message> {
+    pub(in crate::ui) fn handle_set_selection(&mut self, sel: Option<Selection>) -> Task<Message> {
         if let Some(tab) = self.active_tab_mut() {
             tab.set_selection(sel);
         }
         Task::none()
     }
 
-    pub(super) fn handle_update_selection(&mut self, point: GridPoint, side: Side) -> Task<Message> {
+    pub(in crate::ui) fn handle_update_selection(&mut self, point: GridPoint, side: Side) -> Task<Message> {
         if let Some(tab) = self.active_tab_mut() {
             tab.update_selection(point, side);
         }
         Task::none()
     }
 
-    pub(super) fn handle_clipboard_load_result(
+    pub(in crate::ui) fn handle_clipboard_load_result(
         &mut self,
         tab_id: usize,
         response: Option<String>,
@@ -945,7 +661,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_open_pr(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_open_pr(&mut self, tab_id: usize) -> Task<Message> {
         if let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) {
             if let (Some(pr), Some(dir)) = (tab.pr_number(), &tab.project_dir) {
                 if let Some(slug) = crate::links::github_slug_for_dir(dir) {
@@ -957,7 +673,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_tab_ready(
+    pub(in crate::ui) fn handle_tab_ready(
         &mut self,
         tab_id: usize,
         worktree_dir: Option<PathBuf>,
@@ -970,7 +686,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_mcp_list_tabs(&mut self, requesting_tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_mcp_list_tabs(&mut self, requesting_tab_id: usize) -> Task<Message> {
         let is_home = self.tabs.iter()
             .find(|t| t.id == requesting_tab_id)
             .is_some_and(|t| t.rank == AgentRank::Home);

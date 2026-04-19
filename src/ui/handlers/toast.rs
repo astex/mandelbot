@@ -3,10 +3,10 @@ use iced::Task;
 use crate::tab::AgentRank;
 use crate::toast::{self, Toast};
 
-use super::{App, Message};
+use super::super::{App, Message};
 
 impl App {
-    pub(super) fn handle_show_toast(
+    pub(in crate::ui) fn handle_show_toast(
         &mut self,
         source_tab_id: usize,
         message: String,
@@ -25,7 +25,7 @@ impl App {
         toast::schedule_dismiss(id)
     }
 
-    pub(super) fn handle_focus_from_toast(&mut self, toast_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_focus_from_toast(&mut self, toast_id: usize) -> Task<Message> {
         let Some(idx) = self.toasts.iter().position(|t| t.id == toast_id) else {
             return Task::none();
         };
@@ -39,12 +39,12 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_dismiss_toast(&mut self, toast_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_dismiss_toast(&mut self, toast_id: usize) -> Task<Message> {
         self.toasts.retain(|t| t.id != toast_id);
         Task::none()
     }
 
-    pub(super) fn handle_spawn_from_toast(&mut self, toast_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_spawn_from_toast(&mut self, toast_id: usize) -> Task<Message> {
         let Some(idx) = self.toasts.iter().position(|t| t.id == toast_id) else {
             return Task::none();
         };

@@ -1,11 +1,11 @@
 use iced::Task;
 
-use super::{
+use super::super::{
     terminal_size_with_reserved, App, CheckpointReason, Message, TimelineDir, TimelineMode,
 };
 
 impl App {
-    pub(super) fn handle_toggle_timeline(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_toggle_timeline(&mut self, tab_id: usize) -> Task<Message> {
         let mut opened = false;
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             tab.timeline_visible = !tab.timeline_visible;
@@ -53,7 +53,7 @@ impl App {
         Task::batch([ckpt_task, scroll_task])
     }
 
-    pub(super) fn handle_timeline_scrub(
+    pub(in crate::ui) fn handle_timeline_scrub(
         &mut self,
         tab_id: usize,
         dir: TimelineDir,
@@ -79,7 +79,7 @@ impl App {
         Task::none()
     }
 
-    pub(super) fn handle_timeline_activate(
+    pub(in crate::ui) fn handle_timeline_activate(
         &mut self,
         tab_id: usize,
         mode: TimelineMode,

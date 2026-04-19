@@ -19,11 +19,7 @@ use crate::theme::TerminalTheme;
 use crate::toast::Toast;
 use crate::widget::terminal::{self, TerminalWidget};
 
-pub mod checkpoint;
-pub mod tabs;
-pub mod timeline;
-pub mod toast;
-pub mod window;
+pub mod handlers;
 
 pub(crate) const PADDING: f32 = 4.0;
 pub(crate) const TAB_BAR_WIDTH: f32 = 400.0;

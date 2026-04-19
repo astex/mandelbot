@@ -10,17 +10,17 @@ use crate::checkpoint::{
 };
 use crate::tab::AgentRank;
 
-use super::{
+use super::super::{
     spawn_blocking_discard, spawn_blocking_task, App, CheckpointReason, ForkAction, Message,
 };
 
 
 impl App {
-    pub(super) fn handle_mcp_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_mcp_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
         self.kick_checkpoint(tab_id, CheckpointReason::Mcp)
     }
 
-    pub(super) fn handle_auto_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_auto_checkpoint(&mut self, tab_id: usize) -> Task<Message> {
         if self.config.auto_checkpoint {
             self.kick_checkpoint(tab_id, CheckpointReason::Auto)
         } else {
@@ -28,7 +28,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_checkpoint_done(
+    pub(in crate::ui) fn handle_checkpoint_done(
         &mut self,
         tab_id: usize,
         reason: CheckpointReason,
@@ -37,7 +37,7 @@ impl App {
         self.finish_checkpoint(tab_id, reason, result)
     }
 
-    pub(super) fn handle_fork_done(
+    pub(in crate::ui) fn handle_fork_done(
         &mut self,
         source_tab_id: usize,
         action: ForkAction,
@@ -46,7 +46,7 @@ impl App {
         self.finish_fork(source_tab_id, action, result)
     }
 
-    pub(super) fn handle_undo(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_undo(&mut self, tab_id: usize) -> Task<Message> {
         let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
             return Task::none();
         };
@@ -74,7 +74,7 @@ impl App {
         )
     }
 
-    pub(super) fn handle_redo(&mut self, tab_id: usize) -> Task<Message> {
+    pub(in crate::ui) fn handle_redo(&mut self, tab_id: usize) -> Task<Message> {
         let Some(tab) = self.tabs.iter().find(|t| t.id == tab_id) else {
             return Task::none();
         };
@@ -92,7 +92,7 @@ impl App {
         )
     }
 
-    pub(super) fn handle_mcp_replace(
+    pub(in crate::ui) fn handle_mcp_replace(
         &mut self,
         tab_id: usize,
         ckpt_id: String,
@@ -100,7 +100,7 @@ impl App {
         self.handle_replace(tab_id, ckpt_id)
     }
 
-    pub(super) fn handle_mcp_fork(
+    pub(in crate::ui) fn handle_mcp_fork(
         &mut self,
         tab_id: usize,
         ckpt_id: String,
@@ -109,7 +109,7 @@ impl App {
         self.handle_fork(tab_id, ckpt_id, prompt)
     }
 
-    pub(super) fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
+    pub(in crate::ui) fn handle_replace(&mut self, tab_id: usize, ckpt_id: String) -> Task<Message> {
         if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
             t.redo_path.clear();
         }
@@ -120,7 +120,7 @@ impl App {
         )
     }
 
-    pub(super) fn handle_fork(
+    pub(in crate::ui) fn handle_fork(
         &mut self,
         tab_id: usize,
         ckpt_id: String,

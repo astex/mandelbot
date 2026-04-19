@@ -4,10 +4,10 @@ use iced::{Size, Task};
 
 use crate::tab::AgentRank;
 
-use super::{terminal_size_with_reserved, App, Message};
+use super::super::{terminal_size_with_reserved, App, Message};
 
 impl App {
-    pub(super) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
+    pub(in crate::ui) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
         if self.window_size.is_none() {
             self.window_size = Some(size);
             let home = std::env::var("HOME")
