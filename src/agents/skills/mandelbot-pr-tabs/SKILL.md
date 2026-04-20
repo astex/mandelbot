@@ -86,7 +86,7 @@ If the review-requested list is non-empty, spawn **one** task tab that will fan 
 
 > You are the "PRs awaiting my review" coordinator. Do two things:
 >
-> 1. Fan out one child tab per PR below. If the list is long or has obvious clusters (shared topic, stacked PRs, same author), you may group them the same way the authored tree does — spawn a subgroup coordinator that recursively fans out. Otherwise, go flat. Each leaf's prompt should tell the child to `gh pr checkout <number>`, read the PR description and diff, set an informative tab title, and wait for the user without taking action.
+> 1. For each PR below, call `spawn_tab` with a prompt that tells the child to `gh pr checkout <number>`, read the PR description and diff, set an informative tab title, and wait for the user without taking action.
 >
 >    PRs awaiting review:
 >    - #<number> — <title> (by @<author>) — <url>
