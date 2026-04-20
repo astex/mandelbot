@@ -24,7 +24,7 @@ impl App {
             };
             let (id, task) = self.spawn_tab(true, AgentRank::Home, Some(home), None, first_run_prompt, None, None, None);
             self.focus_tab(id);
-            if let Some(mut tab) = self.tabs.snapshot(self.active_tab_id) {
+            if let Some(mut tab) = self.tabs.snapshot(self.tabs.active_id()) {
                 tab.title = Some("home".into());
                 self.tabs.write(tab);
             }

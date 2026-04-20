@@ -297,6 +297,29 @@ impl Tabs {
         }
     }
 
+    /// Find a sensible new active tab after closing `closing_ids` (a contiguous
+    /// removal anchored at vec position `anchor_idx` under `closing_parent_id`).
+    /// Prefers the previous sibling, then the next sibling, then the parent.
+    /// Pure read against the current tab vec — call after the structural close.
+    pub fn pick_focus_after_close(
+        &self,
+        closing_parent_id: Option<usize>,
+        anchor_idx: usize,
+        closing_ids: &[usize],
+    ) -> Option<usize> {
+        let sibling_at = |pos: usize| -> Option<usize> {
+            self.get_by_index(pos).and_then(|t| {
+                (t.parent_id == closing_parent_id && !closing_ids.contains(&t.id))
+                    .then_some(t.id)
+            })
+        };
+        let prev = (0..anchor_idx).rev().find_map(sibling_at);
+        let next = (anchor_idx..self.len()).find_map(sibling_at);
+        prev.or(next).or_else(|| {
+            closing_parent_id.filter(|p| !closing_ids.contains(p))
+        })
+    }
+
     /// Remove `tab_id`, promoting its first child into its slot in the parent
     /// chain (inheriting its depth) and reparenting remaining children under
     /// the promoted child. No-op if `tab_id` is unknown.

@@ -14,10 +14,10 @@ impl App {
         if let Some(pid) = self.tabs.get(id).and_then(|t| t.parent_id) {
             self.tabs.unfold_ancestors(pid);
         }
-        if id != self.active_tab_id {
-            self.prev_active_tab_id = Some(self.active_tab_id);
+        let cur = self.tabs.active_id();
+        if id != cur {
+            self.prev_active_tab_id = Some(cur);
         }
-        self.active_tab_id = id;
         self.tabs.set_active(id);
     }
 
@@ -191,30 +191,6 @@ impl App {
         }
     }
 
-    pub(super) fn pick_focus_after_close(
-        &self,
-        closing_parent_id: Option<usize>,
-        anchor_idx: usize,
-        closing_ids: &[usize],
-    ) -> Option<usize> {
-        let sibling_at =
-            |pos: usize| -> Option<usize> {
-                self.tabs.get_by_index(pos).and_then(|t| {
-                    (t.parent_id == closing_parent_id
-                        && !closing_ids.contains(&t.id))
-                    .then_some(t.id)
-                })
-            };
-        let prev = (0..anchor_idx)
-            .rev()
-            .find_map(sibling_at);
-        let next = (anchor_idx..self.tabs.len())
-            .find_map(sibling_at);
-        prev.or(next).or_else(|| {
-            closing_parent_id.filter(|p| !closing_ids.contains(p))
-        })
-    }
-
     pub(in crate::ui) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         let Some(idx) = self.tabs.index_of(tab_id) else {
             return Task::none();
@@ -236,8 +212,8 @@ impl App {
             return iced::exit();
         }
 
-        if self.active_tab_id == tab_id {
-            let new_id = self
+        if self.tabs.active_id() == tab_id {
+            let new_id = self.tabs
                 .pick_focus_after_close(closing_parent_id, idx, &[tab_id])
                 .unwrap_or_else(|| {
                     let fallback = idx.min(self.tabs.len() - 1);
