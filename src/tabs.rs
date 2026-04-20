@@ -56,12 +56,9 @@ impl Tabs {
             order.push(home.id);
             // Iterative preorder DFS. Push children in reverse so the leftmost
             // pops first. Folded tabs are recorded but their subtree is skipped.
-            let mut stack: Vec<usize> = Vec::new();
-            if !self.folded.contains(&home.id) {
-                for &c in self.children_of(Some(home.id)).iter().rev() {
-                    stack.push(c);
-                }
-            }
+            // Home is never folded, so its children always seed the traversal.
+            let mut stack: Vec<usize> =
+                self.children_of(Some(home.id)).iter().rev().copied().collect();
             while let Some(id) = stack.pop() {
                 let Some(tab) = self.get(id) else { continue };
                 if !tab.is_claude {
