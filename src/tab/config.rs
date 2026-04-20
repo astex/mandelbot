@@ -220,6 +220,8 @@ const SKILL_MANDELBOT_GIT_MONITOR: &str =
     include_str!("../agents/skills/mandelbot-git-monitor/SKILL.md");
 const SKILL_MANDELBOT_GIT_MONITOR_WATCH: &str =
     include_str!("../agents/skills/mandelbot-git-monitor/watch-prs.sh");
+const SKILL_MANDELBOT_PR_TABS: &str =
+    include_str!("../agents/skills/mandelbot-pr-tabs/SKILL.md");
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -530,6 +532,16 @@ pub(super) fn write_plugin_dir(
             SKILL_MANDELBOT_GIT_MONITOR_WATCH,
         )
         .expect("failed to write mandelbot-git-monitor watch script");
+
+        let pr_tabs_dir =
+            plugin_dir.join("skills").join("mandelbot-pr-tabs");
+        std::fs::create_dir_all(&pr_tabs_dir)
+            .expect("failed to create mandelbot-pr-tabs skill dir");
+        std::fs::write(
+            pr_tabs_dir.join("SKILL.md"),
+            SKILL_MANDELBOT_PR_TABS,
+        )
+        .expect("failed to write mandelbot-pr-tabs skill");
     }
 
     plugin_dir
