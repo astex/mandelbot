@@ -35,12 +35,14 @@ gh pr list --author @me --state open \
   --limit 100
 ```
 
-**Awaiting review from the user** (across all repos the user can see):
+**Awaiting review from the user** (in the current repo):
 
 ```bash
-gh search prs --review-requested=@me --state=open \
-  --json number,title,url,repository,author --limit 100
+gh pr list --search "review-requested:@me" --state open \
+  --json number,title,url,author --limit 100
 ```
+
+Both queries are scoped to the current repo — `gh pr list` defaults to the repo of the current working directory. Do not cross repo boundaries; the spawned tabs inherit this worktree and can only `gh pr checkout` PRs from this repo.
 
 If either list is empty, skip the corresponding section below — don't spawn empty coordinator tabs.
 
@@ -87,14 +89,14 @@ If the review-requested list is non-empty, spawn **one** task tab that will fan 
 > 1. For each PR below, call `spawn_tab` with a prompt that tells the child to `gh pr checkout <number>`, read the PR description and diff, set an informative tab title, and wait for the user without taking action.
 >
 >    PRs awaiting review:
->    - <repo> #<number> — <title> (by @<author>) — <url>
+>    - #<number> — <title> (by @<author>) — <url>
 >    - ...
 >
 > 2. Once all child tabs are spawned, invoke `/mandelbot-git-monitor` so new review requests in this repo surface as toasts.
 >
 > Set your tab title to "Reviews" and stay alive.
 
-Do **not** group the review-requested PRs — they come from different repos and authors, and the user wants one tab per PR plus the monitor.
+Do **not** group the review-requested PRs — the user wants one tab per PR plus the monitor.
 
 ### 5. Report back
 
