@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::tab::{AgentRank, TabMeta, TerminalTab};
+use crate::tab::{TabMeta, TerminalTab};
 
 /// Collection of `TerminalTab`s with O(1) id lookup, indexed children, and
 /// cached per-frame views (`display_order`, `number_assignments`).
@@ -51,8 +51,11 @@ impl Tabs {
     }
 
     fn compute_display_order(&self) -> Vec<usize> {
-        // Home is always tabs[0] and always visible.
-        let home_id = self.tabs[0].id;
+        // Home is always tabs[0] and always visible — but startup/snapshot
+        // load may recompute before the first push, so tolerate emptiness.
+        let Some(home_id) = self.tabs.first().map(|t| t.id) else {
+            return Vec::new();
+        };
         let mut order = vec![home_id];
         // Iterative preorder DFS. Push children in reverse so the leftmost
         // pops first. Folded tabs are recorded but their subtree is skipped.
@@ -80,8 +83,12 @@ impl Tabs {
         let visible: &[usize] = &self.display_order;
         let is_visible = |id: usize| visible.contains(&id);
 
-        // Home is always tabs[0] and always visible.
-        let mut eligible: HashSet<usize> = HashSet::from([self.tabs[0].id]);
+        // Home is always tabs[0] and always visible — but guard against
+        // recompute-before-first-push (see compute_display_order).
+        let Some(home_id) = self.tabs.first().map(|t| t.id) else {
+            return HashMap::new();
+        };
+        let mut eligible: HashSet<usize> = HashSet::from([home_id]);
 
         if let Some(shell_id) = visible.iter().copied().find(|&id| {
             self.get(id).map(|t| !t.is_claude).unwrap_or(false)
