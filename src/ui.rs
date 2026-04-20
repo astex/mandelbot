@@ -230,7 +230,6 @@ pub struct App {
     parent_socket_path: PathBuf,
     response_writers: ResponseWriters,
     bell_flashes: FlashState,
-    folded_tabs: HashSet<usize>,
     ckpt_store: crate::checkpoint_store::CheckpointStore,
     toasts: Vec<Toast>,
     next_toast_id: usize,
@@ -272,7 +271,6 @@ impl App {
             parent_socket_path,
             response_writers,
             bell_flashes: FlashState::default(),
-            folded_tabs: HashSet::new(),
             ckpt_store,
             toasts: Vec::new(),
             next_toast_id: 0,
@@ -359,8 +357,6 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         let active_bg = self.terminal_theme.bg;
 
-        let display_order = self.tab_display_order();
-        let number_assignments = self.tab_number_assignments();
         let toast_elements: Vec<Element<'_, Message>> = self
             .toasts
             .iter()
@@ -369,11 +365,7 @@ impl App {
 
         let tab_bar = crate::widget::tab_bar::TabBar {
             tabs: &self.tabs,
-            active_tab_id: self.active_tab_id,
-            display_order: &display_order,
-            number_assignments: &number_assignments,
             bell_flashes: &self.bell_flashes,
-            folded_tabs: &self.folded_tabs,
             terminal_theme: &self.terminal_theme,
             config: &self.config,
         }

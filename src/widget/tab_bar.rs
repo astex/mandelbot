@@ -1,8 +1,6 @@
 //! Left-hand tab bar: agent tree (Home → Projects → Tasks), shell tabs,
 //! and any toasts anchored to the bottom.
 
-use std::collections::{HashMap, HashSet};
-
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Fill, Font, Theme};
 
@@ -18,18 +16,14 @@ const SUFFIX_SPACING: f32 = 6.0;
 
 /// View-model for the tab bar: bundles the `App` refs the view reads from
 /// and hangs the render helpers off a single `self`.
-pub struct TabBar<'a, 'b> {
+pub struct TabBar<'a> {
     pub tabs: &'a Tabs,
-    pub active_tab_id: usize,
-    pub display_order: &'b [usize],
-    pub number_assignments: &'b HashMap<usize, usize>,
     pub bell_flashes: &'a FlashState,
-    pub folded_tabs: &'a HashSet<usize>,
     pub terminal_theme: &'a TerminalTheme,
     pub config: &'a Config,
 }
 
-impl<'a, 'b> TabBar<'a, 'b> {
+impl<'a> TabBar<'a> {
     pub fn view(self, toast_elements: Vec<Element<'a, Message>>) -> Element<'a, Message> {
         let inactive_bg = self.terminal_theme.black;
         let has_agents = self.tabs.iter().any(|t| t.is_claude);
@@ -39,7 +33,8 @@ impl<'a, 'b> TabBar<'a, 'b> {
         tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
 
         // Agent tree: Home → Projects → Tasks.
-        for &tab_id in self.display_order.iter() {
+        let assignments = self.tabs.number_assignments();
+        for &tab_id in self.tabs.display_order().iter() {
             let Some(tab) = self.tab_by_id(tab_id) else { continue };
             if !tab.is_claude {
                 continue;
@@ -48,13 +43,13 @@ impl<'a, 'b> TabBar<'a, 'b> {
                 tab_col = tab_col.push(self.separator());
             }
             let indent = tab.depth as f32 * INDENT_STEP;
-            let num = self.number_assignments.get(&tab.id).copied();
+            let num = assignments.get(&tab.id).copied();
             tab_col = tab_col.push(self.tab_button(tab, num, indent));
         }
 
         // Shell tabs, flat.
         let mut first_shell = true;
-        for &tab_id in self.display_order.iter() {
+        for &tab_id in self.tabs.display_order().iter() {
             let Some(tab) = self.tab_by_id(tab_id) else { continue };
             if tab.is_claude {
                 continue;
@@ -67,7 +62,7 @@ impl<'a, 'b> TabBar<'a, 'b> {
                     tab_col = tab_col.push(vspace(TAB_GROUP_GAP));
                 }
             }
-            let num = self.number_assignments.get(&tab.id).copied();
+            let num = assignments.get(&tab.id).copied();
             tab_col = tab_col.push(self.tab_button(tab, num, 0.0));
         }
 
@@ -126,10 +121,10 @@ impl<'a, 'b> TabBar<'a, 'b> {
         indent: f32,
     ) -> Element<'a, Message> {
         let fg = self.terminal_theme.fg;
-        let is_active = tab.id == self.active_tab_id;
+        let is_active = tab.id == self.tabs.active_id();
         let is_foldable = tab.is_claude && tab.rank != AgentRank::Home;
         let has_children = is_foldable && self.has_claude_children(tab.id);
-        let is_folded = self.folded_tabs.contains(&tab.id);
+        let is_folded = self.tabs.is_folded(tab.id);
 
         let base_bg = if is_active { self.terminal_theme.bg } else { self.terminal_theme.black };
         let bg = self.bell_flashes.blend(tab.id, base_bg, self.terminal_theme.yellow);
