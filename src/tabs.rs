@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::tab::{TabMeta, TerminalTab};
+use crate::tab::{AgentRank, TabMeta, TerminalTab};
 
 /// Collection of `TerminalTab`s with O(1) id lookup, indexed children, and
 /// cached per-frame views (`display_order`, `number_assignments`).
@@ -295,6 +295,30 @@ impl Tabs {
                 None => break,
             }
         }
+    }
+
+    pub fn active(&self) -> Option<&TerminalTab> {
+        self.get(self.active_id)
+    }
+
+    pub fn first_child(&self, parent_id: usize) -> Option<usize> {
+        self.children_of(Some(parent_id))
+            .iter()
+            .copied()
+            .find(|&id| self.get(id).is_some_and(|t| t.is_claude))
+    }
+
+    pub fn find_project_for_dir(&self, dir: &std::path::Path) -> Option<usize> {
+        self.iter()
+            .find(|t| t.rank == AgentRank::Project && t.project_dir.as_deref() == Some(dir))
+            .map(|t| t.id)
+    }
+
+    /// Resolve the project directory associated with `tab_id` by following
+    /// `project_id` to the owning Project tab and returning its `project_dir`.
+    pub fn project_dir_for(&self, tab_id: usize) -> Option<std::path::PathBuf> {
+        let project_id = self.get(tab_id)?.project_id?;
+        self.get(project_id)?.project_dir.clone()
     }
 
     /// Find a sensible new active tab after closing `closing_ids` (a contiguous

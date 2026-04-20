@@ -10,10 +10,6 @@ use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use super::super::{terminal_size, App, Message, PendingKey};
 
 impl App {
-    pub(in crate::ui) fn active_tab(&self) -> Option<&TerminalTab> {
-        self.tabs.get(self.tabs.active_id())
-    }
-
     pub(in crate::ui) fn handle_tab_output(
         &mut self,
         tab_id: usize,
@@ -131,7 +127,7 @@ impl App {
                         return Task::none();
                     };
                     let canonical = std::fs::canonicalize(&wd).unwrap_or(wd);
-                    if let Some(existing) = self.find_project_for_dir(&canonical) {
+                    if let Some(existing) = self.tabs.find_project_for_dir(&canonical) {
                         self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": existing}));
                         self.focus_tab(existing);
                         return Task::none();
@@ -144,7 +140,7 @@ impl App {
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
             AgentRank::Task => {
-                let dir = self.project_dir_for_tab(requesting_tab_id);
+                let dir = self.tabs.project_dir_for(requesting_tab_id);
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
         };
@@ -228,14 +224,14 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_scroll(&mut self, delta: i32) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.scroll(delta);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_scroll_to(&mut self, offset: usize) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.scroll_to(offset);
         }
         Task::none()
@@ -251,9 +247,9 @@ impl App {
         match self.active_rank() {
             Some(AgentRank::Home) => self.spawn_pending_project_tab(),
             Some(AgentRank::Project | AgentRank::Task) => {
-                let parent_id = self.active_tab()
+                let parent_id = self.tabs.active()
                     .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
-                let project_dir = self.project_dir_for_tab(self.tabs.active_id());
+                let project_dir = self.tabs.project_dir_for(self.tabs.active_id());
                 if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
                     let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None, None, None, None);
                     self.focus_tab(id);
@@ -270,7 +266,7 @@ impl App {
         match self.active_rank() {
             Some(AgentRank::Home) => self.spawn_pending_project_tab(),
             Some(AgentRank::Project | AgentRank::Task) => {
-                if let Some(dir) = self.project_dir_for_tab(self.tabs.active_id()) {
+                if let Some(dir) = self.tabs.project_dir_for(self.tabs.active_id()) {
                     let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.tabs.active_id()), None, None, None, None);
                     self.focus_tab(id);
                     task
@@ -309,11 +305,11 @@ impl App {
 
     pub(in crate::ui) fn handle_navigate_rank(&mut self, delta: i32) -> Task<Message> {
         if delta > 0 {
-            if let Some(child) = self.first_child(self.tabs.active_id()) {
+            if let Some(child) = self.tabs.first_child(self.tabs.active_id()) {
                 self.focus_tab(child);
             }
         } else {
-            if let Some(tab) = self.active_tab() {
+            if let Some(tab) = self.tabs.active() {
                 if let Some(pid) = tab.parent_id {
                     self.focus_tab(pid);
                 }
@@ -388,7 +384,7 @@ impl App {
                 let canonical = std::fs::canonicalize(&path)
                     .unwrap_or(path);
 
-                if let Some(existing) = self.find_project_for_dir(&canonical) {
+                if let Some(existing) = self.tabs.find_project_for_dir(&canonical) {
                     self.focus_tab(existing);
                     return self.close_tab(tab_id);
                 }
@@ -525,14 +521,14 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_set_selection(&mut self, sel: Option<Selection>) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.set_selection(sel);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_update_selection(&mut self, point: GridPoint, side: Side) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.update_selection(point, side);
         }
         Task::none()

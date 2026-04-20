@@ -370,7 +370,7 @@ impl App {
         .view(toast_elements);
 
         let (term_element, timeline_element): (Element<'_, Message>, Option<Element<'_, Message>>) =
-            if let Some(tab) = self.active_tab() {
+            if let Some(tab) = self.tabs.active() {
                 let term: Element<'_, Message> = TerminalWidget::new(tab, &self.config).into();
                 if tab.timeline_visible {
                     let timeline = crate::widget::timeline::view(

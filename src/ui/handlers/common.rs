@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use uuid::Uuid;
 
@@ -160,26 +160,7 @@ impl App {
     }
 
     pub(super) fn active_rank(&self) -> Option<AgentRank> {
-        self.active_tab().map(|t| t.rank)
-    }
-
-    pub(super) fn project_dir_for_tab(&self, tab_id: usize) -> Option<PathBuf> {
-        let project_id = self.tabs.get(tab_id)?.project_id?;
-        self.tabs.get(project_id)?.project_dir.clone()
-    }
-
-    pub(super) fn first_child(&self, tab_id: usize) -> Option<usize> {
-        self.tabs
-            .children_of(Some(tab_id))
-            .iter()
-            .copied()
-            .find(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
-    }
-
-    pub(super) fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
-        self.tabs.iter()
-            .find(|t| t.rank == AgentRank::Project && t.project_dir.as_deref() == Some(dir))
-            .map(|t| t.id)
+        self.tabs.active().map(|t| t.rank)
     }
 
     pub(super) fn respond_to_tab(&self, tab_id: usize, response: serde_json::Value) {
