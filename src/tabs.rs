@@ -461,4 +461,177 @@ mod tests {
         assert_eq!(tabs.children_of(Some(42)), &[] as &[usize]);
         assert_eq!(tabs.children_of(None), &[] as &[usize]);
     }
+
+    fn shell(id: usize, parent_id: Option<usize>) -> TerminalTab {
+        TerminalTab::new(id, 24, 80, false, AgentRank::Task, None, parent_id, 0, None)
+    }
+
+    fn project(id: usize, dir: &str) -> TerminalTab {
+        TerminalTab::new(
+            id, 24, 80, true, AgentRank::Project,
+            Some(std::path::PathBuf::from(dir)), None, 0, Some(id),
+        )
+    }
+
+    fn task_in_project(id: usize, parent_id: Option<usize>, project_id: usize, depth: usize) -> TerminalTab {
+        TerminalTab::new(id, 24, 80, true, AgentRank::Task, None, parent_id, depth, Some(project_id))
+    }
+
+    #[test]
+    fn has_claude_children_distinguishes_claude_from_shell() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(shell(2, Some(1)));
+        assert!(!tabs.has_claude_children(1));
+        tabs.push(tab(3, Some(1)));
+        assert!(tabs.has_claude_children(1));
+        assert!(!tabs.has_claude_children(99));
+    }
+
+    #[test]
+    fn unfold_ancestors_walks_chain() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(2)));
+        tabs.fold(1);
+        tabs.fold(2);
+        tabs.fold(3);
+        // unfold ancestors of 3 (3 itself, 2, 1)
+        tabs.unfold_ancestors(3);
+        assert!(!tabs.is_folded(1));
+        assert!(!tabs.is_folded(2));
+        assert!(!tabs.is_folded(3));
+    }
+
+    #[test]
+    fn unfold_ancestors_unknown_id_is_safe() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.unfold_ancestors(999); // no panic; loop exits when get returns None
+    }
+
+    #[test]
+    fn first_child_skips_shells() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(shell(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+        tabs.push(tab(4, Some(1)));
+        assert_eq!(tabs.first_child(1), Some(3));
+        assert_eq!(tabs.first_child(99), None);
+    }
+
+    #[test]
+    fn find_project_for_dir_matches_project_tabs_only() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(project(2, "/repo/a"));
+        tabs.push(project(3, "/repo/b"));
+        assert_eq!(tabs.find_project_for_dir(std::path::Path::new("/repo/b")), Some(3));
+        assert_eq!(tabs.find_project_for_dir(std::path::Path::new("/repo/missing")), None);
+    }
+
+    #[test]
+    fn project_dir_for_follows_project_id() {
+        let mut tabs = Tabs::new();
+        tabs.push(project(1, "/repo/a"));
+        tabs.push(task_in_project(2, Some(1), 1, 1));
+        assert_eq!(
+            tabs.project_dir_for(2),
+            Some(std::path::PathBuf::from("/repo/a")),
+        );
+        assert_eq!(tabs.project_dir_for(1), Some(std::path::PathBuf::from("/repo/a")));
+        assert_eq!(tabs.project_dir_for(99), None);
+    }
+
+    #[test]
+    fn active_returns_active_tab() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, None));
+        assert!(tabs.active().is_none());
+        tabs.set_active(1);
+        assert_eq!(tabs.active().map(|t| t.id), Some(1));
+        tabs.set_active(2);
+        assert_eq!(tabs.active().map(|t| t.id), Some(2));
+    }
+
+    #[test]
+    fn pick_focus_prefers_prev_sibling() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));      // idx 0
+        tabs.push(tab(2, Some(1)));   // idx 1
+        tabs.push(tab(3, Some(1)));   // idx 2 — closing this
+        tabs.push(tab(4, Some(1)));   // idx 3
+        let pick = tabs.pick_focus_after_close(Some(1), 2, &[3]);
+        assert_eq!(pick, Some(2));
+    }
+
+    #[test]
+    fn pick_focus_falls_back_to_next_sibling() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));   // idx 1 — closing
+        tabs.push(tab(3, Some(1)));   // idx 2
+        let pick = tabs.pick_focus_after_close(Some(1), 1, &[2]);
+        assert_eq!(pick, Some(3));
+    }
+
+    #[test]
+    fn pick_focus_falls_back_to_parent_when_no_siblings() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));   // idx 1 — closing
+        let pick = tabs.pick_focus_after_close(Some(1), 1, &[2]);
+        assert_eq!(pick, Some(1));
+    }
+
+    #[test]
+    fn pick_focus_returns_none_when_parent_also_closing() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        let pick = tabs.pick_focus_after_close(Some(1), 1, &[1, 2]);
+        assert_eq!(pick, None);
+    }
+
+    #[test]
+    fn close_with_promotion_promotes_first_child_and_reparents_rest() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));            // root
+        tabs.push(task_in_project(2, Some(1), 0, 1)); // closing
+        tabs.push(task_in_project(3, Some(2), 0, 2)); // promoted
+        tabs.push(task_in_project(4, Some(2), 0, 2)); // reparented under 3
+        tabs.push(task_in_project(5, Some(2), 0, 2)); // reparented under 3
+
+        tabs.close_with_promotion(2);
+
+        assert!(!tabs.contains(2));
+        // 3 took 2's slot (parent_id=1, depth=1)
+        let promoted = tabs.get(3).expect("3 still present");
+        assert_eq!(promoted.parent_id, Some(1));
+        assert_eq!(promoted.depth, 1);
+        // 4 and 5 now live under 3
+        assert_eq!(tabs.children_of(Some(3)), &[4, 5]);
+        assert_eq!(tabs.children_of(Some(1)), &[3]);
+    }
+
+    #[test]
+    fn close_with_promotion_no_children_just_removes() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.close_with_promotion(2);
+        assert!(!tabs.contains(2));
+        assert_eq!(tabs.children_of(Some(1)), &[] as &[usize]);
+    }
+
+    #[test]
+    fn close_with_promotion_unknown_id_is_noop() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.close_with_promotion(999);
+        assert_eq!(tabs.len(), 1);
+    }
 }
