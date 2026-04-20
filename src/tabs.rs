@@ -54,25 +54,31 @@ impl Tabs {
         let mut order = Vec::new();
         if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
             order.push(home.id);
-            self.collect_claude_descendants(home.id, &mut order);
+            // Iterative preorder DFS. Push children in reverse so the leftmost
+            // pops first. Folded tabs are recorded but their subtree is skipped.
+            let mut stack: Vec<usize> = Vec::new();
+            if !self.folded.contains(&home.id) {
+                for &c in self.children_of(Some(home.id)).iter().rev() {
+                    stack.push(c);
+                }
+            }
+            while let Some(id) = stack.pop() {
+                let Some(tab) = self.get(id) else { continue };
+                if !tab.is_claude {
+                    continue;
+                }
+                order.push(tab.id);
+                if !self.folded.contains(&tab.id) {
+                    for &c in self.children_of(Some(tab.id)).iter().rev() {
+                        stack.push(c);
+                    }
+                }
+            }
         }
         for tab in self.tabs.iter().filter(|t| !t.is_claude) {
             order.push(tab.id);
         }
         order
-    }
-
-    fn collect_claude_descendants(&self, parent_id: usize, order: &mut Vec<usize>) {
-        for &child_id in self.children_of(Some(parent_id)) {
-            let Some(tab) = self.get(child_id) else { continue };
-            if !tab.is_claude {
-                continue;
-            }
-            order.push(tab.id);
-            if !self.folded.contains(&tab.id) {
-                self.collect_claude_descendants(tab.id, order);
-            }
-        }
     }
 
     fn compute_number_assignments(&self) -> HashMap<usize, usize> {
