@@ -59,7 +59,7 @@ impl App {
             AgentRank::Home => return Task::none(),
             AgentRank::Project => (AgentRank::Task, source.project_dir.clone(), Some(source.id)),
             AgentRank::Task => {
-                let dir = self.project_dir_for_tab(source.id);
+                let dir = self.tabs.project_dir_for(source.id);
                 (AgentRank::Task, dir, Some(source.id))
             }
         };

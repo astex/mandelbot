@@ -10,10 +10,6 @@ use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use super::super::{terminal_size, App, Message, PendingKey};
 
 impl App {
-    pub(in crate::ui) fn active_tab(&self) -> Option<&TerminalTab> {
-        self.tabs.get(self.active_tab_id)
-    }
-
     pub(in crate::ui) fn handle_tab_output(
         &mut self,
         tab_id: usize,
@@ -131,7 +127,7 @@ impl App {
                         return Task::none();
                     };
                     let canonical = std::fs::canonicalize(&wd).unwrap_or(wd);
-                    if let Some(existing) = self.find_project_for_dir(&canonical) {
+                    if let Some(existing) = self.tabs.find_project_for_dir(&canonical) {
                         self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": existing}));
                         self.focus_tab(existing);
                         return Task::none();
@@ -144,7 +140,7 @@ impl App {
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
             AgentRank::Task => {
-                let dir = self.project_dir_for_tab(requesting_tab_id);
+                let dir = self.tabs.project_dir_for(requesting_tab_id);
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
         };
@@ -211,7 +207,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_pty_input(&mut self, bytes: Vec<u8>) -> Task<Message> {
-        let tab_id = self.active_tab_id;
+        let tab_id = self.tabs.active_id();
         let transition = if let Some(tab) = self.tabs.get(tab_id) {
             tab.write_input(&bytes);
             tab.is_claude && tab.status == AgentStatus::NeedsReview && bytes == b"\r"
@@ -228,14 +224,14 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_scroll(&mut self, delta: i32) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.scroll(delta);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_scroll_to(&mut self, offset: usize) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.scroll_to(offset);
         }
         Task::none()
@@ -251,9 +247,9 @@ impl App {
         match self.active_rank() {
             Some(AgentRank::Home) => self.spawn_pending_project_tab(),
             Some(AgentRank::Project | AgentRank::Task) => {
-                let parent_id = self.active_tab()
+                let parent_id = self.tabs.active()
                     .and_then(|t| if t.rank == AgentRank::Task { t.parent_id } else { Some(t.id) });
-                let project_dir = self.project_dir_for_tab(self.active_tab_id);
+                let project_dir = self.tabs.project_dir_for(self.tabs.active_id());
                 if let (Some(pid), Some(dir)) = (parent_id, project_dir) {
                     let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(pid), None, None, None, None);
                     self.focus_tab(id);
@@ -270,8 +266,8 @@ impl App {
         match self.active_rank() {
             Some(AgentRank::Home) => self.spawn_pending_project_tab(),
             Some(AgentRank::Project | AgentRank::Task) => {
-                if let Some(dir) = self.project_dir_for_tab(self.active_tab_id) {
-                    let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.active_tab_id), None, None, None, None);
+                if let Some(dir) = self.tabs.project_dir_for(self.tabs.active_id()) {
+                    let (id, task) = self.spawn_tab(true, AgentRank::Task, Some(dir), Some(self.tabs.active_id()), None, None, None, None);
                     self.focus_tab(id);
                     task
                 } else {
@@ -287,7 +283,7 @@ impl App {
             return Task::none();
         };
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-        let home_id = self.active_tab_id;
+        let home_id = self.tabs.active_id();
         let id = self.next_tab_id;
         self.next_tab_id += 1;
         let tab = TerminalTab::new_pending(id, rows, cols, home_id);
@@ -298,7 +294,7 @@ impl App {
 
     pub(in crate::ui) fn handle_navigate_sibling(&mut self, delta: i32) -> Task<Message> {
         let order = self.tabs.display_order();
-        if let Some(idx) = order.iter().position(|&id| id == self.active_tab_id) {
+        if let Some(idx) = order.iter().position(|&id| id == self.tabs.active_id()) {
             let new_idx = (idx as i32 + delta)
                 .rem_euclid(order.len() as i32) as usize;
             let target = order[new_idx];
@@ -309,11 +305,11 @@ impl App {
 
     pub(in crate::ui) fn handle_navigate_rank(&mut self, delta: i32) -> Task<Message> {
         if delta > 0 {
-            if let Some(child) = self.first_child(self.active_tab_id) {
+            if let Some(child) = self.tabs.first_child(self.tabs.active_id()) {
                 self.focus_tab(child);
             }
         } else {
-            if let Some(tab) = self.active_tab() {
+            if let Some(tab) = self.tabs.active() {
                 if let Some(pid) = tab.parent_id {
                     self.focus_tab(pid);
                 }
@@ -333,7 +329,7 @@ impl App {
 
     pub(in crate::ui) fn handle_next_idle(&mut self) -> Task<Message> {
         let order = self.tabs.display_order();
-        let cur = order.iter().position(|&id| id == self.active_tab_id).unwrap_or(0);
+        let cur = order.iter().position(|&id| id == self.tabs.active_id()).unwrap_or(0);
 
         let candidates: Vec<usize> = order.iter()
             .copied()
@@ -358,7 +354,7 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_pending_input(&mut self, key: PendingKey) -> Task<Message> {
-        let tab_id = self.active_tab_id;
+        let tab_id = self.tabs.active_id();
         let Some(mut tab) = self.tabs.snapshot(tab_id) else { return Task::none() };
         let Some(input) = &mut tab.pending_input else { return Task::none() };
 
@@ -388,7 +384,7 @@ impl App {
                 let canonical = std::fs::canonicalize(&path)
                     .unwrap_or(path);
 
-                if let Some(existing) = self.find_project_for_dir(&canonical) {
+                if let Some(existing) = self.tabs.find_project_for_dir(&canonical) {
                     self.focus_tab(existing);
                     return self.close_tab(tab_id);
                 }
@@ -456,11 +452,11 @@ impl App {
             i += 1;
         }
 
-        if to_close.contains(&self.active_tab_id) {
+        if to_close.contains(&self.tabs.active_id()) {
             let (root_idx, root_parent) = self.tabs.index_of(target_tab_id)
                 .and_then(|i| self.tabs.get_by_index(i).map(|t| (i, t.parent_id)))
                 .unwrap_or((0, None));
-            let new_id = self
+            let new_id = self.tabs
                 .pick_focus_after_close(root_parent, root_idx, &to_close)
                 .or_else(|| {
                     self.tabs.iter()
@@ -518,21 +514,21 @@ impl App {
         }
         if self.tabs.is_folded(tab_id) {
             self.tabs.unfold(tab_id);
-        } else if self.has_claude_children(tab_id) {
+        } else if self.tabs.has_claude_children(tab_id) {
             self.tabs.fold(tab_id);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_set_selection(&mut self, sel: Option<Selection>) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.set_selection(sel);
         }
         Task::none()
     }
 
     pub(in crate::ui) fn handle_update_selection(&mut self, point: GridPoint, side: Side) -> Task<Message> {
-        if let Some(tab) = self.active_tab() {
+        if let Some(tab) = self.tabs.active() {
             tab.update_selection(point, side);
         }
         Task::none()

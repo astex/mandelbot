@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use uuid::Uuid;
 
@@ -12,12 +12,12 @@ use super::super::{terminal_size, App, Message};
 impl App {
     pub(super) fn focus_tab(&mut self, id: usize) {
         if let Some(pid) = self.tabs.get(id).and_then(|t| t.parent_id) {
-            self.unfold_ancestors(pid);
+            self.tabs.unfold_ancestors(pid);
         }
-        if id != self.active_tab_id {
-            self.prev_active_tab_id = Some(self.active_tab_id);
+        let cur = self.tabs.active_id();
+        if id != cur {
+            self.prev_active_tab_id = Some(cur);
         }
-        self.active_tab_id = id;
         self.tabs.set_active(id);
     }
 
@@ -53,7 +53,7 @@ impl App {
         insert_position: Option<usize>,
     ) -> (usize, Task<Message>) {
         if let Some(pid) = parent_id {
-            self.unfold_ancestors(pid);
+            self.tabs.unfold_ancestors(pid);
         }
 
         let Some(size) = self.window_size else {
@@ -160,43 +160,7 @@ impl App {
     }
 
     pub(super) fn active_rank(&self) -> Option<AgentRank> {
-        self.active_tab().map(|t| t.rank)
-    }
-
-    pub(super) fn project_dir_for_tab(&self, tab_id: usize) -> Option<PathBuf> {
-        let project_id = self.tabs.get(tab_id)?.project_id?;
-        self.tabs.get(project_id)?.project_dir.clone()
-    }
-
-    pub(super) fn first_child(&self, tab_id: usize) -> Option<usize> {
-        self.tabs
-            .children_of(Some(tab_id))
-            .iter()
-            .copied()
-            .find(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
-    }
-
-    pub(super) fn has_claude_children(&self, parent_id: usize) -> bool {
-        self.tabs
-            .children_of(Some(parent_id))
-            .iter()
-            .any(|&id| self.tabs.get(id).is_some_and(|t| t.is_claude))
-    }
-
-    pub(super) fn unfold_ancestors(&mut self, mut id: usize) {
-        loop {
-            self.tabs.unfold(id);
-            match self.tabs.get(id).and_then(|t| t.parent_id) {
-                Some(pid) => id = pid,
-                None => break,
-            }
-        }
-    }
-
-    pub(super) fn find_project_for_dir(&self, dir: &Path) -> Option<usize> {
-        self.tabs.iter()
-            .find(|t| t.rank == AgentRank::Project && t.project_dir.as_deref() == Some(dir))
-            .map(|t| t.id)
+        self.tabs.active().map(|t| t.rank)
     }
 
     pub(super) fn respond_to_tab(&self, tab_id: usize, response: serde_json::Value) {
@@ -208,56 +172,18 @@ impl App {
         }
     }
 
-    pub(super) fn pick_focus_after_close(
-        &self,
-        closing_parent_id: Option<usize>,
-        anchor_idx: usize,
-        closing_ids: &[usize],
-    ) -> Option<usize> {
-        let sibling_at =
-            |pos: usize| -> Option<usize> {
-                self.tabs.get_by_index(pos).and_then(|t| {
-                    (t.parent_id == closing_parent_id
-                        && !closing_ids.contains(&t.id))
-                    .then_some(t.id)
-                })
-            };
-        let prev = (0..anchor_idx)
-            .rev()
-            .find_map(sibling_at);
-        let next = (anchor_idx..self.tabs.len())
-            .find_map(sibling_at);
-        prev.or(next).or_else(|| {
-            closing_parent_id.filter(|p| !closing_ids.contains(p))
-        })
-    }
-
     pub(in crate::ui) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         let Some(idx) = self.tabs.index_of(tab_id) else {
             return Task::none();
         };
 
-        let (tab_uuid, closing_parent_id, closing_depth) = {
+        let (tab_uuid, closing_parent_id) = {
             let closing = self.tabs.get(tab_id).expect("just found");
-            (closing.uuid.clone(), closing.parent_id, closing.depth)
+            (closing.uuid.clone(), closing.parent_id)
         };
         let _ = self.ckpt_store.close_tab(&tab_uuid).persist(&self.ckpt_store);
 
-        let children: Vec<usize> = self.tabs.children_of(Some(tab_id)).to_vec();
-        let first_child_id = children.first().copied();
-
-        if let Some(promoted_id) = first_child_id {
-            if let Some(mut promoted) = self.tabs.snapshot(promoted_id) {
-                promoted.depth = closing_depth;
-                self.tabs.write(promoted);
-            }
-            self.tabs.reparent(promoted_id, closing_parent_id);
-            for &cid in children.iter().skip(1) {
-                self.tabs.reparent(cid, Some(promoted_id));
-            }
-        }
-
-        self.tabs.remove(tab_id);
+        self.tabs.close_with_promotion(tab_id);
 
         if self.prev_active_tab_id == Some(tab_id) {
             self.prev_active_tab_id = None;
@@ -267,8 +193,8 @@ impl App {
             return iced::exit();
         }
 
-        if self.active_tab_id == tab_id {
-            let new_id = self
+        if self.tabs.active_id() == tab_id {
+            let new_id = self.tabs
                 .pick_focus_after_close(closing_parent_id, idx, &[tab_id])
                 .unwrap_or_else(|| {
                     let fallback = idx.min(self.tabs.len() - 1);

@@ -221,7 +221,6 @@ type ResponseWriters = Arc<Mutex<HashMap<usize, unix::UnixStream>>>;
 pub struct App {
     config: Config,
     tabs: Tabs,
-    active_tab_id: usize,
     prev_active_tab_id: Option<usize>,
     next_tab_id: usize,
     terminal_theme: TerminalTheme,
@@ -262,7 +261,6 @@ impl App {
         let app = Self {
             config,
             tabs: Tabs::new(),
-            active_tab_id: 0,
             prev_active_tab_id: None,
             next_tab_id: 0,
             terminal_theme,
@@ -372,7 +370,7 @@ impl App {
         .view(toast_elements);
 
         let (term_element, timeline_element): (Element<'_, Message>, Option<Element<'_, Message>>) =
-            if let Some(tab) = self.active_tab() {
+            if let Some(tab) = self.tabs.active() {
                 let term: Element<'_, Message> = TerminalWidget::new(tab, &self.config).into();
                 if tab.timeline_visible {
                     let timeline = crate::widget::timeline::view(
