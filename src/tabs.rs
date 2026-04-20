@@ -80,20 +80,13 @@ impl Tabs {
         let visible: &[usize] = &self.display_order;
         let is_visible = |id: usize| visible.contains(&id);
 
-        let mut eligible: HashSet<usize> = HashSet::new();
+        // Home is always tabs[0] and always visible.
+        let mut eligible: HashSet<usize> = HashSet::from([self.tabs[0].id]);
 
-        if let Some(home) = self.tabs.iter().find(|t| t.rank == AgentRank::Home) {
-            if is_visible(home.id) {
-                eligible.insert(home.id);
-            }
-        }
-
-        if eligible.len() < 10 {
-            if let Some(shell_id) = visible.iter().copied().find(|&id| {
-                self.get(id).map(|t| !t.is_claude).unwrap_or(false)
-            }) {
-                eligible.insert(shell_id);
-            }
+        if let Some(shell_id) = visible.iter().copied().find(|&id| {
+            self.get(id).map(|t| !t.is_claude).unwrap_or(false)
+        }) {
+            eligible.insert(shell_id);
         }
 
         if let Some(active_tab) = self.get(self.active_id) {
