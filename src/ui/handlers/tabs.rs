@@ -584,15 +584,12 @@ impl App {
             let mut frontier: Vec<usize> = vec![requesting_tab_id];
             let mut set: HashSet<usize> = HashSet::new();
             set.insert(requesting_tab_id);
-            let mut i = 0;
-            while i < frontier.len() {
-                let parent = frontier[i];
+            while let Some(parent) = frontier.pop() {
                 for &child in self.tabs.children_of(Some(parent)) {
                     if set.insert(child) {
                         frontier.push(child);
                     }
                 }
-                i += 1;
             }
             set
         };
