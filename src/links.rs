@@ -82,10 +82,6 @@ pub fn find_url_at(text: &str, char_offset: usize) -> Option<UrlMatch> {
 pub fn parse_github_slug(remote: &str) -> Option<String> {
     let remote = remote.trim();
     let tail = if let Some(rest) =
-        remote.strip_prefix("git@github.com:")
-    {
-        rest
-    } else if let Some(rest) =
         remote.strip_prefix("https://github.com/")
     {
         rest
@@ -93,6 +89,15 @@ pub fn parse_github_slug(remote: &str) -> Option<String> {
         remote.strip_prefix("ssh://git@github.com/")
     {
         rest
+    } else if let Some(rest) = remote.strip_prefix("git@") {
+        // SSH form, possibly via an ssh config Host alias:
+        // `git@<host>:owner/repo(.git)`. Accept any host that
+        // contains "github" so aliases like `github-work` work.
+        let (host, path) = rest.split_once(':')?;
+        if !host.contains("github") {
+            return None;
+        }
+        path
     } else {
         return None;
     };
@@ -219,6 +224,22 @@ mod tests {
         assert_eq!(
             parse_github_slug("https://github.com/astex/mandelbot"),
             Some("astex/mandelbot".into()),
+        );
+    }
+
+    #[test]
+    fn parse_slug_ssh_config_alias() {
+        assert_eq!(
+            parse_github_slug("git@github-astex:astex/mandelbot.git"),
+            Some("astex/mandelbot".into()),
+        );
+    }
+
+    #[test]
+    fn parse_slug_ssh_config_alias_work() {
+        assert_eq!(
+            parse_github_slug("git@github-work:acme/project.git"),
+            Some("acme/project".into()),
         );
     }
 
