@@ -575,59 +575,159 @@ impl App {
     }
 
     pub(in crate::ui) fn handle_mcp_list_tabs(&mut self, requesting_tab_id: usize) -> Task<Message> {
-        let is_home = self.tabs.get(requesting_tab_id)
-            .is_some_and(|t| t.rank == AgentRank::Home);
-
-        let editable: HashSet<usize> = if is_home {
-            self.tabs.iter().map(|t| t.id).collect()
-        } else {
-            let mut frontier: Vec<usize> = vec![requesting_tab_id];
-            let mut set: HashSet<usize> = HashSet::new();
-            set.insert(requesting_tab_id);
-            while let Some(parent) = frontier.pop() {
-                for &child in self.tabs.children_of(Some(parent)) {
-                    if set.insert(child) {
-                        frontier.push(child);
-                    }
-                }
-            }
-            set
-        };
-
-        let tabs_json: Vec<serde_json::Value> = self.tabs.iter()
-            .map(|t| {
-                let rank = match t.rank {
-                    AgentRank::Home => "home",
-                    AgentRank::Project => "project",
-                    AgentRank::Task => "task",
-                };
-                let status = match t.status {
-                    AgentStatus::Idle => "idle",
-                    AgentStatus::Working => "working",
-                    AgentStatus::Compacting => "compacting",
-                    AgentStatus::Blocked => "blocked",
-                    AgentStatus::NeedsReview => "needs_review",
-                    AgentStatus::Error => "error",
-                };
-                serde_json::json!({
-                    "id": t.id,
-                    "parent_id": t.parent_id,
-                    "title": t.title,
-                    "rank": rank,
-                    "status": status,
-                    "is_claude": t.is_claude,
-                    "project_dir": t.project_dir.as_ref().map(|p| p.display().to_string()),
-                    "worktree_dir": t.worktree_dir.as_ref().map(|p| p.display().to_string()),
-                    "pr": t.pr_number(),
-                    "is_me": t.id == requesting_tab_id,
-                    "is_editable": editable.contains(&t.id),
-                })
-            })
-            .collect();
-
+        let tabs_json = build_list_tabs_json(&self.tabs, requesting_tab_id);
         self.respond_to_tab(requesting_tab_id, serde_json::json!({
             "tabs": tabs_json,
         }));
         Task::none()
+    }
+}
+
+fn build_list_tabs_json(
+    tabs: &crate::tabs::Tabs,
+    requesting_tab_id: usize,
+) -> Vec<serde_json::Value> {
+    let is_home = tabs.get(requesting_tab_id)
+        .is_some_and(|t| t.rank == AgentRank::Home);
+
+    let editable: HashSet<usize> = if is_home {
+        tabs.iter().map(|t| t.id).collect()
+    } else {
+        let mut frontier: Vec<usize> = vec![requesting_tab_id];
+        let mut set: HashSet<usize> = HashSet::new();
+        set.insert(requesting_tab_id);
+        while let Some(parent) = frontier.pop() {
+            for &child in tabs.children_of(Some(parent)) {
+                if set.insert(child) {
+                    frontier.push(child);
+                }
+            }
+        }
+        set
+    };
+
+    tabs.iter()
+        .map(|t| {
+            let rank = match t.rank {
+                AgentRank::Home => "home",
+                AgentRank::Project => "project",
+                AgentRank::Task => "task",
+            };
+            let status = match t.status {
+                AgentStatus::Idle => "idle",
+                AgentStatus::Working => "working",
+                AgentStatus::Compacting => "compacting",
+                AgentStatus::Blocked => "blocked",
+                AgentStatus::NeedsReview => "needs_review",
+                AgentStatus::Error => "error",
+            };
+            serde_json::json!({
+                "id": t.id,
+                "parent_id": t.parent_id,
+                "title": t.title,
+                "rank": rank,
+                "status": status,
+                "is_claude": t.is_claude,
+                "project_dir": t.project_dir.as_ref().map(|p| p.display().to_string()),
+                "worktree_dir": t.worktree_dir.as_ref().map(|p| p.display().to_string()),
+                "pr": t.pr_number(),
+                "is_me": t.id == requesting_tab_id,
+                "is_editable": editable.contains(&t.id),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod list_tabs_tests {
+    use super::build_list_tabs_json;
+    use crate::tab::{AgentRank, TerminalTab};
+    use crate::tabs::Tabs;
+
+    fn tab(id: usize, parent_id: Option<usize>, rank: AgentRank) -> TerminalTab {
+        TerminalTab::new(id, 24, 80, true, rank, None, parent_id, 0, None)
+    }
+
+    // Tree:
+    //   1 (home)
+    //   ├─ 2 (project)
+    //   │  ├─ 3 (task)
+    //   │  └─ 4 (task)
+    //   │     └─ 5 (task)
+    //   └─ 6 (project)
+    //      └─ 7 (task)
+    fn sample_tree() -> Tabs {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None, AgentRank::Home));
+        tabs.push(tab(2, Some(1), AgentRank::Project));
+        tabs.push(tab(3, Some(2), AgentRank::Task));
+        tabs.push(tab(4, Some(2), AgentRank::Task));
+        tabs.push(tab(5, Some(4), AgentRank::Task));
+        tabs.push(tab(6, Some(1), AgentRank::Project));
+        tabs.push(tab(7, Some(6), AgentRank::Task));
+        tabs
+    }
+
+    fn editable_ids(json: &[serde_json::Value]) -> Vec<u64> {
+        json.iter()
+            .filter(|t| t["is_editable"].as_bool().unwrap())
+            .map(|t| t["id"].as_u64().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn returns_every_tab_regardless_of_caller() {
+        let tabs = sample_tree();
+        for caller in [1u64, 2, 3, 4, 5, 6, 7] {
+            let json = build_list_tabs_json(&tabs, caller as usize);
+            let ids: Vec<u64> =
+                json.iter().map(|t| t["id"].as_u64().unwrap()).collect();
+            assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7], "caller {caller}");
+        }
+    }
+
+    #[test]
+    fn is_me_only_true_for_caller() {
+        let tabs = sample_tree();
+        let json = build_list_tabs_json(&tabs, 4);
+        for entry in &json {
+            let id = entry["id"].as_u64().unwrap();
+            let is_me = entry["is_me"].as_bool().unwrap();
+            assert_eq!(is_me, id == 4, "tab {id}");
+        }
+    }
+
+    #[test]
+    fn home_can_edit_everything() {
+        let tabs = sample_tree();
+        let json = build_list_tabs_json(&tabs, 1);
+        assert_eq!(editable_ids(&json), vec![1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn project_edits_self_and_descendants() {
+        let tabs = sample_tree();
+        let json = build_list_tabs_json(&tabs, 2);
+        // project 2 owns tasks 3, 4, 5 — not sibling project 6 or its subtree
+        let mut ids = editable_ids(&json);
+        ids.sort();
+        assert_eq!(ids, vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn task_edits_self_and_descendants_only() {
+        let tabs = sample_tree();
+        let json = build_list_tabs_json(&tabs, 4);
+        let mut ids = editable_ids(&json);
+        ids.sort();
+        // task 4 reaches its child 5 but not its parent 2 or siblings
+        assert_eq!(ids, vec![4, 5]);
+    }
+
+    #[test]
+    fn leaf_task_edits_only_itself() {
+        let tabs = sample_tree();
+        let json = build_list_tabs_json(&tabs, 3);
+        assert_eq!(editable_ids(&json), vec![3]);
     }
 }
