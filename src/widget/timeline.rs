@@ -757,7 +757,7 @@ mod tests {
         let mut tab = crate::tab::TerminalTab::new(
             1, 24, 80, false, crate::tab::AgentRank::Home, None, None, 0, None,
         );
-        tab.timeline_cursor = Some("b".into());
+        tab.meta.timeline_cursor = Some("b".into());
         let uuid = tab.uuid.clone();
         let mut store = store;
         store.set_head(&uuid, "b".into());
