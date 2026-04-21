@@ -186,7 +186,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "list_tabs",
-                    "description": "List tabs visible to this agent: the caller itself and all of its descendant tabs. The home agent sees every tab. Returns id, parent_id, title, rank (home/project/task), status, is_claude, project_dir, worktree_dir, and pr for each tab.",
+                    "description": "List every tab. Returns id, parent_id, title, rank (home/project/task), status, is_claude, project_dir, worktree_dir, pr, is_me (true for the caller's own tab), and is_editable (true for tabs the caller can manipulate: itself and its descendants; the home agent can edit every tab) for each tab.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {},

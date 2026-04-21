@@ -577,20 +577,19 @@ impl App {
         let is_home = self.tabs.get(requesting_tab_id)
             .is_some_and(|t| t.rank == AgentRank::Home);
 
-        let mut visible: Vec<usize> = vec![requesting_tab_id];
+        let mut editable: Vec<usize> = vec![requesting_tab_id];
         if is_home {
-            visible = self.tabs.iter().map(|t| t.id).collect();
+            editable = self.tabs.iter().map(|t| t.id).collect();
         } else {
             let mut i = 0;
-            while i < visible.len() {
-                let parent = visible[i];
-                visible.extend_from_slice(self.tabs.children_of(Some(parent)));
+            while i < editable.len() {
+                let parent = editable[i];
+                editable.extend_from_slice(self.tabs.children_of(Some(parent)));
                 i += 1;
             }
         }
 
         let tabs_json: Vec<serde_json::Value> = self.tabs.iter()
-            .filter(|t| visible.contains(&t.id))
             .map(|t| {
                 let rank = match t.rank {
                     AgentRank::Home => "home",
@@ -615,6 +614,8 @@ impl App {
                     "project_dir": t.project_dir.as_ref().map(|p| p.display().to_string()),
                     "worktree_dir": t.worktree_dir.as_ref().map(|p| p.display().to_string()),
                     "pr": t.pr_number(),
+                    "is_me": t.id == requesting_tab_id,
+                    "is_editable": editable.contains(&t.id),
                 })
             })
             .collect();
