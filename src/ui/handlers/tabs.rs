@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use iced::Task;
@@ -577,17 +578,24 @@ impl App {
         let is_home = self.tabs.get(requesting_tab_id)
             .is_some_and(|t| t.rank == AgentRank::Home);
 
-        let mut editable: Vec<usize> = vec![requesting_tab_id];
-        if is_home {
-            editable = self.tabs.iter().map(|t| t.id).collect();
+        let editable: HashSet<usize> = if is_home {
+            self.tabs.iter().map(|t| t.id).collect()
         } else {
+            let mut frontier: Vec<usize> = vec![requesting_tab_id];
+            let mut set: HashSet<usize> = HashSet::new();
+            set.insert(requesting_tab_id);
             let mut i = 0;
-            while i < editable.len() {
-                let parent = editable[i];
-                editable.extend_from_slice(self.tabs.children_of(Some(parent)));
+            while i < frontier.len() {
+                let parent = frontier[i];
+                for &child in self.tabs.children_of(Some(parent)) {
+                    if set.insert(child) {
+                        frontier.push(child);
+                    }
+                }
                 i += 1;
             }
-        }
+            set
+        };
 
         let tabs_json: Vec<serde_json::Value> = self.tabs.iter()
             .map(|t| {
