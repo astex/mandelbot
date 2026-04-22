@@ -377,16 +377,15 @@ async fn handle_tools_call(
             )
         }
         "close_tab" => {
-            let target = params
+            let Some(target) = params
                 .get("arguments")
                 .and_then(|a| a.get("tab_id"))
                 .and_then(|v| v.as_u64())
-                .filter(|v| *v > 0);
-            let Some(target) = target else {
+            else {
                 return Response::err(
                     id,
                     -32602,
-                    "close_tab requires a positive tab_id (your own tab or a descendant)".into(),
+                    "close_tab requires a tab_id (your own tab or a descendant)".into(),
                 );
             };
 
