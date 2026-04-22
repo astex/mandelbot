@@ -132,15 +132,16 @@ fn prompt_status_rows(term: &TermInstance) -> Option<Vec<String>> {
     Some(rows.into_iter().skip(bot + 1).collect())
 }
 
-/// Detect Claude Code's prompt frame and read the background shell
-/// count.  Returns 0 when the frame is on screen but no shell-count
-/// line is visible; returns `None` when the frame isn't on screen.
+/// Detect Claude Code's prompt frame and read the background task
+/// count (shells + monitors).  Returns 0 when the frame is on screen
+/// but no count line is visible; returns `None` when the frame isn't
+/// on screen.
 pub(crate) fn detect_prompt_shell_count(
     term: &TermInstance,
 ) -> Option<usize> {
     let rows = prompt_status_rows(term)?;
     for row in &rows {
-        if let Some(n) = parse_shell_count(row) {
+        if let Some(n) = parse_bg_task_count(row) {
             return Some(n);
         }
     }
@@ -163,36 +164,35 @@ fn is_border_row(text: &str) -> bool {
     text.len() >= 10 && text.chars().take(10).all(|c| c == '─')
 }
 
-/// Parse a shell count from a line.  Handles both the older
-/// "· N shell(s)" format and the current "N shell(s) · …" format.
-fn parse_shell_count(text: &str) -> Option<usize> {
-    let trimmed = text.trim();
-
-    // Current format: "N shell(s) · ↓ to manage"
-    let num_str: String =
-        trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if !num_str.is_empty() {
-        if let Ok(n) = num_str.parse::<usize>() {
-            if trimmed[num_str.len()..]
-                .trim_start()
-                .starts_with("shell")
-            {
-                return Some(n);
+/// Parse a background-task count from a status line.  Sums every
+/// `<digits> shell` and `<digits> monitor` occurrence on the line, so
+/// formats like "N shells · ↓ to manage", "N monitors · …", and
+/// "N shells, M monitors · …" all work (as does the legacy
+/// "· N shell(s)").  Returns `None` if no such token is found.
+fn parse_bg_task_count(text: &str) -> Option<usize> {
+    let mut total: usize = 0;
+    let mut found = false;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
             }
+            let num: usize =
+                text[start..i].parse().unwrap_or(0);
+            let rest = text[i..].trim_start();
+            if rest.starts_with("shell") || rest.starts_with("monitor")
+            {
+                total += num;
+                found = true;
+            }
+        } else {
+            i += 1;
         }
     }
-
-    // Legacy format: "· N shell(s)"
-    let idx = trimmed.find("· ")?;
-    let after = &trimmed[idx + "· ".len()..];
-    let num_str: String =
-        after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let n: usize = num_str.parse().ok()?;
-    if after[num_str.len()..].trim_start().starts_with("shell") {
-        Some(n)
-    } else {
-        None
-    }
+    found.then_some(total)
 }
 
 /// Parse a tracked PR number from a status line.  Matches the
@@ -227,5 +227,44 @@ mod tests {
     fn ignores_pr_without_hash() {
         let line = "PR 123 is cool";
         assert_eq!(parse_pr_number(line), None);
+    }
+
+    #[test]
+    fn parses_shell_count() {
+        assert_eq!(
+            parse_bg_task_count("2 shells · ↓ to manage"),
+            Some(2),
+        );
+    }
+
+    #[test]
+    fn parses_monitor_count() {
+        assert_eq!(
+            parse_bg_task_count("  PR #342 · 1 monitor · ↓ to manage"),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn sums_shells_and_monitors() {
+        assert_eq!(
+            parse_bg_task_count(
+                "3 shells, 2 monitors · ↓ to manage"
+            ),
+            Some(5),
+        );
+    }
+
+    #[test]
+    fn parses_legacy_format() {
+        assert_eq!(
+            parse_bg_task_count("foo · 4 shells"),
+            Some(4),
+        );
+    }
+
+    #[test]
+    fn none_when_no_token() {
+        assert_eq!(parse_bg_task_count("PR #42 · ↓ to manage"), None);
     }
 }
