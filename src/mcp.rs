@@ -381,7 +381,14 @@ async fn handle_tools_call(
                 .get("arguments")
                 .and_then(|a| a.get("tab_id"))
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+                .filter(|v| *v > 0);
+            let Some(target) = target else {
+                return Response::err(
+                    id,
+                    -32602,
+                    "close_tab requires a positive tab_id (your own tab or a descendant)".into(),
+                );
+            };
 
             let msg = serde_json::json!({
                 "type": "close_tab",
@@ -395,6 +402,9 @@ async fn handle_tools_call(
 
             match read_from_parent(parent_reader).await {
                 Ok(resp) => {
+                    if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+                        return Response::err(id, -32000, err.into());
+                    }
                     let text = resp
                         .get("message")
                         .and_then(|v| v.as_str())
