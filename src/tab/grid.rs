@@ -168,7 +168,7 @@ fn is_border_row(text: &str) -> bool {
 fn parse_shell_count(text: &str) -> Option<usize> {
     let trimmed = text.trim();
 
-    // Current format: "N shell(s) · ↓ to manage"
+    // Leading-digit form: "N shell(s) · ↓ to manage"
     let num_str: String =
         trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
     if !num_str.is_empty() {
@@ -182,8 +182,8 @@ fn parse_shell_count(text: &str) -> Option<usize> {
         }
     }
 
-    // Legacy / mid-line format: "… · N shell(s) …".  The shell
-    // segment may sit after other "· "-separated segments (e.g.
+    // Mid-line form: "… · N shell(s) …".  The shell segment may
+    // sit after other "· "-separated segments (e.g.
     // "· PR #123 · 1 shell"), so scan every separator.
     let mut rest = trimmed;
     while let Some(idx) = rest.find("· ") {
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_shell_count_legacy_format() {
+    fn parses_shell_count_mid_line() {
         assert_eq!(
             parse_shell_count("‣‣ accept edits on · 3 shells"),
             Some(3),
