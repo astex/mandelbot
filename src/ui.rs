@@ -62,7 +62,7 @@ pub enum Message {
     FocusPreviousTab,
     NextIdle,
     PendingInput(PendingKey),
-    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
+    McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>, bool),
     McpCloseTab(usize, usize),
     McpCheckpoint(usize),
     McpReplace(usize, String),
@@ -285,8 +285,8 @@ impl App {
             }
             Message::ShellExited(tab_id, exit_code) => self.handle_shell_exited(tab_id, exit_code),
             Message::SetTitle(tab_id, title) => self.handle_set_title(tab_id, title),
-            Message::McpSpawnAgent(rtid, wd, ptid, prompt, branch, model, base) => {
-                self.handle_mcp_spawn_agent(rtid, wd, ptid, prompt, branch, model, base)
+            Message::McpSpawnAgent(rtid, wd, ptid, prompt, branch, model, base, sibling) => {
+                self.handle_mcp_spawn_agent(rtid, wd, ptid, prompt, branch, model, base, sibling)
             }
             Message::SetStatus(tab_id, status) => self.handle_set_status(tab_id, status),
             Message::SetPr(tab_id, pr) => self.handle_set_pr(tab_id, pr),
@@ -501,7 +501,11 @@ fn parent_socket_stream(
                                         .expect("failed to clone writer for response");
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
-                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt, branch, model, base))
+                                    let sibling = msg
+                                        .get("sibling")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    Some(Message::McpSpawnAgent(tab_id, wd, project_tab_id, prompt, branch, model, base, sibling))
                                 }
                                 "close_tab" => {
                                     let target_tab_id = msg

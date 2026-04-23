@@ -101,12 +101,41 @@ impl App {
         branch: Option<String>,
         model_override: Option<String>,
         base: Option<String>,
+        sibling: bool,
     ) -> Task<Message> {
         let requester = self.tabs.get(requesting_tab_id);
         let Some(requester) = requester else {
             self.respond_to_tab(requesting_tab_id, serde_json::json!({"error": "unknown tab"}));
             return Task::none();
         };
+
+        if sibling {
+            if requester.rank != AgentRank::Task {
+                self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                    "error": "sibling=true is only valid from a task agent"
+                }));
+                return Task::none();
+            }
+            let Some(parent_id) = requester.parent_id else {
+                self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                    "error": "requesting tab has no parent"
+                }));
+                return Task::none();
+            };
+            let project_dir = requester.project_dir.clone();
+            let (new_tab_id, task) = self.spawn_tab(
+                true,
+                AgentRank::Task,
+                project_dir,
+                Some(parent_id),
+                prompt,
+                branch,
+                model_override,
+                base,
+            );
+            self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));
+            return task;
+        }
 
         let (rank, project_dir, parent_id) = match requester.rank {
             AgentRank::Home => {
