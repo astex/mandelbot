@@ -182,17 +182,29 @@ fn parse_shell_count(text: &str) -> Option<usize> {
         }
     }
 
-    // Legacy format: "· N shell(s)"
-    let idx = trimmed.find("· ")?;
-    let after = &trimmed[idx + "· ".len()..];
-    let num_str: String =
-        after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let n: usize = num_str.parse().ok()?;
-    if after[num_str.len()..].trim_start().starts_with("shell") {
-        Some(n)
-    } else {
-        None
+    // Legacy / mid-line format: "… · N shell(s) …".  The shell
+    // segment may sit after other "· "-separated segments (e.g.
+    // "· PR #123 · 1 shell"), so scan every separator.
+    let mut rest = trimmed;
+    while let Some(idx) = rest.find("· ") {
+        let after = &rest[idx + "· ".len()..];
+        let num_str: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !num_str.is_empty() {
+            if let Ok(n) = num_str.parse::<usize>() {
+                if after[num_str.len()..]
+                    .trim_start()
+                    .starts_with("shell")
+                {
+                    return Some(n);
+                }
+            }
+        }
+        rest = after;
     }
+    None
 }
 
 /// Parse a tracked PR number from a status line.  Matches the
@@ -221,6 +233,28 @@ mod tests {
     fn no_pr_number_when_absent() {
         let line = "‣‣ accept edits on (shift+tab to cycle)";
         assert_eq!(parse_pr_number(line), None);
+    }
+
+    #[test]
+    fn parses_shell_count_after_pr_segment() {
+        let line = "⏵⏵ accept edits on · PR #28238 · 1 shell";
+        assert_eq!(parse_shell_count(line), Some(1));
+    }
+
+    #[test]
+    fn parses_shell_count_leading_digit() {
+        assert_eq!(
+            parse_shell_count("2 shells · ↓ to manage"),
+            Some(2),
+        );
+    }
+
+    #[test]
+    fn parses_shell_count_legacy_format() {
+        assert_eq!(
+            parse_shell_count("‣‣ accept edits on · 3 shells"),
+            Some(3),
+        );
     }
 
     #[test]
