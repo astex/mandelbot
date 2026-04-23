@@ -71,7 +71,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "spawn_tab",
-                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project agent: creates a task agent (no arguments needed). From a task agent: creates a child task agent nested under this task (no arguments needed).",
+                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project agent: creates a task agent (no arguments needed). From a task agent: creates a child task agent nested under this task (no arguments needed). Pass sibling=true from a task agent to spawn a peer under the same parent instead of a child — the caller cannot control a sibling afterwards (cannot close it, etc).",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -98,6 +98,10 @@ fn handle_tools_list(id: Value) -> Response {
                             "base": {
                                 "type": "string",
                                 "description": "Base commit, branch, or ref for the new worktree's branch to start from. Defaults to HEAD of the project.",
+                            },
+                            "sibling": {
+                                "type": "boolean",
+                                "description": "When true, spawn a sibling (same parent as this tab) instead of a child. Only valid from a task agent. The caller cannot control the spawned sibling afterwards.",
                             },
                         },
                     },
@@ -308,10 +312,15 @@ async fn handle_tools_call(
             let base = args
                 .and_then(|a| a.get("base"))
                 .and_then(|v| v.as_str());
+            let sibling = args
+                .and_then(|a| a.get("sibling"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let mut msg = serde_json::json!({
                 "type": "spawn_tab",
                 "tab_id": tab_id,
+                "sibling": sibling,
             });
             if let Some(wd) = working_directory {
                 msg["working_directory"] = Value::String(wd.to_string());
