@@ -9,10 +9,12 @@ use crate::config::Config;
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 use crate::tabs::Tabs;
 use crate::theme::TerminalTheme;
-use crate::ui::{Message, PADDING, TAB_BAR_WIDTH, TAB_GROUP_GAP};
+use crate::ui::{Message, PADDING, TAB_GROUP_GAP};
 
 const INDENT_STEP: f32 = 20.0;
 const SUFFIX_SPACING: f32 = 6.0;
+/// Unicode horizontal ellipsis (one cell wide in a monospaced font).
+const ELLIPSIS: char = '…';
 
 /// View-model for the tab bar: bundles the `App` refs the view reads from
 /// and hangs the render helpers off a single `self`.
@@ -21,6 +23,9 @@ pub struct TabBar<'a> {
     pub bell_flashes: &'a FlashState,
     pub terminal_theme: &'a TerminalTheme,
     pub config: &'a Config,
+    /// Live width of the tab bar, in pixels.  Mutated by the
+    /// resize-divider drag handler on `App`.
+    pub width: f32,
 }
 
 impl<'a> TabBar<'a> {
@@ -28,6 +33,7 @@ impl<'a> TabBar<'a> {
         let inactive_bg = self.terminal_theme.black;
         let has_agents = self.tabs.iter().any(|t| t.is_claude);
         let show_separators = self.tabs.len() > 1;
+        let bar_width = self.width;
 
         let mut tab_col = column![];
         tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
@@ -68,16 +74,16 @@ impl<'a> TabBar<'a> {
 
         // Toasts anchored to the bottom.
         if !toast_elements.is_empty() {
-            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
+            tab_col = tab_col.push(Space::new().width(bar_width).height(Fill));
             let mut toast_col = column![].spacing(PADDING);
             for t in toast_elements {
                 toast_col = toast_col.push(t);
             }
-            tab_col = tab_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
+            tab_col = tab_col.push(container(toast_col).width(bar_width).padding(PADDING));
         }
 
         container(tab_col.height(Fill))
-            .width(TAB_BAR_WIDTH)
+            .width(bar_width)
             .height(Fill)
             .style(move |_theme| container::Style {
                 background: Some(inactive_bg.into()),
@@ -95,7 +101,7 @@ impl<'a> TabBar<'a> {
     fn separator(&self) -> Element<'a, Message> {
         let muted = Color { a: 0.25, ..self.terminal_theme.fg };
         let line: Element<'a, Message> = container(Space::new())
-            .width(TAB_BAR_WIDTH)
+            .width(self.width)
             .height(1)
             .style(move |_theme: &Theme| container::Style {
                 background: Some(muted.into()),
@@ -149,7 +155,7 @@ impl<'a> TabBar<'a> {
         .align_y(Alignment::Center);
 
         let styled = container(content)
-            .width(TAB_BAR_WIDTH - indent)
+            .width((self.width - indent).max(0.0))
             .padding([5, 10])
             .style(move |_theme: &Theme| container::Style {
                 background: Some(bg.into()),
@@ -163,7 +169,7 @@ impl<'a> TabBar<'a> {
 
         if indent > 0.0 {
             row![Space::new().width(indent), tab_elem]
-                .width(TAB_BAR_WIDTH)
+                .width(self.width)
                 .into()
         } else {
             tab_elem
@@ -172,27 +178,28 @@ impl<'a> TabBar<'a> {
 
     fn max_label_chars(&self, indent: f32) -> usize {
         let cw = self.config.char_width();
-        let avail = TAB_BAR_WIDTH - indent - PADDING * 2.0 - cw * 3.0;
-        (avail / cw) as usize
+        let avail = self.width - indent - PADDING * 2.0 - cw * 3.0;
+        (avail / cw).max(1.0) as usize
     }
 
     fn label_text(&self, tab: &TerminalTab, max_chars: usize) -> String {
         if tab.is_pending() {
-            return "new project...".into();
+            return truncate_with_ellipsis("new project...", max_chars);
         }
         if let Some(title) = &tab.title {
             return if tab.is_claude {
-                title.clone()
+                truncate_with_ellipsis(title, max_chars)
             } else {
                 format_shell_title(title, max_chars)
             };
         }
         if tab.rank == AgentRank::Project {
             if let Some(dir) = &tab.project_dir {
-                return dir
+                let name = dir
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+                return truncate_with_ellipsis(&name, max_chars);
             }
             return String::new();
         }
@@ -297,7 +304,32 @@ impl<'a> TabBar<'a> {
 }
 
 fn vspace(h: f32) -> Element<'static, Message> {
-    Space::new().width(TAB_BAR_WIDTH).height(h).into()
+    // Width inherits from the enclosing column; the bar container caps
+    // it at the live tab bar width.
+    Space::new().width(Fill).height(h).into()
+}
+
+/// Truncate `s` to at most `max_chars` characters, appending a single
+/// `…` if anything was cut.  Operates on Unicode scalar values via
+/// `.chars()` so it never splits a multi-byte character.  Returns the
+/// input unchanged when it already fits or when `max_chars` is too
+/// small to leave room for the ellipsis (in which case we still hard
+/// truncate, just without the marker).
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    if max_chars == 1 {
+        // Nothing useful to keep alongside the ellipsis.
+        return ELLIPSIS.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars - 1).collect();
+    out.push(ELLIPSIS);
+    out
 }
 
 fn has_pending_wakeup(tab: &TerminalTab) -> bool {
@@ -358,11 +390,15 @@ fn format_shell_title(raw: &str, max_chars: usize) -> String {
         }
     }
 
-    if cmd.is_empty() {
+    let fallback = if cmd.is_empty() {
         prompt.to_string()
     } else {
         format!("{prompt}{nbsp}{cmd}")
-    }
+    };
+    // Even the shortest layout (prompt or `prompt cmd`) might still be
+    // wider than the bar at extreme widths; mark the cut with an
+    // ellipsis instead of silently clipping.
+    truncate_with_ellipsis(&fallback, max_chars)
 }
 
 #[cfg(test)]
@@ -436,5 +472,45 @@ mod tests {
     #[test]
     fn format_shell_title_no_tab_passthrough() {
         assert_eq!(format_shell_title("zsh", 40), "zsh");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_fits_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hello", 5), "hello");
+        assert_eq!(truncate_with_ellipsis("hi", 10), "hi");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_adds_marker_when_too_long() {
+        // Keep (max_chars - 1) chars and append '…'.
+        assert_eq!(truncate_with_ellipsis("abcdef", 4), "abc…");
+        assert_eq!(truncate_with_ellipsis("hello world", 8), "hello w…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_one_over() {
+        assert_eq!(truncate_with_ellipsis("abcdef", 5), "abcd…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_handles_unicode() {
+        // Each emoji is one scalar value; truncation can't split it.
+        assert_eq!(truncate_with_ellipsis("🚀🌟🔥🐉", 3), "🚀🌟…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_edge_cases() {
+        assert_eq!(truncate_with_ellipsis("anything", 0), "");
+        assert_eq!(truncate_with_ellipsis("anything", 1), "…");
+    }
+
+    #[test]
+    fn format_shell_title_extreme_narrow_uses_ellipsis() {
+        // Even the prompt+cmd fallback gets ellipsis when narrower than
+        // its own length.
+        assert_eq!(
+            format_shell_title("~/very/deep/path\u{a0}%\u{a0}some-long-command", 5),
+            "%\u{a0}so…",
+        );
     }
 }

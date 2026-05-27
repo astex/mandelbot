@@ -283,7 +283,7 @@ impl App {
         let Some(size) = self.window_size else {
             return Task::none();
         };
-        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
+        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height(), self.tab_bar_width());
         let home_id = self.tabs.active_id();
         let id = self.next_tab_id;
         self.next_tab_id += 1;

@@ -23,14 +23,27 @@ use crate::widget::terminal::{self, TerminalWidget};
 pub mod handlers;
 
 pub(crate) const PADDING: f32 = 4.0;
-pub(crate) const TAB_BAR_WIDTH: f32 = 400.0;
+pub(crate) const DEFAULT_TAB_BAR_WIDTH: f32 = 400.0;
+/// Floor for the resizeable tab bar.  Below this, the suffix chips
+/// (status dot, model name, badges, digit shortcut) start colliding
+/// with the label.  Chosen empirically — leaves ~2 chars for the label
+/// at default font size.
+pub(crate) const MIN_TAB_BAR_WIDTH: f32 = 180.0;
+/// Ceiling fraction for the bar: it can never grow past this share of
+/// the window width.
+pub(crate) const MAX_TAB_BAR_FRACTION: f32 = 0.6;
+/// Width of the draggable divider between tab bar and terminal.
+pub(crate) const DIVIDER_WIDTH: f32 = 6.0;
 pub(crate) const TAB_GROUP_GAP: f32 = 28.0;
 const INITIAL_ROWS: u16 = 50;
 const INITIAL_COLS: u16 = 120;
 
 pub fn initial_window_size(config: &Config) -> Size {
     Size {
-        width: INITIAL_COLS as f32 * config.char_width() + PADDING * 2.0 + TAB_BAR_WIDTH,
+        width: INITIAL_COLS as f32 * config.char_width()
+            + PADDING * 2.0
+            + DEFAULT_TAB_BAR_WIDTH
+            + DIVIDER_WIDTH,
         height: INITIAL_ROWS as f32 * config.char_height() + PADDING * 2.0,
     }
 }
@@ -119,6 +132,15 @@ pub enum Message {
     /// Completion signal for background work whose result we discard
     /// (e.g. `save_tree`, or a dropped oneshot). No-op in `update`.
     BackgroundDone,
+    /// User pressed the divider — start tracking cursor x to drive the
+    /// tab bar's width.
+    TabBarDragStart,
+    /// Cursor moved while the divider is being dragged.  Carries the
+    /// absolute cursor x; the handler clamps and applies it as the new
+    /// tab bar width.
+    TabBarDragMove(f32),
+    /// Left mouse button released — exit drag mode.
+    TabBarDragEnd,
 }
 
 #[derive(Debug, Clone)]
@@ -198,8 +220,13 @@ where
     )
 }
 
-fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
-    terminal_size_with_reserved(window, char_width, char_height, 0.0)
+fn terminal_size(
+    window: Size,
+    char_width: f32,
+    char_height: f32,
+    tab_bar_width: f32,
+) -> (usize, usize) {
+    terminal_size_with_reserved(window, char_width, char_height, tab_bar_width, 0.0)
 }
 
 /// Same as `terminal_size` but reserves `reserved_px` vertical pixels
@@ -208,9 +235,16 @@ fn terminal_size_with_reserved(
     window: Size,
     char_width: f32,
     char_height: f32,
+    tab_bar_width: f32,
     reserved_px: f32,
 ) -> (usize, usize) {
-    let cols = ((window.width - PADDING * 2.0 - TAB_BAR_WIDTH - terminal::SCROLLBAR_WIDTH) / char_width).floor() as usize;
+    let cols = ((window.width
+        - PADDING * 2.0
+        - tab_bar_width
+        - DIVIDER_WIDTH
+        - terminal::SCROLLBAR_WIDTH)
+        / char_width)
+        .floor() as usize;
     let rows = ((window.height - PADDING * 2.0 - reserved_px) / char_height).floor() as usize;
     (rows.max(1), cols.max(1))
 }
@@ -232,6 +266,12 @@ pub struct App {
     ckpt_store: crate::checkpoint_store::CheckpointStore,
     toasts: Vec<Toast>,
     next_toast_id: usize,
+    /// Live width of the left tab bar.  Mutated by mouse-drag on the
+    /// divider; persists for the lifetime of the process.
+    tab_bar_width: f32,
+    /// True while the user holds the divider; gates the cursor-event
+    /// subscription that drives live resize.
+    tab_bar_dragging: bool,
 }
 
 impl App {
@@ -272,9 +312,27 @@ impl App {
             ckpt_store,
             toasts: Vec::new(),
             next_toast_id: 0,
+            tab_bar_width: DEFAULT_TAB_BAR_WIDTH,
+            tab_bar_dragging: false,
         };
 
         (app, listen_task)
+    }
+
+    pub(crate) fn tab_bar_width(&self) -> f32 {
+        self.tab_bar_width
+    }
+
+    pub(crate) fn set_tab_bar_width(&mut self, width: f32) {
+        self.tab_bar_width = width;
+    }
+
+    pub(crate) fn tab_bar_dragging(&self) -> bool {
+        self.tab_bar_dragging
+    }
+
+    pub(crate) fn set_tab_bar_dragging(&mut self, dragging: bool) {
+        self.tab_bar_dragging = dragging;
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -348,6 +406,9 @@ impl App {
             Message::FocusFromToast(toast_id) => self.handle_focus_from_toast(toast_id),
             Message::DismissToast(toast_id) => self.handle_dismiss_toast(toast_id),
             Message::SpawnFromToast(toast_id) => self.handle_spawn_from_toast(toast_id),
+            Message::TabBarDragStart => self.handle_tab_bar_drag_start(),
+            Message::TabBarDragMove(x) => self.handle_tab_bar_drag_move(x),
+            Message::TabBarDragEnd => self.handle_tab_bar_drag_end(),
         }
     }
 
@@ -366,8 +427,11 @@ impl App {
             bell_flashes: &self.bell_flashes,
             terminal_theme: &self.terminal_theme,
             config: &self.config,
+            width: self.tab_bar_width,
         }
         .view(toast_elements);
+
+        let divider = crate::widget::divider::view(&self.terminal_theme);
 
         let (term_element, timeline_element): (Element<'_, Message>, Option<Element<'_, Message>>) =
             if let Some(tab) = self.tabs.active() {
@@ -402,14 +466,33 @@ impl App {
             terminal_pane.into()
         };
 
-        row![tab_bar, right_side]
+        row![tab_bar, divider, right_side]
             .width(Fill)
             .height(Fill)
             .into()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
+        let window = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
+        if self.tab_bar_dragging {
+            // While the user holds the divider, we need cursor motion and
+            // button-release events from anywhere in the window — not just
+            // over the divider itself.  Iced's global event subscription
+            // delivers both even after the cursor leaves the original
+            // widget bounds.
+            let drag = iced::event::listen_with(|event, _status, _id| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::TabBarDragMove(position.x))
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::TabBarDragEnd),
+                _ => None,
+            });
+            Subscription::batch([window, drag])
+        } else {
+            window
+        }
     }
 
     pub fn theme(&self) -> Theme {
