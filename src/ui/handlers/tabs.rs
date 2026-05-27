@@ -6,9 +6,10 @@ use iced::Task;
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
+use crate::router;
 use crate::tab::{AgentRank, AgentStatus, TerminalTab};
 
-use super::super::{terminal_size, App, Message, PendingKey};
+use super::super::{spawn_blocking_task, terminal_size, App, Message, PendingAutoSpawn, PendingKey};
 
 impl App {
     pub(in crate::ui) fn handle_tab_output(
@@ -145,6 +146,38 @@ impl App {
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
         };
+
+        let resolved_model = model_override.clone().unwrap_or_else(|| match rank {
+            AgentRank::Home => self.config.models.home.clone(),
+            AgentRank::Project => self.config.models.project.clone(),
+            AgentRank::Task => self.config.models.task.clone(),
+        });
+        let has_prompt = prompt.as_ref().is_some_and(|p| !p.trim().is_empty());
+
+        if resolved_model == "auto" && has_prompt {
+            // Defer the spawn behind a Haiku classification pass.  The
+            // MCP caller stays blocked on the parent socket until the
+            // `AutoRouteResolved` handler responds with the new tab id.
+            let prompt_text = prompt.as_ref().cloned().unwrap_or_default();
+            let request = PendingAutoSpawn {
+                is_claude: true,
+                rank,
+                project_dir,
+                parent_id,
+                prompt,
+                branch,
+                base,
+                resume_session_id: None,
+                existing_worktree: None,
+                insert_position: None,
+                requesting_tab_id: Some(requesting_tab_id),
+            };
+            let request = Box::new(request);
+            return spawn_blocking_task(
+                move || router::classify_blocking(&prompt_text),
+                move |result| Message::AutoRouteResolved { request, result },
+            );
+        }
 
         let (new_tab_id, task) = self.spawn_tab(true, rank, project_dir, parent_id, prompt, branch, model_override, base);
         self.respond_to_tab(requesting_tab_id, serde_json::json!({"tab_id": new_tab_id}));

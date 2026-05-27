@@ -149,6 +149,13 @@ pub struct TabMeta {
     /// Stack of checkpoint ids to redo back into. Pushed on undo, popped
     /// on redo, cleared on any non-undo/non-redo activity. In-memory only.
     pub redo_path: Vec<String>,
+    /// True when this tab's model was picked by the Haiku router
+    /// (`model: "auto"`) rather than from rank/config or an explicit
+    /// override.  Surfaced in the sidebar as a small "auto" pill.
+    pub auto_routed: bool,
+    /// Short reason returned by the Haiku router for why this model
+    /// was chosen.  `None` for non-auto-routed tabs.
+    pub route_reason: Option<String>,
 }
 
 impl TabMeta {
@@ -219,6 +226,8 @@ impl TerminalTab {
             timeline_visible: false,
             timeline_cursor: None,
             redo_path: Vec::new(),
+            auto_routed: false,
+            route_reason: None,
         };
         Self {
             meta,

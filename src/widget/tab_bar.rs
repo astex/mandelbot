@@ -270,6 +270,17 @@ impl<'a> TabBar<'a> {
             );
         }
 
+        if tab.is_claude && tab.auto_routed {
+            // Tiny "auto" badge: differentiates router-chosen tabs from
+            // rank-default tabs at a glance.
+            suffix = suffix.push(
+                text("auto")
+                    .size(size * 0.65)
+                    .font(Font::MONOSPACE)
+                    .color(self.terminal_theme.magenta),
+            );
+        }
+
         if tab.is_claude && has_pending_wakeup(tab) {
             suffix = suffix.push(text("⏱").size(size * 0.75).color(self.terminal_theme.cyan));
         }

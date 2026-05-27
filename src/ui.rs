@@ -14,7 +14,8 @@ use alacritty_terminal::selection::Selection;
 
 use crate::animation::FlashState;
 use crate::config::Config;
-use crate::tab::AgentStatus;
+use crate::router::{RouterDecision, RouterError};
+use crate::tab::{AgentRank, AgentStatus};
 use crate::tabs::Tabs;
 use crate::theme::TerminalTheme;
 use crate::toast::Toast;
@@ -119,6 +120,36 @@ pub enum Message {
     /// Completion signal for background work whose result we discard
     /// (e.g. `save_tree`, or a dropped oneshot). No-op in `update`.
     BackgroundDone,
+    /// The Haiku-driven model router finished classifying a deferred
+    /// `spawn_tab` request.  On `Ok`, spawn the tab with the chosen
+    /// model and surface a toast.  On `Err`, fall back to the rank
+    /// default and surface a failure toast.
+    AutoRouteResolved {
+        request: Box<PendingAutoSpawn>,
+        result: Result<RouterDecision, RouterError>,
+    },
+}
+
+/// All arguments needed to recreate a deferred `spawn_tab` call after
+/// the router picks a model.  Mirrors `spawn_tab_full`'s parameters,
+/// plus the requesting tab id so we can respond to the parent socket
+/// once the new tab id is known.
+#[derive(Debug, Clone)]
+pub struct PendingAutoSpawn {
+    pub is_claude: bool,
+    pub rank: AgentRank,
+    pub project_dir: Option<PathBuf>,
+    pub parent_id: Option<usize>,
+    pub prompt: Option<String>,
+    pub branch: Option<String>,
+    pub base: Option<String>,
+    pub resume_session_id: Option<String>,
+    pub existing_worktree: Option<PathBuf>,
+    pub insert_position: Option<usize>,
+    /// Tab that issued the MCP `spawn_tab` call.  When set, the
+    /// `AutoRouteResolved` handler responds over the parent socket
+    /// with the new tab id once the spawn lands.
+    pub requesting_tab_id: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +379,9 @@ impl App {
             Message::FocusFromToast(toast_id) => self.handle_focus_from_toast(toast_id),
             Message::DismissToast(toast_id) => self.handle_dismiss_toast(toast_id),
             Message::SpawnFromToast(toast_id) => self.handle_spawn_from_toast(toast_id),
+            Message::AutoRouteResolved { request, result } => {
+                self.handle_auto_route_resolved(*request, result)
+            }
         }
     }
 
