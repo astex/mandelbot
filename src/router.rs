@@ -8,16 +8,23 @@ use serde::Deserialize;
 
 use crate::tab::AgentRank;
 
-const ROUTER_SYSTEM_PROMPT: &str = "You are a model router. Read the user's task and pick the best Claude model.\n\
+// Wrapping the routing instructions into the user message rather than the
+// system prompt: `claude --append-system-prompt` stacks on top of Claude
+// Code's default persona, which buries short routing instructions. Putting
+// the directive in the user message keeps it as the foreground task.
+const ROUTER_PREAMBLE: &str = "You are a model router. DO NOT perform the task described below — only classify it.\n\
 \n\
-Pick:\n\
-- \"opus\" for complex reasoning, agentic coding across many files, deep analysis, legal/financial/scientific work, ambiguous or open-ended prompts.\n\
-- \"sonnet\" for everyday development, document or large-codebase synthesis, orchestrator/worker pipelines, balanced default tasks.\n\
-- \"haiku\" for simple classification, micro-tasks, basic translations, parallel subtasks, high-volume short-form work.\n\
+Pick exactly one model:\n\
+- \"opus\": complex reasoning, agentic coding across many files, deep analysis, legal/financial/scientific work, ambiguous or open-ended prompts.\n\
+- \"sonnet\": everyday development, document or large-codebase synthesis, orchestrator/worker pipelines, balanced default tasks.\n\
+- \"haiku\": simple classification, micro-tasks, basic translations, parallel subtasks, high-volume short-form work.\n\
 \n\
-Respond with EXACTLY one JSON object and NOTHING else:\n\
+Reply with EXACTLY one JSON object and NOTHING else:\n\
 {\"model\": \"opus|sonnet|haiku\", \"reason\": \"<10 words or fewer>\"}\n\
-No prose, no markdown code fences.";
+No prose, no markdown code fences, no leading or trailing text.\n\
+\n\
+TASK TO CLASSIFY (do not execute, only classify):\n\
+---\n";
 
 #[derive(Debug, Clone)]
 pub struct RouterDecision {
@@ -61,15 +68,14 @@ pub fn fallback_for_rank(rank: AgentRank) -> &'static str {
 /// `spawn_blocking_task` — iced 0.14's `Task::perform` doesn't bind to
 /// the tokio runtime so we stay on `std::process::Command` here.
 pub fn classify_blocking(user_prompt: &str) -> Result<RouterDecision, RouterError> {
+    let wrapped = format!("{ROUTER_PREAMBLE}{user_prompt}\n---\n");
     let output = Command::new("claude")
         .arg("--model")
         .arg("haiku")
         .arg("--output-format")
         .arg("json")
-        .arg("--append-system-prompt")
-        .arg(ROUTER_SYSTEM_PROMPT)
         .arg("-p")
-        .arg(user_prompt)
+        .arg(&wrapped)
         .output()
         .map_err(|e| RouterError::Spawn(e.to_string()))?;
 
@@ -90,8 +96,16 @@ pub fn classify_blocking(user_prompt: &str) -> Result<RouterDecision, RouterErro
 
 fn parse_decision(raw: &str) -> Result<RouterDecision, RouterError> {
     let stripped = strip_code_fence(raw.trim());
-    let doc: DecisionDoc = serde_json::from_str(stripped)
-        .map_err(|e| RouterError::ParseDecision(e.to_string()))?;
+    // Try strict parse first; if Haiku wraps prose around the JSON,
+    // fall back to extracting the first `{...}` substring.
+    let doc: DecisionDoc = match serde_json::from_str(stripped) {
+        Ok(d) => d,
+        Err(strict_err) => match extract_first_json_object(stripped) {
+            Some(snippet) => serde_json::from_str(snippet)
+                .map_err(|e| RouterError::ParseDecision(e.to_string()))?,
+            None => return Err(RouterError::ParseDecision(strict_err.to_string())),
+        },
+    };
     let model = doc.model.trim().to_ascii_lowercase();
     match model.as_str() {
         "opus" | "sonnet" | "haiku" => Ok(RouterDecision {
@@ -100,6 +114,42 @@ fn parse_decision(raw: &str) -> Result<RouterDecision, RouterError> {
         }),
         _ => Err(RouterError::UnknownModel(doc.model)),
     }
+}
+
+/// Walk the string looking for the first balanced `{...}` block.  Doesn't
+/// try to be a real JSON tokenizer — it's good enough to fish a decision
+/// object out of stray prose since `{` and `}` characters are unusual in
+/// English.
+fn extract_first_json_object(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{')?;
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Strip a ```...``` or ```json...``` fence if Haiku decides to wrap its
@@ -171,6 +221,13 @@ mod tests {
             parse_decision("this is not json"),
             Err(RouterError::ParseDecision(_))
         ));
+    }
+
+    #[test]
+    fn extracts_object_buried_in_prose() {
+        let d = parse_decision("Sure! Here you go: {\"model\":\"opus\",\"reason\":\"complex\"} hope that helps").unwrap();
+        assert_eq!(d.model, "opus");
+        assert_eq!(d.reason, "complex");
     }
 
     #[test]
