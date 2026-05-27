@@ -270,14 +270,31 @@ impl<'a> TabBar<'a> {
             );
         }
 
+        // Model chip: shows which Claude model is actually driving this
+        // tab.  Always rendered for Claude tabs; routing source is
+        // conveyed by the adjacent "auto" pill, not by color here.
+        if tab.is_claude {
+            if let Some(model_name) = tab.model.as_deref() {
+                let muted = Color { a: 0.6, ..fg };
+                suffix = suffix.push(
+                    text(model_name.to_string())
+                        .size(size * 0.65)
+                        .font(Font::MONOSPACE)
+                        .color(muted),
+                );
+            }
+        }
+
         if tab.is_claude && tab.auto_routed {
             // Tiny "auto" badge: differentiates router-chosen tabs from
-            // rank-default tabs at a glance.
+            // rank-default tabs at a glance.  Uses bright_magenta
+            // (violet) so it reads as distinctly "AI-picked" and
+            // doesn't clash with the red error status dot.
             suffix = suffix.push(
                 text("auto")
                     .size(size * 0.65)
                     .font(Font::MONOSPACE)
-                    .color(self.terminal_theme.magenta),
+                    .color(self.terminal_theme.bright_magenta),
             );
         }
 

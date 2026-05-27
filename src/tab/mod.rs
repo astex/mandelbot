@@ -156,6 +156,9 @@ pub struct TabMeta {
     /// Short reason returned by the Haiku router for why this model
     /// was chosen.  `None` for non-auto-routed tabs.
     pub route_reason: Option<String>,
+    /// Claude model name this tab was launched with (e.g. "opus",
+    /// "sonnet", "haiku").  `None` for non-Claude tabs.
+    pub model: Option<String>,
 }
 
 impl TabMeta {
@@ -228,6 +231,7 @@ impl TerminalTab {
             redo_path: Vec::new(),
             auto_routed: false,
             route_reason: None,
+            model: None,
         };
         Self {
             meta,

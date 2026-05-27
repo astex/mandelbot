@@ -104,6 +104,20 @@ impl App {
             }
         };
 
+        // Record the resolved model on the tab so the sidebar can show
+        // which model is actually driving the session.  Done via the
+        // snapshot/write pattern since `TerminalTab` exposes meta only
+        // through `Deref<TabMeta>` (read-only).
+        if is_claude {
+            let id_to_update = self.tabs.get_by_index(inserted_idx).map(|t| t.id);
+            if let Some(tid) = id_to_update
+                && let Some(mut meta) = self.tabs.snapshot(tid)
+            {
+                meta.model = Some(model.clone());
+                self.tabs.write(meta);
+            }
+        }
+
         if let Some(tab) = self.tabs.get_by_index(inserted_idx) {
             tab.set_colors(
                 self.terminal_theme.fg,
