@@ -116,7 +116,7 @@ impl App {
             };
             crate::widget::timeline::pixel_height(&self.ckpt_store, tab, &self.config)
         };
-        let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
+        let (rows, cols) = terminal_size_with_reserved(size, cw, ch, self.tab_bar_width(), reserved);
         let Some(tab) = self.tabs.get(tab_id) else {
             return;
         };

@@ -1,5 +1,6 @@
 mod box_char;
 mod cell;
+pub mod divider;
 pub mod keybindings;
 pub mod tab_bar;
 pub mod terminal;
