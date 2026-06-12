@@ -237,6 +237,21 @@ macOS — before building out the surrounding wiring, write a ~20-line spike
 using the main-thread spawn pattern from **Chosen Approach** and confirm the
 picker opens, returns a path, and returns `None` on cancel.
 
+**Validated 2026-06-12** via `examples/rfd_spike.rs` (`cargo run --example
+rfd_spike`, rfd 0.17 as a dev-dependency) on macOS (Darwin 25.5.0), Iced
+0.14.x, Rust 1.94.0:
+
+- The dialog future is built on the `main` thread inside `update()` (verified
+  by thread-name logging); the picker opens and the app stays responsive.
+- Picking a folder returns the absolute path through `Task::perform`.
+- Cancel returns `None`; a subsequent dialog opens fine after the first
+  completes.
+- No freezes, panics, or event-loop stalls; clean exit.
+
+The risk is retired. Implementation can proceed; promote `rfd` from
+`[dev-dependencies]` to `[dependencies]` when wiring the real feature, and
+delete the example (or keep it as a manual test harness).
+
 ## Out of scope
 
 - OS-level multi-window support.
