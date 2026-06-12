@@ -22,10 +22,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-
-[dev-dependencies]
-# Spike for docs/superpowers/specs/2026-06-05-native-folder-dialog-design.md;
-# promote to [dependencies] when the feature lands.
 rfd = "0.17"
 
 # The profile that 'dist' will build with

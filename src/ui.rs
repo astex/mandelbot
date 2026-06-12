@@ -62,6 +62,10 @@ pub enum Message {
     FocusPreviousTab,
     NextIdle,
     PendingInput(PendingKey),
+    /// Open the native folder picker for the pending tab `tab_id`.
+    OpenProjectDialog(usize),
+    /// Folder picker resolved; `None` means cancelled.
+    ProjectDialogResult { tab_id: usize, path: Option<PathBuf> },
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
     McpCheckpoint(usize),
@@ -232,6 +236,9 @@ pub struct App {
     ckpt_store: crate::checkpoint_store::CheckpointStore,
     toasts: Vec<Toast>,
     next_toast_id: usize,
+    /// A native folder picker is in flight; further `OpenProjectDialog`
+    /// requests are ignored until its `ProjectDialogResult` arrives.
+    project_dialog_open: bool,
 }
 
 impl App {
@@ -272,6 +279,7 @@ impl App {
             ckpt_store,
             toasts: Vec::new(),
             next_toast_id: 0,
+            project_dialog_open: false,
         };
 
         (app, listen_task)
@@ -307,6 +315,10 @@ impl App {
             Message::FocusPreviousTab => self.handle_focus_previous_tab(),
             Message::NextIdle => self.handle_next_idle(),
             Message::PendingInput(key) => self.handle_pending_input(key),
+            Message::OpenProjectDialog(tab_id) => self.handle_open_project_dialog(tab_id),
+            Message::ProjectDialogResult { tab_id, path } => {
+                self.handle_project_dialog_result(tab_id, path)
+            }
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::McpCloseTab(rtid, target) => self.handle_mcp_close_tab(rtid, target),
             Message::SelectTab(tab_id) => self.handle_select_tab(tab_id),
