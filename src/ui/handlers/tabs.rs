@@ -431,13 +431,13 @@ impl App {
             .set_directory(home)
             .pick_folder();
 
-        Task::perform(dialog, move |handle| Message::ProjectDialogResult {
+        Task::perform(dialog, move |handle| Message::SpawnOrFocusProjectTab {
             tab_id,
             path: handle.map(|h| h.path().to_path_buf()),
         })
     }
 
-    pub(in crate::ui) fn handle_project_dialog_result(
+    pub(in crate::ui) fn handle_spawn_or_focus_project_tab(
         &mut self,
         tab_id: usize,
         path: Option<PathBuf>,
