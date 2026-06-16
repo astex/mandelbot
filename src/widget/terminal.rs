@@ -16,7 +16,7 @@ use iced::advanced::{Clipboard, Layout, Renderer as _, Shell, Text, Widget};
 use iced::keyboard;
 use iced::mouse;
 use iced::window;
-use iced::{Border, Color, Element, Event, Font, Length, Point, Rectangle, Size};
+use iced::{Border, Color, Element, Event, Length, Point, Rectangle, Size};
 
 use crate::config::Config;
 use crate::keys;
@@ -26,6 +26,20 @@ use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
+
+const BROWSE_HINT: &str = "[ Browse… ]";
+
+/// Where the `[ Browse… ]` hint sits in a pending tab: one blank line
+/// below the `Project directory:` prompt. Pure geometry so `draw`,
+/// `update`, and `mouse_interaction` agree on the hit target.
+fn browse_hint_rect(bounds: &Rectangle, char_width: f32, char_height: f32) -> Rectangle {
+    Rectangle {
+        x: bounds.x,
+        y: bounds.y + 2.0 * char_height,
+        width: BROWSE_HINT.chars().count() as f32 * char_width,
+        height: char_height,
+    }
+}
 
 const SCROLLBAR_MIN_THUMB: f32 = 12.0;
 
@@ -289,7 +303,9 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
     ) {
         let bounds = layout.bounds();
 
-        // Pending tab: render a simple text prompt at top-left.
+        // Pending tab: render a simple text prompt at top-left. Both lines
+        // use the configured terminal font so char_width/char_height (and
+        // therefore browse_hint_rect) match what is actually drawn.
         if let Some(input) = &self.tab.pending_input {
             let label = format!("Project directory: {}_", input);
 
@@ -299,7 +315,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     bounds: Size::new(bounds.width, self.char_height()),
                     size: self.config.font_size.into(),
                     line_height: text::LineHeight::Relative(self.config.line_height),
-                    font: Font::MONOSPACE,
+                    font: self.config.font(),
                     align_x: iced::alignment::Horizontal::Left.into(),
                     align_y: iced::alignment::Vertical::Top.into(),
                     shaping: text::Shaping::Advanced,
@@ -307,6 +323,27 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                 },
                 Point::new(bounds.x, bounds.y),
                 self.theme.fg,
+                bounds,
+            );
+
+            let hint = browse_hint_rect(&bounds, self.char_width(), self.char_height());
+            renderer.fill_text(
+                Text {
+                    content: BROWSE_HINT.to_string(),
+                    // Lay out against the full widget width; the rect only
+                    // defines the click target, and a too-small layout box
+                    // clips the trailing glyphs.
+                    bounds: Size::new(bounds.width, self.char_height()),
+                    size: self.config.font_size.into(),
+                    line_height: text::LineHeight::Relative(self.config.line_height),
+                    font: self.config.font(),
+                    align_x: iced::alignment::Horizontal::Left.into(),
+                    align_y: iced::alignment::Vertical::Top.into(),
+                    shaping: text::Shaping::Advanced,
+                    wrapping: text::Wrapping::None,
+                },
+                hint.position(),
+                self.theme.blue,
                 bounds,
             );
             return;
@@ -492,11 +529,21 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        _layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
+        if self.tab.pending_input.is_some() {
+            let bounds = layout.bounds();
+            let hint = browse_hint_rect(&bounds, self.char_width(), self.char_height());
+            return if cursor.position().is_some_and(|pos| hint.contains(pos)) {
+                mouse::Interaction::Pointer
+            } else {
+                mouse::Interaction::default()
+            };
+        }
+
         let state = tree.state.downcast_ref::<TerminalState>();
         if state.drop_hovering {
             mouse::Interaction::Copy
@@ -530,6 +577,24 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor_pos {
+                    // Pending tabs only respond to the [ Browse… ] hint;
+                    // swallow other presses so they don't fall through to
+                    // the selection machinery on the empty grid below.
+                    if self.tab.pending_input.is_some() {
+                        if bounds.contains(pos) {
+                            let hint = browse_hint_rect(
+                                &bounds,
+                                self.char_width(),
+                                self.char_height(),
+                            );
+                            if hint.contains(pos) {
+                                shell.publish(Message::OpenProjectDialog(self.tab.id));
+                            }
+                            shell.capture_event();
+                        }
+                        return;
+                    }
+
                     // Open link on control+click.
                     if let Interaction::HoveringLink { url, .. } = &state.interaction {
                         let _ = open::that(url);
@@ -1013,5 +1078,45 @@ fn ansi_256_to_color(idx: u8, theme: &TerminalTheme) -> Color {
 impl<'a> From<TerminalWidget<'a>> for Element<'a, Message, iced::Theme, iced::Renderer> {
     fn from(widget: TerminalWidget<'a>) -> Self {
         Self::new(widget)
+    }
+}
+
+#[cfg(test)]
+mod browse_hint_tests {
+    use super::*;
+
+    fn rect() -> Rectangle {
+        let bounds = Rectangle { x: 10.0, y: 20.0, width: 800.0, height: 600.0 };
+        browse_hint_rect(&bounds, 8.0, 16.0)
+    }
+
+    #[test]
+    fn sits_one_blank_line_below_the_prompt() {
+        let hint = rect();
+        assert_eq!(hint.y, 20.0 + 2.0 * 16.0);
+        assert_eq!(hint.x, 10.0);
+        assert_eq!(hint.height, 16.0);
+        assert_eq!(hint.width, BROWSE_HINT.chars().count() as f32 * 8.0);
+    }
+
+    #[test]
+    fn hit_test_inside() {
+        let hint = rect();
+        assert!(hint.contains(Point::new(hint.x + 1.0, hint.y + 1.0)));
+        assert!(hint.contains(Point::new(
+            hint.x + hint.width - 1.0,
+            hint.y + hint.height - 1.0,
+        )));
+    }
+
+    #[test]
+    fn hit_test_outside() {
+        let hint = rect();
+        // On the prompt line above.
+        assert!(!hint.contains(Point::new(hint.x + 1.0, 20.0 + 8.0)));
+        // Past the right edge of the label.
+        assert!(!hint.contains(Point::new(hint.x + hint.width + 1.0, hint.y + 1.0)));
+        // Below the hint line.
+        assert!(!hint.contains(Point::new(hint.x + 1.0, hint.y + hint.height + 1.0)));
     }
 }

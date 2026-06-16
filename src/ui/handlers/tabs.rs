@@ -374,41 +374,78 @@ impl App {
                 self.close_tab(tab_id)
             }
             PendingKey::Submit => {
-                let raw_path = input.clone();
-                let expanded = if raw_path.starts_with('~') {
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    raw_path.replacen('~', &home, 1)
-                } else {
-                    raw_path
-                };
-                let path = PathBuf::from(&expanded);
-                let canonical = std::fs::canonicalize(&path)
-                    .unwrap_or(path);
-
-                if let Some(existing) = self.tabs.find_project_for_dir(&canonical) {
-                    self.focus_tab(existing);
-                    return self.close_tab(tab_id);
-                }
-
-                let parent_id = match self.tabs.get(tab_id) {
-                    Some(t) => t.parent_id,
-                    None => return Task::none(),
-                };
-                self.tabs.remove(tab_id);
-
-                let (id, task) = self.spawn_tab(
-                    true,
-                    AgentRank::Project,
-                    Some(canonical),
-                    parent_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                self.focus_tab(id);
-                task
+                let home = std::env::var("HOME").unwrap_or_default();
+                let path = expand_tilde(input, &home);
+                self.open_project_from_path(tab_id, path)
             }
+        }
+    }
+
+    /// Open a project from `path`, consuming the pending tab `tab_id`:
+    /// canonicalize, focus an already-open project if one matches,
+    /// otherwise replace the pending tab with a spawned project tab.
+    /// No-op when `tab_id` is gone — the folder dialog is non-modal, so
+    /// its result can arrive after the pending tab was closed or
+    /// submitted via a typed path.
+    fn open_project_from_path(&mut self, tab_id: usize, path: PathBuf) -> Task<Message> {
+        let parent_id = match self.tabs.get(tab_id) {
+            Some(t) => t.parent_id,
+            None => return Task::none(),
+        };
+
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+
+        if let Some(existing) = self.tabs.find_project_for_dir(&canonical) {
+            self.focus_tab(existing);
+            return self.close_tab(tab_id);
+        }
+
+        self.tabs.remove(tab_id);
+
+        let (id, task) = self.spawn_tab(
+            true,
+            AgentRank::Project,
+            Some(canonical),
+            parent_id,
+            None,
+            None,
+            None,
+            None,
+        );
+        self.focus_tab(id);
+        task
+    }
+
+    pub(in crate::ui) fn handle_open_project_dialog(&mut self, tab_id: usize) -> Task<Message> {
+        if self.project_dialog_open || !self.tabs.contains(tab_id) {
+            return Task::none();
+        }
+        self.project_dialog_open = true;
+
+        // The dialog future must be built here in update() — on macOS rfd
+        // dialogs have to be spawned on the main thread; only the await
+        // runs on the executor.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title("Open Project")
+            .set_directory(home)
+            .pick_folder();
+
+        Task::perform(dialog, move |handle| Message::SpawnOrFocusProjectTab {
+            tab_id,
+            path: handle.map(|h| h.path().to_path_buf()),
+        })
+    }
+
+    pub(in crate::ui) fn handle_spawn_or_focus_project_tab(
+        &mut self,
+        tab_id: usize,
+        path: Option<PathBuf>,
+    ) -> Task<Message> {
+        self.project_dialog_open = false;
+        match path {
+            Some(path) => self.open_project_from_path(tab_id, path),
+            None => Task::none(),
         }
     }
 
@@ -583,6 +620,16 @@ impl App {
     }
 }
 
+/// Expand a leading `~` to `home`. Only the first occurrence is
+/// replaced, matching shell behavior for `~/...` paths.
+fn expand_tilde(raw: &str, home: &str) -> PathBuf {
+    if raw.starts_with('~') {
+        PathBuf::from(raw.replacen('~', home, 1))
+    } else {
+        PathBuf::from(raw)
+    }
+}
+
 fn build_list_tabs_json(
     tabs: &crate::tabs::Tabs,
     requesting_tab_id: usize,
@@ -636,6 +683,39 @@ fn build_list_tabs_json(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod expand_tilde_tests {
+    use std::path::PathBuf;
+
+    use super::expand_tilde;
+
+    #[test]
+    fn expands_leading_tilde() {
+        assert_eq!(
+            expand_tilde("~/work", "/Users/me"),
+            PathBuf::from("/Users/me/work"),
+        );
+    }
+
+    #[test]
+    fn bare_tilde_is_home() {
+        assert_eq!(expand_tilde("~", "/Users/me"), PathBuf::from("/Users/me"));
+    }
+
+    #[test]
+    fn absolute_path_untouched() {
+        assert_eq!(expand_tilde("/tmp/x", "/Users/me"), PathBuf::from("/tmp/x"));
+    }
+
+    #[test]
+    fn interior_tilde_untouched() {
+        assert_eq!(
+            expand_tilde("/tmp/~x", "/Users/me"),
+            PathBuf::from("/tmp/~x"),
+        );
+    }
 }
 
 #[cfg(test)]
