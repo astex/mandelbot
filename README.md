@@ -24,8 +24,11 @@ Mandelbot is a terminal emulator that organizes agents into a hierarchical tree.
 
 ```sh
 brew tap astex/mandelbot
+brew trust --cask astex/mandelbot/mandelbot
 brew install --cask mandelbot
 ```
+
+`brew trust` is required because [Homebrew 6.0.0](https://docs.brew.sh/Tap-Trust) gates third-party taps behind an explicit trust decision; without it you'll be prompted to trust the cask on install.
 
 ### Linux / macOS (shell script)
 
