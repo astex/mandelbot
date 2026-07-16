@@ -14,6 +14,13 @@ use crate::ui::{Message, PADDING, TAB_BAR_WIDTH, TAB_GROUP_GAP};
 const INDENT_STEP: f32 = 20.0;
 const SUFFIX_SPACING: f32 = 6.0;
 
+/// Association chip glyphs. PR and ticket use monospace BMP symbols
+/// (rendered and tinted like text); file uses a pictograph via the
+/// fallback font (like the `⏱` wakeup chip).
+const PR_GLYPH: &str = "⎇";
+const FILE_GLYPH: &str = "🗎";
+const TICKET_GLYPH: &str = "⧉";
+
 /// View-model for the tab bar: bundles the `App` refs the view reads from
 /// and hangs the render helpers off a single `self`.
 pub struct TabBar<'a> {
@@ -247,18 +254,48 @@ impl<'a> TabBar<'a> {
             suffix = suffix.push(text("|").size(size).font(Font::MONOSPACE).color(muted));
         }
 
-        if tab.is_claude && tab.pr_number().is_some() {
+        if tab.is_claude {
             let muted = Color { a: 0.7, ..fg };
-            let pr_icon = text("⎇").size(size).font(Font::MONOSPACE).color(muted);
-            let pr_btn = button(pr_icon)
-                .on_press(Message::OpenPr(tab.id))
-                .padding(0)
-                .style(move |_theme, _status| button::Style {
-                    background: Some(bg.into()),
-                    border: Border::default(),
-                    ..Default::default()
-                });
-            suffix = suffix.push(pr_btn);
+
+            // Associations in display order: PR, then file, then ticket.
+            // Each entry is (glyph, is_monospace, open-message).
+            let mut assocs: Vec<(&'static str, bool, Message)> = Vec::new();
+            if tab.pr_number().is_some() {
+                assocs.push((PR_GLYPH, true, Message::OpenPr(tab.id)));
+            }
+            if tab.file_path.is_some() {
+                assocs.push((FILE_GLYPH, false, Message::OpenFile(tab.id)));
+            }
+            if tab.ticket_url.is_some() {
+                assocs.push((TICKET_GLYPH, true, Message::OpenTicket(tab.id)));
+            }
+
+            match assocs.len() {
+                0 => {}
+                // Exactly one association: show its icon where the PR
+                // icon used to sit.
+                1 => {
+                    let (glyph, mono, msg) = assocs.into_iter().next().unwrap();
+                    suffix = suffix.push(assoc_chip(glyph, mono, msg, size, muted, bg));
+                }
+                // Multiple: collapse behind a `…` chip. Clicking it
+                // toggles expansion, revealing every icon after the `…`.
+                _ => {
+                    suffix = suffix.push(assoc_chip(
+                        "…",
+                        true,
+                        Message::ToggleAssociations(tab.id),
+                        size,
+                        muted,
+                        bg,
+                    ));
+                    if tab.associations_expanded {
+                        for (glyph, mono, msg) in assocs {
+                            suffix = suffix.push(assoc_chip(glyph, mono, msg, size, muted, bg));
+                        }
+                    }
+                }
+            }
         }
 
         if tab.is_claude && tab.background_tasks > 0 {
@@ -294,6 +331,32 @@ impl<'a> TabBar<'a> {
 
         suffix
     }
+}
+
+/// A right-aligned association chip: a bare glyph button that emits
+/// `msg` when clicked. PR uses the monospace font; pictograph chips
+/// (file/ticket) fall back to the system emoji/symbol font.
+fn assoc_chip<'a>(
+    glyph: &'static str,
+    monospace: bool,
+    msg: Message,
+    size: f32,
+    color: Color,
+    bg: Color,
+) -> Element<'a, Message> {
+    let mut label = text(glyph).size(size).color(color);
+    if monospace {
+        label = label.font(Font::MONOSPACE);
+    }
+    button(label)
+        .on_press(msg)
+        .padding(0)
+        .style(move |_theme, _status| button::Style {
+            background: Some(bg.into()),
+            border: Border::default(),
+            ..Default::default()
+        })
+        .into()
 }
 
 fn vspace(h: f32) -> Element<'static, Message> {

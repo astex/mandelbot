@@ -80,6 +80,12 @@ pub enum Message {
     /// Agent-set PR number. `Some(n)` locks the PR to `n` and disables
     /// the status-line scraper for that tab; `None` clears both.
     SetPr(usize, Option<u32>),
+    /// Agent-set local file association. `Some` shows a document chip
+    /// that opens the file; `None` clears it.
+    SetFile(usize, Option<String>),
+    /// Agent-set web-link (ticket) association. `Some` shows a ticket
+    /// chip that opens the link; `None` clears it.
+    SetTicket(usize, Option<String>),
     /// A `ScheduleWakeup` tool call resolved with a real wake-up
     /// scheduled at `epoch_ms`.  Captured by a PostToolUse hook on
     /// the tab's Claude session and piped through `MANDELBOT_FIFO`.
@@ -97,6 +103,11 @@ pub enum Message {
     ToggleFoldTab(usize),
     ClipboardLoadResult(usize, Option<String>),
     OpenPr(usize),
+    OpenFile(usize),
+    OpenTicket(usize),
+    /// Toggle the expanded/collapsed state of a tab's association chips
+    /// (the `…` control shown when a tab has 2+ of PR/file/ticket).
+    ToggleAssociations(usize),
     ToggleTimeline(usize),
     TimelineScrub(usize, TimelineDir),
     TimelineActivate(usize, TimelineMode),
@@ -299,6 +310,8 @@ impl App {
             }
             Message::SetStatus(tab_id, status) => self.handle_set_status(tab_id, status),
             Message::SetPr(tab_id, pr) => self.handle_set_pr(tab_id, pr),
+            Message::SetFile(tab_id, path) => self.handle_set_file(tab_id, path),
+            Message::SetTicket(tab_id, url) => self.handle_set_ticket(tab_id, url),
             Message::WakeupAt(tab_id, epoch_ms) => self.handle_wakeup_at(tab_id, epoch_ms),
             Message::WakeupExpired(tab_id, epoch_ms) => {
                 self.handle_wakeup_expired(tab_id, epoch_ms)
@@ -331,6 +344,9 @@ impl App {
                 self.handle_clipboard_load_result(tab_id, response)
             }
             Message::OpenPr(tab_id) => self.handle_open_pr(tab_id),
+            Message::OpenFile(tab_id) => self.handle_open_file(tab_id),
+            Message::OpenTicket(tab_id) => self.handle_open_ticket(tab_id),
+            Message::ToggleAssociations(tab_id) => self.handle_toggle_associations(tab_id),
             Message::TabReady { tab_id, worktree_dir, session_id } => {
                 self.handle_tab_ready(tab_id, worktree_dir, session_id)
             }
@@ -543,6 +559,24 @@ fn parent_socket_stream(
                                         .and_then(|n| u32::try_from(n).ok())
                                         .filter(|n| *n > 0);
                                     Some(Message::SetPr(tab_id, pr))
+                                }
+                                "set_file" => {
+                                    let path = msg
+                                        .get("path")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(String::from);
+                                    Some(Message::SetFile(tab_id, path))
+                                }
+                                "set_ticket" => {
+                                    let url = msg
+                                        .get("url")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(String::from);
+                                    Some(Message::SetTicket(tab_id, url))
                                 }
                                 "checkpoint" => {
                                     let resp_writer = writer.try_clone()
