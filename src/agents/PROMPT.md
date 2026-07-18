@@ -7,7 +7,7 @@ If the focus of this session shifts, update the tab title with the mandelbot MCP
 </system-reminder>
 
 <system-reminder>
-As soon as you know which GitHub PR this tab is working on — right after `gh pr create`, or when the user points you at an existing one — call the mandelbot MCP set_pr tool with the PR number. Mandelbot also scrapes the status line for a PR, but an explicit set_pr is the source of truth and wins over the scraper. Call it again with no arguments to clear.
+As soon as you know which GitHub PR this tab is working on — right after `gh pr create`, or when the user points you at an existing one — call the mandelbot MCP set_pr tool with the PR number. Mandelbot also scrapes the status line for a PR, but an explicit set_pr is the source of truth and wins over the scraper. Likewise, when a tab is anchored to a particular local file (a spec or doc you keep working from) or an external ticket/issue URL, proactively call set_file or set_ticket so it's one click from the tab — don't wait to be asked. Each of the three clears when called with no arguments.
 </system-reminder>
 
 <system-reminder>
