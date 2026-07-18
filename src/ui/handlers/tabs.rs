@@ -167,6 +167,30 @@ impl App {
         Task::none()
     }
 
+    pub(in crate::ui) fn handle_set_file(&mut self, tab_id: usize, path: Option<String>) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            tab.file_path = path;
+            self.tabs.write(tab);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_set_ticket(&mut self, tab_id: usize, url: Option<String>) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            tab.ticket_url = url;
+            self.tabs.write(tab);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_toggle_associations(&mut self, tab_id: usize) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            tab.associations_expanded = !tab.associations_expanded;
+            self.tabs.write(tab);
+        }
+        Task::none()
+    }
+
     pub(in crate::ui) fn handle_wakeup_at(&mut self, tab_id: usize, epoch_ms: u64) -> Task<Message> {
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.next_wakeup_at_ms = Some(epoch_ms);
@@ -597,6 +621,35 @@ impl App {
         Task::none()
     }
 
+    pub(in crate::ui) fn handle_open_file(&mut self, tab_id: usize) -> Task<Message> {
+        if let Some(tab) = self.tabs.get(tab_id)
+            && let Some(path) = &tab.file_path
+        {
+            let p = std::path::Path::new(path);
+            // Resolve relative paths against the tab's worktree (falling
+            // back to the project dir), since the parent process's cwd
+            // is unrelated to the agent's.
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else if let Some(base) = tab.worktree_dir.as_ref().or(tab.project_dir.as_ref()) {
+                base.join(p)
+            } else {
+                p.to_path_buf()
+            };
+            let _ = open::that(resolved);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_open_ticket(&mut self, tab_id: usize) -> Task<Message> {
+        if let Some(tab) = self.tabs.get(tab_id)
+            && let Some(url) = &tab.ticket_url
+        {
+            let _ = open::that(url.clone());
+        }
+        Task::none()
+    }
+
     pub(in crate::ui) fn handle_tab_ready(
         &mut self,
         tab_id: usize,
@@ -678,6 +731,8 @@ fn build_list_tabs_json(
                 "project_dir": t.project_dir.as_ref().map(|p| p.display().to_string()),
                 "worktree_dir": t.worktree_dir.as_ref().map(|p| p.display().to_string()),
                 "pr": t.pr_number(),
+                "file": t.file_path,
+                "ticket": t.ticket_url,
                 "is_me": t.id == requesting_tab_id,
                 "is_editable": editable.contains(&t.id),
             })
@@ -775,6 +830,30 @@ mod list_tabs_tests {
             let is_me = entry["is_me"].as_bool().unwrap();
             assert_eq!(is_me, id == 4, "tab {id}");
         }
+    }
+
+    #[test]
+    fn associations_surface_in_list_and_count() {
+        let mut tabs = sample_tree();
+        let mut m3 = tabs.snapshot(3).unwrap();
+        m3.pr_override = Some(42);
+        m3.file_path = Some("/tmp/spec.md".into());
+        tabs.write(m3);
+        let mut m4 = tabs.snapshot(4).unwrap();
+        m4.ticket_url = Some("https://linear.app/x/ABC-1".into());
+        tabs.write(m4);
+
+        assert_eq!(tabs.get(3).unwrap().association_count(), 2);
+        assert_eq!(tabs.get(4).unwrap().association_count(), 1);
+        assert_eq!(tabs.get(5).unwrap().association_count(), 0);
+
+        let json = build_list_tabs_json(&tabs, 1);
+        let by_id = |id: u64| json.iter().find(|t| t["id"].as_u64() == Some(id)).unwrap();
+        assert_eq!(by_id(3)["pr"], 42);
+        assert_eq!(by_id(3)["file"], "/tmp/spec.md");
+        assert!(by_id(3)["ticket"].is_null());
+        assert_eq!(by_id(4)["ticket"], "https://linear.app/x/ABC-1");
+        assert!(by_id(5)["file"].is_null());
     }
 
     #[test]

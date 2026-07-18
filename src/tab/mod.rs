@@ -129,6 +129,17 @@ pub struct TabMeta {
     /// PR number set explicitly by an agent via the `set_pr` MCP tool.
     /// When `Some`, this wins over whatever the scraper sees.
     pub pr_override: Option<u32>,
+    /// Local file path associated with this tab via the `set_file` MCP
+    /// tool. Rendered as a document chip that opens the file locally.
+    pub file_path: Option<String>,
+    /// Web link (e.g. an issue-tracker ticket) associated with this tab
+    /// via the `set_ticket` MCP tool. Rendered as a ticket chip that
+    /// opens the link in a browser.
+    pub ticket_url: Option<String>,
+    /// When a tab has more than one association (PR/file/ticket), the
+    /// suffix collapses them behind a `…` chip; this flips to `true`
+    /// once the user clicks it to reveal every association icon.
+    pub associations_expanded: bool,
     /// Epoch ms of the next scheduled Claude wake-up (from the
     /// `ScheduleWakeup` tool, captured via a PostToolUse hook). At
     /// most one outstanding per tab — `/loop` only ever has one in
@@ -156,6 +167,15 @@ impl TabMeta {
     /// if present, otherwise whatever the status-line scraper saw.
     pub fn pr_number(&self) -> Option<u32> {
         self.pr_override.or(self.pr_scraped)
+    }
+
+    /// How many associations (PR, file, ticket) are set on this tab.
+    /// The suffix shows a single icon when this is 1 and a `…` chip
+    /// (expandable to all icons) when it is 2 or more.
+    pub fn association_count(&self) -> usize {
+        self.pr_number().is_some() as usize
+            + self.file_path.is_some() as usize
+            + self.ticket_url.is_some() as usize
     }
 
     pub fn is_pending(&self) -> bool {
@@ -212,6 +232,9 @@ impl TerminalTab {
             background_tasks: 0,
             pr_scraped: None,
             pr_override: None,
+            file_path: None,
+            ticket_url: None,
+            associations_expanded: false,
             next_wakeup_at_ms: None,
             pending_input: None,
             session_id: None,

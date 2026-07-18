@@ -145,6 +145,32 @@ fn handle_tools_list(id: Value) -> Response {
                     },
                 },
                 {
+                    "name": "set_file",
+                    "description": "Associate a local file with this tab (e.g. a design doc or spec you're working from). Shown as a document icon on the tab that opens the file locally when clicked. Pass an absolute path; a relative path is resolved against the tab's worktree or project directory. Omit `path` (or pass an empty string) to clear.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Absolute (or worktree-relative) path to the file. Omit or pass empty to clear.",
+                            },
+                        },
+                    },
+                },
+                {
+                    "name": "set_ticket",
+                    "description": "Associate a web link (e.g. a Jira/Linear/GitHub issue ticket) with this tab. Shown as a ticket icon on the tab that opens the link in a browser when clicked. Omit `url` (or pass an empty string) to clear.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "The ticket/link URL to open. Omit or pass empty to clear.",
+                            },
+                        },
+                    },
+                },
+                {
                     "name": "checkpoint",
                     "description": "Snapshot this tab's worktree state and current conversation position. Returns a checkpoint_id that can be passed to replace or fork.",
                     "inputSchema": {
@@ -450,6 +476,70 @@ async fn handle_tools_call(
                 }),
             )
         }
+        "set_file" => {
+            // Absent or an empty/whitespace string clears the file.
+            let path = params
+                .get("arguments")
+                .and_then(|a| a.get("path"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+
+            let mut msg = serde_json::json!({
+                "type": "set_file",
+                "tab_id": tab_id,
+            });
+            if let Some(p) = path {
+                msg["path"] = Value::String(p.to_string());
+            }
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            let text = match path {
+                Some(p) => format!("File set to {p}"),
+                None => "File cleared".to_string(),
+            };
+            Response::ok(
+                id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": text }],
+                }),
+            )
+        }
+        "set_ticket" => {
+            // Absent or an empty/whitespace string clears the ticket.
+            let url = params
+                .get("arguments")
+                .and_then(|a| a.get("url"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+
+            let mut msg = serde_json::json!({
+                "type": "set_ticket",
+                "tab_id": tab_id,
+            });
+            if let Some(u) = url {
+                msg["url"] = Value::String(u.to_string());
+            }
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            let text = match url {
+                Some(u) => format!("Ticket set to {u}"),
+                None => "Ticket cleared".to_string(),
+            };
+            Response::ok(
+                id,
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": text }],
+                }),
+            )
+        }
         "checkpoint" => {
             let msg = serde_json::json!({
                 "type": "checkpoint",
@@ -745,11 +835,13 @@ mod tests {
         assert_eq!(resp["result"]["tools"][2]["name"], "set_status");
         assert_eq!(resp["result"]["tools"][3]["name"], "close_tab");
         assert_eq!(resp["result"]["tools"][4]["name"], "set_pr");
-        assert_eq!(resp["result"]["tools"][5]["name"], "checkpoint");
-        assert_eq!(resp["result"]["tools"][6]["name"], "replace");
-        assert_eq!(resp["result"]["tools"][7]["name"], "fork");
-        assert_eq!(resp["result"]["tools"][8]["name"], "list_tabs");
-        assert_eq!(resp["result"]["tools"][9]["name"], "notify");
+        assert_eq!(resp["result"]["tools"][5]["name"], "set_file");
+        assert_eq!(resp["result"]["tools"][6]["name"], "set_ticket");
+        assert_eq!(resp["result"]["tools"][7]["name"], "checkpoint");
+        assert_eq!(resp["result"]["tools"][8]["name"], "replace");
+        assert_eq!(resp["result"]["tools"][9]["name"], "fork");
+        assert_eq!(resp["result"]["tools"][10]["name"], "list_tabs");
+        assert_eq!(resp["result"]["tools"][11]["name"], "notify");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -848,6 +940,62 @@ mod tests {
         assert_eq!(parent_msg["type"], "set_pr");
         assert_eq!(parent_msg["tab_id"], "tab-42");
         assert!(parent_msg.get("pr").is_none());
+
+        // -- tools/call set_file (set a path) --
+        let call = r#"{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"set_file","arguments":{"path":"/tmp/spec.md"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "File set to /tmp/spec.md");
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_file");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["path"], "/tmp/spec.md");
+
+        // -- tools/call set_file (clear via empty string) --
+        let call = r#"{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"set_file","arguments":{"path":"  "}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "File cleared");
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_file");
+        assert!(parent_msg.get("path").is_none());
+
+        // -- tools/call set_ticket (set a url) --
+        let call = r#"{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"set_ticket","arguments":{"url":"https://linear.app/x/issue/ABC-1"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(
+            resp["result"]["content"][0]["text"],
+            "Ticket set to https://linear.app/x/issue/ABC-1"
+        );
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "set_ticket");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["url"], "https://linear.app/x/issue/ABC-1");
 
         // -- tools/call close_tab --
         let call = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"close_tab","arguments":{"tab_id":7}}}"#;
