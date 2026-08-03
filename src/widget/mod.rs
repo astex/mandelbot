@@ -1,6 +1,7 @@
 mod box_char;
 mod cell;
 pub mod keybindings;
+pub mod mouse_report;
 pub mod tab_bar;
 pub mod terminal;
 pub mod timeline;
