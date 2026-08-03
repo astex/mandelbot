@@ -21,6 +21,25 @@ use crate::pty;
 use crate::ui::Message;
 use crate::worktree;
 
+/// The program to exec for a tab, given the configured `shell`.
+///
+/// `Config::load` already rewrites an empty `shell` to the default, so
+/// this only fires when a tab is spawned with a hand-built config; fall
+/// back rather than take down the tab thread.
+fn shell_command(shell: &str) -> String {
+    match shell.split_whitespace().next() {
+        Some(command) => command.to_string(),
+        None => {
+            let fallback = crate::config::default_shell();
+            eprintln!(
+                "mandelbot: config \"shell\" is empty; \
+                 falling back to {fallback}."
+            );
+            fallback
+        }
+    }
+}
+
 /// Read status updates from a FIFO and emit `SetStatus` messages.
 /// Opens the FIFO with O_RDWR to avoid EOF when writers close.
 pub fn fifo_stream(
@@ -178,9 +197,7 @@ pub fn tab_stream(
                 let worktree_dir: Option<PathBuf>;
 
                 if is_claude {
-                    let shell_parts: Vec<&str> =
-                        params.shell.split_whitespace().collect();
-                    command = shell_parts[0].to_string();
+                    command = shell_command(&params.shell);
 
                     let mut claude_args = format!(
                         "claude --model {} --mcp-config {} \
@@ -310,14 +327,11 @@ pub fn tab_stream(
                     ];
                 } else {
                     worktree_dir = None;
-                    let parts: Vec<&str> =
-                        params.shell.split_whitespace().collect();
-                    let (cmd, rest) = parts
-                        .split_first()
-                        .expect("shell config must not be empty");
-                    command = cmd.to_string();
-                    args_owned = rest
-                        .iter()
+                    command = shell_command(&params.shell);
+                    args_owned = params
+                        .shell
+                        .split_whitespace()
+                        .skip(1)
                         .map(|s| s.to_string())
                         .collect();
                     let fifo_path = config::runtime_dir()
