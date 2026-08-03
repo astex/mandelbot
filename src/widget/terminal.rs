@@ -25,6 +25,8 @@ use crate::tab::{TermInstance, TerminalTab};
 use crate::theme::TerminalTheme;
 use crate::ui::Message;
 
+use super::mouse_report::{self, MouseAction, MouseButton};
+
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
 
 const BROWSE_HINT: &str = "[ Browse… ]";
@@ -42,6 +44,10 @@ fn browse_hint_rect(bounds: &Rectangle, char_width: f32, char_height: f32) -> Re
 }
 
 const SCROLLBAR_MIN_THUMB: f32 = 12.0;
+
+/// Upper bound on reports emitted for a single wheel event, so a large
+/// trackpad delta can't flood the PTY.
+const MAX_WHEEL_REPORTS: u32 = 32;
 
 struct TrackGeometry {
     thumb_height: f32,
@@ -145,6 +151,11 @@ struct TerminalState {
     /// Leftover sub-line wheel delta, carried across events by
     /// [`accumulate_scroll`].
     scroll_accum: f32,
+    /// Button whose press we forwarded to the application, if any. Set while
+    /// held so drags and the matching release report the same button.
+    reported_button: Option<MouseButton>,
+    /// Last screen cell reported, so motion only fires on cell changes.
+    reported_cell: Option<(usize, usize)>,
 }
 
 pub struct TerminalWidget<'a> {
@@ -208,6 +219,83 @@ impl<'a> TerminalWidget<'a> {
         let line = Line(row) - display_offset;
 
         (GridPoint::new(line, Column(col)), side)
+    }
+
+    /// Cursor position as 0-based coordinates in the *visible screen*. Unlike
+    /// [`Self::pixel_to_grid`] this is not shifted by the display offset —
+    /// mouse reports name the row the user is looking at.
+    fn pixel_to_screen_cell(
+        &self,
+        term: &TermInstance,
+        bounds: &Rectangle,
+        pos: Point,
+    ) -> (usize, usize) {
+        let grid = term.grid();
+        let col_f = ((pos.x - bounds.x) / self.char_width()).max(0.0);
+        let row_f = ((pos.y - bounds.y) / self.char_height()).max(0.0);
+
+        let col = (col_f as usize).min(grid.columns().saturating_sub(1));
+        let row = (row_f as usize).min(grid.screen_lines().saturating_sub(1));
+
+        (col, row)
+    }
+
+    /// Whether mouse events should go to the application rather than to
+    /// mandelbot's own scrollback and selection.
+    ///
+    /// Holding shift is the conventional escape hatch back to local handling,
+    /// which is the only way to select text inside a mouse-aware app.
+    fn mouse_reporting(&self, state: &TerminalState) -> bool {
+        !state.modifiers.shift()
+            && self.tab.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    /// Bytes a wheel event should send to the PTY, or `None` when the wheel
+    /// belongs to mandelbot's local scrollback.
+    fn wheel_report(
+        &self,
+        state: &TerminalState,
+        bounds: &Rectangle,
+        pos: Option<Point>,
+        lines: i32,
+    ) -> Option<Vec<u8>> {
+        let mode = self.tab.mode();
+
+        if self.mouse_reporting(state) {
+            let pos = pos?;
+            let (col, row) = {
+                let term = self.tab.lock_term();
+                self.pixel_to_screen_cell(&term, bounds, pos)
+            };
+            let button = if lines > 0 {
+                MouseButton::WheelUp
+            } else {
+                MouseButton::WheelDown
+            };
+            let count = lines.unsigned_abs().min(MAX_WHEEL_REPORTS);
+            let mut out = Vec::new();
+            for _ in 0..count {
+                out.extend(mouse_report::encode(
+                    mode,
+                    MouseAction::Press,
+                    button,
+                    col,
+                    row,
+                    state.modifiers,
+                ));
+            }
+            return Some(out);
+        }
+
+        // Alternate scroll: the alt screen has no scrollback of our own to
+        // move, so translate the wheel into cursor keys for the application.
+        if !state.modifiers.shift()
+            && mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
+        {
+            return mouse_report::alternate_scroll(mode, lines);
+        }
+
+        None
     }
 
     fn detect_link(
@@ -603,7 +691,8 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
         };
 
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            Event::Mouse(mouse::Event::ButtonPressed(button)) => {
+                let is_left = *button == mouse::Button::Left;
                 if let Some(pos) = cursor_pos {
                     // Pending tabs only respond to the [ Browse… ] hint;
                     // swallow other presses so they don't fall through to
@@ -624,18 +713,22 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     }
 
                     // Open link on control+click.
-                    if let Interaction::HoveringLink { url, .. } = &state.interaction {
-                        let _ = open::that(url);
-                        shell.capture_event();
-                        return;
+                    if is_left {
+                        if let Interaction::HoveringLink { url, .. } = &state.interaction {
+                            let _ = open::that(url);
+                            shell.capture_event();
+                            return;
+                        }
                     }
 
-                    // Scrollbar takes priority.
+                    // Scrollbar takes priority — it is our own chrome, never
+                    // application input.
                     let scrollbar = self.scrollbar_rect(&bounds);
                     let scrollbar_hit = {
                         let term = self.tab.lock_term();
                         let grid = term.grid();
-                        if scrollbar.contains(pos)
+                        if is_left
+                            && scrollbar.contains(pos)
                             && grid.history_size() > 0
                         {
                             let mut offset = grid.display_offset();
@@ -673,8 +766,32 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                         return;
                     }
 
+                    // Forward to the application when it asked for clicks.
+                    if let Some(reported) = mouse_report::report_button(*button)
+                        && self.mouse_reporting(state)
+                        && bounds.contains(pos)
+                    {
+                        let (mode, (col, row)) = {
+                            let term = self.tab.lock_term();
+                            let mode = *term.mode();
+                            (mode, self.pixel_to_screen_cell(&term, &bounds, pos))
+                        };
+                        state.reported_button = Some(reported);
+                        state.reported_cell = Some((col, row));
+                        shell.publish(Message::PtyInput(mouse_report::encode(
+                            mode,
+                            MouseAction::Press,
+                            reported,
+                            col,
+                            row,
+                            state.modifiers,
+                        )));
+                        shell.capture_event();
+                        return;
+                    }
+
                     // Text selection in terminal content area.
-                    if bounds.contains(pos) {
+                    if is_left && bounds.contains(pos) {
                         let term = self.tab.lock_term();
                         let (grid_point, side) =
                             self.pixel_to_grid(&term, &bounds, pos);
@@ -734,6 +851,45 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     }
                 }
 
+                // Forward motion to the application. Only while we own the
+                // pointer — a scrollbar or shift-selection drag in progress
+                // keeps it.
+                if matches!(
+                    state.interaction,
+                    Interaction::Idle | Interaction::HoveringLink { .. }
+                ) && self.mouse_reporting(state)
+                    && bounds.contains(*position)
+                {
+                    let (mode, cell) = {
+                        let term = self.tab.lock_term();
+                        let mode = *term.mode();
+                        (mode, self.pixel_to_screen_cell(&term, &bounds, *position))
+                    };
+                    let wants_motion = if state.reported_button.is_some() {
+                        mode.intersects(
+                            TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+                        )
+                    } else {
+                        mode.contains(TermMode::MOUSE_MOTION)
+                    };
+                    if wants_motion && state.reported_cell != Some(cell) {
+                        state.reported_cell = Some(cell);
+                        let button = state
+                            .reported_button
+                            .unwrap_or(MouseButton::NoButton);
+                        shell.publish(Message::PtyInput(mouse_report::encode(
+                            mode,
+                            MouseAction::Motion,
+                            button,
+                            cell.0,
+                            cell.1,
+                            state.modifiers,
+                        )));
+                    }
+                    shell.capture_event();
+                    return;
+                }
+
                 match &state.interaction {
                     Interaction::Scrollbar { drag_start_y, drag_start_offset } => {
                         let term = self.tab.lock_term();
@@ -766,8 +922,35 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     Interaction::Idle | Interaction::HoveringLink { .. } => {}
                 }
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Event::Mouse(mouse::Event::ButtonReleased(button)) => {
+                // Release the button whose press we forwarded, so the
+                // application never sees an unbalanced press.
+                if let Some(reported) = mouse_report::report_button(*button)
+                    && state.reported_button == Some(reported)
+                {
+                    state.reported_button = None;
+                    state.reported_cell = None;
+                    if let Some(pos) = cursor_pos {
+                        let (mode, (col, row)) = {
+                            let term = self.tab.lock_term();
+                            let mode = *term.mode();
+                            (mode, self.pixel_to_screen_cell(&term, &bounds, pos))
+                        };
+                        shell.publish(Message::PtyInput(mouse_report::encode(
+                            mode,
+                            MouseAction::Release,
+                            reported,
+                            col,
+                            row,
+                            state.modifiers,
+                        )));
+                    }
+                    shell.capture_event();
+                    return;
+                }
+
                 match &state.interaction {
+                    _ if *button != mouse::Button::Left => {}
                     Interaction::Scrollbar { .. } => {
                         state.interaction = Interaction::Idle;
                         if let Some(pos) = cursor_pos {
@@ -908,7 +1091,10 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
                     let lines =
                         accumulate_scroll(&mut state.scroll_accum, raw);
                     if lines != 0 {
-                        shell.publish(Message::Scroll(lines));
+                        match self.wheel_report(state, &bounds, cursor_pos, lines) {
+                            Some(bytes) => shell.publish(Message::PtyInput(bytes)),
+                            None => shell.publish(Message::Scroll(lines)),
+                        }
                         shell.capture_event();
                     }
                 }
