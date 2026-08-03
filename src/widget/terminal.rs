@@ -86,6 +86,31 @@ impl TrackGeometry {
     }
 }
 
+/// Turn a raw wheel delta, measured in lines, into a whole number of lines to
+/// scroll — carrying the sub-line remainder in `accum` across events.
+///
+/// Precise-scrolling devices (trackpads, Magic Mouse) report only a few pixels
+/// per event, well under one line, so rounding each event independently
+/// discards most of the gesture.
+fn accumulate_scroll(accum: &mut f32, raw: f32) -> i32 {
+    if raw == 0.0 {
+        return 0;
+    }
+    // Reversing direction drops the pending remainder so a flick back responds
+    // on its first event instead of paying off the old gesture first.
+    if (raw < 0.0) != (*accum < 0.0) {
+        *accum = 0.0;
+    }
+    *accum += raw;
+    // `trunc` rather than `floor`: rounding toward zero treats both directions
+    // alike and leaves a remainder with the gesture's own sign. `floor` would
+    // emit a line early when scrolling down and leave a remainder opposing the
+    // gesture still in progress.
+    let lines = accum.trunc();
+    *accum -= lines;
+    lines as i32
+}
+
 #[derive(Default)]
 enum Interaction {
     #[default]
@@ -117,6 +142,9 @@ struct TerminalState {
     cursor_blink_last_toggle: Option<Instant>,
     /// Whether the cursor is currently visible in the blink cycle.
     cursor_blink_visible: bool,
+    /// Leftover sub-line wheel delta, carried across events by
+    /// [`accumulate_scroll`].
+    scroll_accum: f32,
 }
 
 pub struct TerminalWidget<'a> {
@@ -871,12 +899,14 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 if cursor.is_over(layout.bounds()) {
-                    let lines = match delta {
-                        mouse::ScrollDelta::Lines { y, .. } => *y as i32,
+                    let raw = match delta {
+                        mouse::ScrollDelta::Lines { y, .. } => *y,
                         mouse::ScrollDelta::Pixels { y, .. } => {
-                            (*y / self.char_height()) as i32
+                            *y / self.char_height()
                         }
                     };
+                    let lines =
+                        accumulate_scroll(&mut state.scroll_accum, raw);
                     if lines != 0 {
                         shell.publish(Message::Scroll(lines));
                         shell.capture_event();
@@ -1118,5 +1148,76 @@ mod browse_hint_tests {
         assert!(!hint.contains(Point::new(hint.x + hint.width + 1.0, hint.y + 1.0)));
         // Below the hint line.
         assert!(!hint.contains(Point::new(hint.x + 1.0, hint.y + hint.height + 1.0)));
+    }
+}
+
+#[cfg(test)]
+mod scroll_accum_tests {
+    use super::*;
+
+    /// A 2px event against a 16px line: eight of them make one line.
+    const TINY: f32 = 2.0 / 16.0;
+
+    #[test]
+    fn accumulate_scroll_sub_line_deltas_eventually_scroll() {
+        let mut accum = 0.0;
+        let emitted: Vec<i32> = (0..8)
+            .map(|_| accumulate_scroll(&mut accum, TINY))
+            .collect();
+        assert_eq!(emitted, vec![0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn accumulate_scroll_is_symmetric_across_directions() {
+        let mut up = 0.0;
+        let mut down = 0.0;
+        for _ in 0..8 {
+            assert_eq!(
+                accumulate_scroll(&mut up, TINY),
+                -accumulate_scroll(&mut down, -TINY),
+            );
+        }
+    }
+
+    #[test]
+    fn accumulate_scroll_reversal_discards_remainder() {
+        let mut accum = 0.0;
+        // Half a line up, then a reversal: the pending +0.5 must not have to
+        // be paid off before the downward flick registers.
+        assert_eq!(accumulate_scroll(&mut accum, 0.5), 0);
+        assert_eq!(accumulate_scroll(&mut accum, -1.0), -1);
+        assert_eq!(accum, 0.0);
+    }
+
+    #[test]
+    fn accumulate_scroll_whole_lines_pass_through() {
+        let mut accum = 0.0;
+        assert_eq!(accumulate_scroll(&mut accum, 1.0), 1);
+        assert_eq!(accumulate_scroll(&mut accum, -3.0), -3);
+        assert_eq!(accum, 0.0);
+    }
+
+    #[test]
+    fn accumulate_scroll_zero_delta_is_inert() {
+        let mut accum = 0.0;
+        assert_eq!(accumulate_scroll(&mut accum, 0.75), 0);
+        // A zero-delta event must neither scroll nor clear the remainder.
+        assert_eq!(accumulate_scroll(&mut accum, 0.0), 0);
+        assert_eq!(accum, 0.75);
+        assert_eq!(accumulate_scroll(&mut accum, 0.25), 1);
+    }
+
+    #[test]
+    fn accumulate_scroll_conserves_a_monotone_run() {
+        let deltas = [0.125, 0.5, 0.875, 1.5, 1.0, 2.0, 1.875, 1.125];
+        let mut accum = 0.0;
+        let total: i32 = deltas
+            .iter()
+            .map(|d| accumulate_scroll(&mut accum, *d))
+            .sum();
+        let ideal: f32 = deltas.iter().sum();
+        // Every line of movement is delivered but the last partial one.
+        assert_eq!(total, ideal.trunc() as i32);
+        assert!(accum.abs() < 1.0);
     }
 }
