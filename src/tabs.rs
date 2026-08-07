@@ -51,9 +51,9 @@ impl Tabs {
     }
 
     fn compute_display_order(&self) -> Vec<usize> {
-        // Home is always tabs[0] and always visible — but startup/snapshot
-        // load may recompute before the first push, so tolerate emptiness.
-        let Some(home_id) = self.tabs.first().map(|t| t.id) else {
+        // Home is always visible — but startup/snapshot load may recompute
+        // before the first push, so tolerate emptiness.
+        let Some(home_id) = self.home_id() else {
             return Vec::new();
         };
         let mut order = vec![home_id];
@@ -83,9 +83,9 @@ impl Tabs {
         let visible: &[usize] = &self.display_order;
         let is_visible = |id: usize| visible.contains(&id);
 
-        // Home is always tabs[0] and always visible — but guard against
+        // Home is always visible — but guard against
         // recompute-before-first-push (see compute_display_order).
-        let Some(home_id) = self.tabs.first().map(|t| t.id) else {
+        let Some(home_id) = self.home_id() else {
             return HashMap::new();
         };
         let mut eligible: HashSet<usize> = HashSet::from([home_id]);
@@ -170,6 +170,12 @@ impl Tabs {
 
     pub fn get(&self, id: usize) -> Option<&TerminalTab> {
         self.by_id.get(&id).map(|&i| &self.tabs[i])
+    }
+
+    /// Id of the Home tab, which is always `tabs[0]`. `None` only during
+    /// startup/snapshot load, before the first push.
+    pub fn home_id(&self) -> Option<usize> {
+        self.tabs.first().map(|t| t.id)
     }
 
     /// Snapshot of tab `id`'s metadata. Pair with [`write`] for copy→mutate→write.
