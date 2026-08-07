@@ -284,7 +284,12 @@ impl App {
             return Task::none();
         };
         let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
-        let home_id = self.tabs.active_id();
+        // Project tabs always hang off Home, never off the active tab — a
+        // shell tab is rank Home too, and parenting under one would leave the
+        // new tab out of `display_order` entirely.
+        let Some(home_id) = self.tabs.home_id() else {
+            return Task::none();
+        };
         let id = self.next_tab_id;
         self.next_tab_id += 1;
         let tab = TerminalTab::new_pending(id, rows, cols, home_id);
