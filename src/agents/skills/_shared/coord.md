@@ -57,15 +57,15 @@ The parent uses `[DIRECTIVE]` as the leading marker when appending into a child'
 - [2026-04-09 12:34] [DIRECTIVE] <instruction or answer>
 ```
 
-Children scan their log for new `[DIRECTIVE]` entries when their watcher wakes.
+Children scan their log for new `[DIRECTIVE]` entries whenever a doorbell message from the parent arrives.
 
 ## The block/unblock handshake
 
 When a child needs input from the parent:
 
 1. Child appends `- [...] blocked: <question>` and sets `**State:** blocked`.
-2. Child re-arms the watcher on its own file.
-3. Parent replies with `- [...] [DIRECTIVE] <answer>` in the child's log.
+2. Child rings the parent's doorbell, then returns control and idles.
+3. Parent appends `- [...] [DIRECTIVE] <answer>` in the child's log and rings the child's doorbell.
 4. Child appends `- [...] unblocked, continuing`, sets `**State:** in_progress`, resumes.
 
 If the protocol itself can't accommodate something the child needs, it uses the same mechanism — append a question, wait, do not silently deviate.
@@ -85,31 +85,54 @@ Used when a child has finished implementing and pushed its PR, but the project r
 The lifecycle:
 
 1. Implementation done, branch pushed, PR opened.
-2. Child appends `- [...] awaiting_review: <PR link>` and sets `**State:** awaiting_review`. **Does not close the tab.**
-3. Child returns control, but **arms a watcher on its own coord file** before doing so. The tab idles until either the human prompts it (chat) or a parent `[DIRECTIVE]` wakes the watcher.
-4. The child stays in `awaiting_review` for the entire review cycle, even while actively addressing review feedback and pushing changes — the parent doesn't need to know whether the agent is mid-edit or idle. **Do not append routine progress entries during the review cycle** — every write wakes the parent's watcher, and there's nothing for the parent to do. Stay quiet until the PR is settled.
-5. Once the PR is merged (the human will say so, or instruct the child to do the merge itself), the child appends `- [...] done`, sets `**State:** done`, and closes its tab. (This single write is the parent's signal that the child is fully settled.)
+2. Child appends `- [...] awaiting_review: <PR link>`, sets `**State:** awaiting_review`, and rings the parent's doorbell. **Does not close the tab.**
+3. Child returns control and idles. The tab wakes when either the human prompts it (chat) or a parent doorbell arrives.
+4. The child stays in `awaiting_review` for the entire review cycle, even while actively addressing review feedback and pushing changes — the parent doesn't need to know whether the agent is mid-edit or idle. Log freely during review if it's useful for the record, but **do not ring the parent's doorbell** — there's nothing for the parent to do until the PR is settled.
+5. Once the PR is merged (the human will say so, or instruct the child to do the merge itself), the child appends `- [...] done`, sets `**State:** done`, rings the parent's doorbell, and closes its tab.
 
 Two channels are live during review:
 
 - **Chat (human → child)** — code review feedback, fixup requests, "push this change." This is the dominant channel.
-- **Coord file `[DIRECTIVE]` (parent → child)** — cross-cutting, chain-wide directives: "something merged upstream, rebase onto new base," "abort, we're dropping this PR," "the sibling's approach changed, update your branch." Reserved for things only the parent can coordinate across siblings. Review feedback itself flows through chat, not here.
+- **Coord file `[DIRECTIVE]` + doorbell (parent → child)** — cross-cutting, chain-wide directives: "something merged upstream, rebase onto new base," "abort, we're dropping this PR," "the sibling's approach changed, update your branch." Reserved for things only the parent can coordinate across siblings. Review feedback itself flows through chat, not here.
 
-The parent treats `awaiting_review` as terminal-for-its-purposes — the same bucket as `done` for "no further parent action needed right now" — but may still append a `[DIRECTIVE]` when a chain-wide change forces it. The child's armed watcher catches those; re-arm after handling each one.
+The parent treats `awaiting_review` as terminal-for-its-purposes — the same bucket as `done` for "no further parent action needed right now" — but may still append a `[DIRECTIVE]` when a chain-wide change forces it. The doorbell wakes the idle child to pick it up.
 
-## The watcher
+## The doorbell
 
-A single-file watcher script lives at `<plugin-dir>/skills/_shared/watch.sh`. It blocks until the target file changes, prints its contents, then exits. **Always run it in the background** (`run_in_background: true`) so you're free to do other work while waiting.
+Coordination has two halves, and they are deliberately separate:
 
-```bash
-bash <plugin-dir>/skills/_shared/watch.sh <absolute path to file>
+- **The coord files are the state.** Every state change is written to a `*.coord.md` — that's the durable, inspectable record, readable long after every tab has closed. Nothing is coordinated by message alone.
+- **A peer message is the doorbell.** It carries no information beyond "I changed your file, go read it." The recipient re-reads the file and acts on what it finds there.
+
+Ringing the doorbell means `SendMessage` to the other agent's session, with a one-line body:
+
+```
+SendMessage(to: "<their session name>", message: "coord update: <absolute path to the file you changed>")
 ```
 
-**Do not write your own watcher, poll loop, or inotify script.** Always use `watch.sh`. The exact command is shown above and repeated in each skill's workflow steps.
+Do **not** put the question, the answer, or the state in the message. Two sources of truth is the failure mode this split exists to prevent — if it isn't in the file, it didn't happen.
 
-Both parents and children use the same script — one invocation per file. A parent runs one watcher per child file (each in the background). A child runs one watcher against its own `*.coord.md`.
+**Write, then ring — as one step.** Appending a log entry without ringing leaves the other side idle forever; there is no timeout and no fallback poll. Never do one without the other.
 
-The watcher is your **only** polling mechanism. Do not read coordination files on a timer. When the watcher wakes, act on what changed and re-arm it in the background.
+Do not poll. Do not read coordination files on a timer, and do not write your own watcher, inotify script, or sleep loop. You idle until a doorbell (or the human in chat) wakes you.
+
+### Addressing
+
+Peer sessions are discovered with `ListAgents`, and the name in the listing *is* the address.
+
+**Parent → child.** Run `ListAgents` immediately *before* `spawn_tab` and again after: the new row is the child. Resolve one child at a time — spawn, resolve, record, then move to the next — so two concurrent spawns can't both claim the same new row. A freshly spawned child takes a few seconds to appear; if no new row is listed yet, wait and list again.
+
+In git-worktree projects there's a cross-check: a tab's session name is its worktree name plus a short suffix, so a child spawned on branch `late-stone-873` appears as something like `late-stone-873-85`. Use that to confirm you matched the right row, not as the primary lookup.
+
+Record the resolved name in the child's coord file as a `**Session:**` header so it survives compaction.
+
+**Child → parent.** An agent can't see its own session name, so the parent can't just tell the child where to reply. Instead the parent bootstraps the reverse direction: right after resolving a child's address, it sends that child a hello doorbell. Incoming messages arrive wrapped as `<cross-session-message from="...">`, so the child copies the `from` attribute into its own coord file as `**Parent session:**` and uses it for every upward doorbell after that.
+
+This means a child cannot ring anyone until the parent's hello has landed. Parents send it as part of spawning, not later.
+
+### What this gives up
+
+Hand-editing a coord file no longer wakes anybody — there's no filesystem watch anymore. To nudge a running tab, prompt it in chat; that's the better channel for human input regardless. Editing a file for the record is still fine, it just won't be noticed until something else wakes the reader.
 
 ## Tab lifecycle
 

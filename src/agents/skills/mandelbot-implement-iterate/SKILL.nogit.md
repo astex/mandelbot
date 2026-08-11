@@ -1,7 +1,7 @@
 ---
 name: mandelbot-implement-iterate
 description: Use this skill for iterative build-refactor-build loops where a parent agent delegates work to generation tabs, harvests ideas, and spawns another generation acting on the best ones. Activates when the user wants to "keep improving X", run "another pass", do "iterative refinement", or loop until some fitness signal is met. Not for one-shot feature work — use mandelbot-delegate for that.
-allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab, AskUserQuestion]
+allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, ListAgents, SendMessage, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab, AskUserQuestion]
 ---
 
 # Implement / Iterate
@@ -68,23 +68,19 @@ Prompt:
 
 > Start by reading `<plugin-dir>/skills/mandelbot-implement-iterate/GENERATION.md` for the generation tab protocol. You are a generation tab in the "<project>" iterate run. Your coordination file is at `<absolute path to gen-<N>.coord.md>` — read it first, then read the governing plan at `<path>` in full.
 >
-> You manage generation <N>. Read the goals in your assignment, break them into implementation tasks, spawn children, watch them, collect ideas, and write a summary when done.
+> You manage generation <N>. Read the goals in your assignment, break them into implementation tasks, spawn children, handle their reports, collect ideas, and write a summary when done.
 
-### 4. Watch generation N
+### 4. Handle generation N
 
-Run ONE watcher on `gen-<N>.coord.md`:
+Resolve the generation tab's address: run `ListAgents` before and after spawning it, and the new row is the tab. Record it in `gen-<N>.coord.md` as `**Session:** <name>`, then send it a hello doorbell — that's how it learns your address so it can report back.
 
-```bash
-bash <plugin-dir>/skills/_shared/watch.sh <absolute path to gen-<N>.coord.md>
-```
+Then idle. Do not poll, and do not run a watcher; the generation tab will ring you.
 
-**Do not write your own watcher.** Always use `watch.sh`.
+When it does, read `gen-<N>.coord.md`:
 
-When the watcher wakes:
-
-- **`blocked:`** — The generation tab is relaying a block from one of its children (or is itself blocked). Read the question, resolve it.
+- **`blocked:`** — The generation tab is relaying a block from one of its children (or is itself blocked). Read the question, resolve it. Answer in the generation tab's file and ring it.
 - **`done`** — The generation tab has finished. Proceed to step 5.
-- **Other log entries** — Re-arm the watcher and wait.
+- **Other log entries** — Nothing to do; idle again.
 
 ### 5. Harvest from generation tab
 
