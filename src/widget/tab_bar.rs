@@ -25,7 +25,7 @@ pub struct TabBar<'a> {
 
 impl<'a> TabBar<'a> {
     pub fn view(self, toast_elements: Vec<Element<'a, Message>>) -> Element<'a, Message> {
-        let inactive_bg = self.terminal_theme.black;
+        let inactive_bg = self.terminal_theme.surface;
         let has_agents = self.tabs.iter().any(|t| t.is_claude);
         let show_separators = self.tabs.len() > 1;
 
@@ -119,7 +119,7 @@ impl<'a> TabBar<'a> {
         let has_children = is_foldable && self.tabs.has_claude_children(tab.id);
         let is_folded = self.tabs.is_folded(tab.id);
 
-        let base_bg = if is_active { self.terminal_theme.bg } else { self.terminal_theme.black };
+        let base_bg = if is_active { self.terminal_theme.bg } else { self.terminal_theme.surface };
         let bg = self.bell_flashes.blend(tab.id, base_bg, self.terminal_theme.yellow);
 
         let max_label_chars = self.max_label_chars(indent);

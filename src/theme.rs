@@ -4,6 +4,9 @@ pub struct TerminalTheme {
     pub is_dark: bool,
     pub fg: Color,
     pub bg: Color,
+    /// Chrome background (tab bar, inactive tabs). One step off `bg`; distinct
+    /// from ANSI `black`, which is a palette entry rather than a surface.
+    pub surface: Color,
     pub black: Color,
     pub red: Color,
     pub green: Color,
@@ -27,6 +30,7 @@ pub fn solarized_dark() -> TerminalTheme {
         is_dark: true,
         bg: Color::from_rgb8(0x00, 0x2b, 0x36),
         fg: Color::from_rgb8(0x83, 0x94, 0x96),
+        surface: Color::from_rgb8(0x07, 0x36, 0x42),
         black: Color::from_rgb8(0x07, 0x36, 0x42),
         red: Color::from_rgb8(0xdc, 0x32, 0x2f),
         green: Color::from_rgb8(0x85, 0x99, 0x00),
@@ -51,6 +55,7 @@ pub fn solarized_light() -> TerminalTheme {
         is_dark: false,
         bg: Color::from_rgb8(0xfd, 0xf6, 0xe3),
         fg: Color::from_rgb8(0x65, 0x7b, 0x83),
+        surface: Color::from_rgb8(0xee, 0xe8, 0xd5),
         black: Color::from_rgb8(0x07, 0x36, 0x42),
         red: Color::from_rgb8(0xdc, 0x32, 0x2f),
         green: Color::from_rgb8(0x85, 0x99, 0x00),
