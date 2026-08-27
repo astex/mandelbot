@@ -619,7 +619,7 @@ impl App {
             if let (Some(pr), Some(dir)) = (tab.pr_number(), &tab.project_dir) {
                 if let Some(slug) = crate::links::github_slug_for_dir(dir) {
                     let url = format!("https://github.com/{slug}/pull/{pr}");
-                    let _ = open::that(url);
+                    let _ = open::that_detached(url);
                 }
             }
         }

@@ -625,7 +625,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for TerminalWidget<'a> {
 
                     // Open link on control+click.
                     if let Interaction::HoveringLink { url, .. } = &state.interaction {
-                        let _ = open::that(url);
+                        let _ = open::that_detached(url);
                         shell.capture_event();
                         return;
                     }
