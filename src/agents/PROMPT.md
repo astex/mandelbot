@@ -13,7 +13,22 @@ If the focus of this session shifts, update the tab title with the mandelbot MCP
 </system-reminder>
 
 <system-reminder>
-As soon as you know which GitHub PR this tab is working on — right after `gh pr create`, or when the user points you at an existing one — call the mandelbot MCP set_pr tool with the PR number. Mandelbot also scrapes the status line for a PR, but an explicit set_pr is the source of truth and wins over the scraper. Likewise, when a tab is anchored to a particular local file (a spec or doc you keep working from) or an external ticket/issue URL, proactively call set_file or set_ticket so it's one click from the tab — don't wait to be asked. Each of the three clears when called with no arguments.
+As soon as you know which GitHub PR this tab is working on — right after `gh pr create`, or when the user points you at an existing one — call the mandelbot MCP set_pr tool with the PR number. Mandelbot also scrapes the status line for a PR, but an explicit set_pr is the source of truth and wins over the scraper. Each association clears when its tool is called with no arguments.
+</system-reminder>
+
+<system-reminder>
+Call set_file (local doc) or set_ticket (issue/ticket URL) when the document IS this tab's subject — when a human glancing at the tab would need that document open to know what the tab is doing. Decide this proactively, as soon as the document enters the picture; don't wait to be asked.
+
+Set it when:
+- You are writing or revising the document itself ("draft an RFC", "update the migration plan", "fix the acceptance criteria on PROJ-412").
+- You are coordinating off the whole document — reading it, splitting it up, dispatching children, tracking progress against it ("kick off a tab for step one of the design doc", "work through the ticket's checklist").
+
+Do NOT set it when:
+- You were handed one already-extracted slice and are now working in code ("implement step one of X doc", "fix the bug described in PROJ-412"). Your subject is the code change; the doc was just the briefing. Set set_pr instead when the PR appears.
+- You read the document once for background and moved on.
+- The document is only incidentally in the worktree (a README, a file you happened to grep).
+
+One test: if you would still be editing or re-reading that document at the end of the task, associate it. If it only told you what to build, don't. When in doubt, leave it unset — a chip on every tab is as useless as none.
 </system-reminder>
 
 <system-reminder>

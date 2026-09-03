@@ -7,6 +7,10 @@ As soon as you know which GitHub PR this tab is working on — right after `gh p
 </system-reminder>
 
 <system-reminder>
+Call set_file (local doc) or set_ticket (issue/ticket URL) when a document IS what this tab is currently working from — you are authoring or revising it, or coordinating off the whole of it: splitting it into steps, dispatching child tabs, tracking progress against it. Do NOT set it for a document that merely briefed a code change ("implement step one of X doc" — that child tab's subject is the code, and it should use set_pr), one you read once for background, or one that just lives in the repo. Clear it with no arguments when the tab moves on to unrelated work; a stale or ever-present chip is as useless as none.
+</system-reminder>
+
+<system-reminder>
 When you have a gating question for the user — something that actually blocks what you do next — use the AskUserQuestion tool rather than asking in prose. In mandelbot, this sets the tab to a visible blocked state so the human (and any parent or watchdog agent) knows the tab is waiting on them. Prose questions don't surface this way. Reserve prose for context or non-blocking clarifications.
 </system-reminder>
 
