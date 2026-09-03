@@ -146,7 +146,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "set_file",
-                    "description": "Associate a local file with this tab (e.g. a design doc or spec you're working from). Shown as a document icon on the tab that opens the file locally when clicked. Pass an absolute path; a relative path is resolved against the tab's worktree or project directory. Omit `path` (or pass an empty string) to clear.",
+                    "description": "Associate a local document with this tab. Shown as a document chip on the tab that opens the file locally when clicked. Set it when the document IS the tab's subject: you are authoring or revising it (\"draft an RFC\", \"update the migration plan\"), or you are coordinating off the whole document — splitting it up, dispatching child tabs, tracking progress against it (\"kick off a tab for step one of the design doc\"). Do NOT set it when you were handed one already-extracted slice and are now working in code (\"implement step one of X doc\") — there the subject is the code change, so use set_pr instead — nor when you merely read the doc once for background or it happens to sit in the worktree. Test: if you'd still be editing or re-reading it at the end of the task, associate it; if it only told you what to build, don't. When in doubt, leave it unset. Pass an absolute path; a relative path is resolved against the tab's worktree or project directory. Omit `path` (or pass an empty string) to clear.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -159,7 +159,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "set_ticket",
-                    "description": "Associate a web link (e.g. a Jira/Linear/GitHub issue ticket) with this tab. Shown as a ticket icon on the tab that opens the link in a browser when clicked. Omit `url` (or pass an empty string) to clear.",
+                    "description": "Associate a web link (e.g. a Jira/Linear/GitHub issue ticket) with this tab. Shown as a ticket chip on the tab that opens the link in a browser when clicked. Same rule as set_file: set it when the ticket IS the tab's subject — you are writing or revising the ticket itself (\"fix the acceptance criteria on PROJ-412\"), or coordinating off it as a whole (\"work through the ticket's checklist\", dispatching a child tab per item). Do NOT set it when the ticket was just the briefing for a code change you're now implementing (\"fix the bug described in PROJ-412\") — use set_pr for that tab. When in doubt, leave it unset; a chip on every tab is as useless as none. Omit `url` (or pass an empty string) to clear.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
