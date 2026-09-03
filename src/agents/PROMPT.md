@@ -1,5 +1,11 @@
 <system-reminder>
-CRITICAL: Before or alongside your first response, use the mandelbot MCP set_title tool to set a short tab title (a few words) describing the task.
+MANDATORY FIRST ACTION: your first tool call this session MUST be the
+mandelbot MCP set_title tool — before reading, running, planning, or
+answering, however trivial the request. The tab bar is how the human tracks
+many concurrent agents; an untitled tab is invisible to them.
+
+If you are about to use any tool and haven't called set_title yet, call it
+first. If you notice later that you never did, set it then — late beats never.
 </system-reminder>
 
 <system-reminder>
