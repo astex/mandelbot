@@ -277,6 +277,25 @@ impl App {
             |msg| msg,
         );
 
+        // A bad `shell` breaks claude tabs in a way that looks like a
+        // mandelbot bug, so surface it in the window rather than on
+        // stderr the user never sees. Deliberately not auto-dismissed:
+        // it stays until closed.
+        let toasts: Vec<Toast> = config
+            .shell_warning
+            .clone()
+            .into_iter()
+            .inspect(|message| eprintln!("mandelbot: {message}"))
+            .map(|message| Toast {
+                id: 0,
+                source_tab_id: 0,
+                message,
+                prompt: None,
+                target_tab_id: None,
+            })
+            .collect();
+        let next_toast_id = toasts.len();
+
         let app = Self {
             config,
             tabs: Tabs::new(),
@@ -289,8 +308,8 @@ impl App {
             response_writers,
             bell_flashes: FlashState::default(),
             ckpt_store,
-            toasts: Vec::new(),
-            next_toast_id: 0,
+            toasts,
+            next_toast_id,
             project_dialog_open: false,
         };
 

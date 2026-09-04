@@ -32,8 +32,142 @@ fn default_line_height() -> f32 {
     1.3
 }
 
-fn default_shell() -> String {
+pub fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
+
+/// Shells known to accept `-l -i -c <command>`, which is how mandelbot
+/// launches claude inside the configured shell.
+const POSIX_SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ash", "ksh", "ksh88", "ksh93", "mksh",
+    "pdksh", "yash", "busybox",
+];
+
+/// Real shells that do *not* honor `-l -i -c <command>` the same way.
+const NON_POSIX_SHELLS: &[&str] = &[
+    "fish", "csh", "tcsh", "rc", "nu", "xonsh", "elvish", "pwsh",
+    "powershell",
+];
+
+/// Extensions that mark the configured `shell` as a script rather than
+/// a shell binary.
+const SCRIPT_EXTENSIONS: &[&str] = &[
+    "sh", "bash", "zsh", "fish", "py", "rb", "pl", "js", "ts", "exp",
+];
+
+/// Every warning ends with this so the user knows what to edit without
+/// reading mandelbot's source.
+const CONFIG_HINT: &str = "Set \"shell\" in ~/.mandelbot/config.json to \
+     a POSIX shell such as /bin/zsh.";
+
+/// Why a non-shell `shell` breaks claude tabs specifically.
+const SCRIPT_EFFECT: &str = "Scripts ignore the `-l -i -c <command>` \
+     arguments mandelbot starts claude with, so claude tabs run the \
+     script's own commands and open in the wrong directory.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellVerdict {
+    /// Looks like a shell mandelbot can drive.
+    Ok,
+    /// Nothing to run at all; the caller falls back to `default_shell`.
+    Empty,
+    /// Usable as a command, but probably not as mandelbot's shell.
+    Suspect(String),
+}
+
+/// Classify a configured `shell` value.
+///
+/// `shebang` is the first line of the shell's file when it could be
+/// read, so the check stays a pure function of its inputs. A shebang is
+/// decisive: a file with one is a script, and a script silently drops
+/// the `-l -i -c <command>` arguments mandelbot passes it — which is
+/// exactly how a wrapper script ends up running claude in its own
+/// hardcoded directory instead of the tab's.
+pub fn check_shell(shell: &str, shebang: Option<&str>) -> ShellVerdict {
+    let Some(command) = shell.split_whitespace().next() else {
+        return ShellVerdict::Empty;
+    };
+    let name = command.rsplit('/').next().unwrap_or(command);
+
+    if let Some(line) = shebang
+        && let Some(interpreter) = shebang_interpreter(line)
+    {
+        return ShellVerdict::Suspect(format!(
+            "shell \"{command}\" is a script (its shebang runs \
+             {interpreter}), not a shell binary. {SCRIPT_EFFECT} \
+             {CONFIG_HINT}"
+        ));
+    }
+
+    if POSIX_SHELLS.contains(&name) {
+        return ShellVerdict::Ok;
+    }
+
+    if NON_POSIX_SHELLS.contains(&name) {
+        return ShellVerdict::Suspect(format!(
+            "shell \"{command}\" does not accept the \
+             `-l -i -c <command>` arguments mandelbot starts claude \
+             with, so claude tabs may open in the wrong directory. \
+             {CONFIG_HINT}"
+        ));
+    }
+
+    if let Some((_, extension)) = name.rsplit_once('.')
+        && SCRIPT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+    {
+        return ShellVerdict::Suspect(format!(
+            "shell \"{command}\" looks like a script, not a shell \
+             binary. {SCRIPT_EFFECT} {CONFIG_HINT}"
+        ));
+    }
+
+    ShellVerdict::Suspect(format!(
+        "shell \"{command}\" is not a recognized POSIX shell. If it is \
+         a wrapper script, claude tabs will open in the wrong \
+         directory. {CONFIG_HINT}"
+    ))
+}
+
+/// Extract the interpreter from a shebang line, if the line is one.
+fn shebang_interpreter(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("#!")?.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut words = rest.split_whitespace();
+    let first = words.next()?;
+    // `#!/usr/bin/env bash` names the real interpreter in word two.
+    let interpreter =
+        if first.rsplit('/').next() == Some("env") {
+            words.next().unwrap_or(first)
+        } else {
+            first
+        };
+    Some(interpreter.to_string())
+}
+
+/// Read the first line of `path`, for shebang detection. Returns `None`
+/// for binaries, unreadable files, and bare names resolved via `PATH`.
+fn read_shebang(command: &str) -> Option<String> {
+    use std::io::Read;
+
+    if !command.contains('/') {
+        return None;
+    }
+    let mut buf = [0u8; 128];
+    let mut file = fs::File::open(command).ok()?;
+    let read = file.read(&mut buf).ok()?;
+    let head = std::str::from_utf8(&buf[..read]).ok()?;
+    Some(head.lines().next().unwrap_or("").to_string())
+}
+
+/// Classify the configured `shell`, reading its shebang when possible.
+pub fn validate_shell(shell: &str) -> ShellVerdict {
+    let shebang = shell
+        .split_whitespace()
+        .next()
+        .and_then(read_shebang);
+    check_shell(shell, shebang.as_deref())
 }
 
 fn default_workflow() -> String {
@@ -121,6 +255,11 @@ pub struct Config {
 
     #[serde(default = "default_auto_checkpoint")]
     pub auto_checkpoint: bool,
+
+    /// Set by `load` when `shell` looks like something mandelbot cannot
+    /// drive. Surfaced to the user as a toast at startup.
+    #[serde(skip)]
+    pub shell_warning: Option<String>,
 }
 
 impl Default for Config {
@@ -137,6 +276,7 @@ impl Default for Config {
             worktree_location: default_worktree_location(),
             models: Models::default(),
             auto_checkpoint: default_auto_checkpoint(),
+            shell_warning: None,
         }
     }
 }
@@ -237,6 +377,12 @@ impl Config {
     }
 
     pub fn load() -> Self {
+        let mut config = Self::read();
+        config.check_shell();
+        config
+    }
+
+    fn read() -> Self {
         if let Ok(json) = std::env::var("MANDELBOT_CONFIG") {
             return serde_json::from_str(&json)
                 .expect("MANDELBOT_CONFIG contains invalid JSON");
@@ -250,6 +396,25 @@ impl Config {
         }
     }
 
+    /// Record a warning when `shell` is not something mandelbot can
+    /// drive, and fall back to the default shell when it is empty.
+    /// Never refuses to start: an unusual-but-working shell should
+    /// still boot, just loudly.
+    fn check_shell(&mut self) {
+        let warning = match validate_shell(&self.shell) {
+            ShellVerdict::Ok => return,
+            ShellVerdict::Empty => {
+                let fallback = default_shell();
+                self.shell = fallback.clone();
+                format!(
+                    "config \"shell\" is empty; falling back to \
+                     {fallback}."
+                )
+            }
+            ShellVerdict::Suspect(reason) => reason,
+        };
+        self.shell_warning = Some(warning);
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -323,4 +488,145 @@ fn find_font_variants_from_families(db: &Database, families: &[fontdb::Family<'_
         }
     }
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn suspect_reason(verdict: ShellVerdict) -> String {
+        match verdict {
+            ShellVerdict::Suspect(reason) => reason,
+            other => panic!("expected Suspect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn known_shells_are_ok() {
+        for shell in
+            ["/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/dash", "zsh"]
+        {
+            assert_eq!(
+                check_shell(shell, None),
+                ShellVerdict::Ok,
+                "{shell}",
+            );
+        }
+    }
+
+    #[test]
+    fn unusual_path_to_a_known_shell_is_ok() {
+        assert_eq!(
+            check_shell("/opt/homebrew/bin/bash", None),
+            ShellVerdict::Ok,
+        );
+        assert_eq!(
+            check_shell("/nix/store/abc123-bash-5.2/bin/bash", None),
+            ShellVerdict::Ok,
+        );
+    }
+
+    #[test]
+    fn arguments_after_the_shell_are_ignored() {
+        assert_eq!(
+            check_shell("/bin/bash --norc", None),
+            ShellVerdict::Ok,
+        );
+    }
+
+    #[test]
+    fn empty_shell_is_empty() {
+        assert_eq!(check_shell("", None), ShellVerdict::Empty);
+        assert_eq!(check_shell("   \t ", None), ShellVerdict::Empty);
+    }
+
+    #[test]
+    fn shebang_marks_a_wrapper_script() {
+        let reason = suspect_reason(check_shell(
+            "/Users/someone/bin/wrapper",
+            Some("#!/bin/bash"),
+        ));
+        assert!(reason.contains("is a script"), "{reason}");
+        assert!(reason.contains("-l -i -c"), "{reason}");
+        assert!(reason.contains("wrapper"), "{reason}");
+    }
+
+    #[test]
+    fn shebang_wins_over_a_shell_like_name() {
+        // A file named `bash` that is really a script still drops the
+        // arguments mandelbot passes it.
+        assert!(matches!(
+            check_shell("/Users/someone/bin/bash", Some("#!/bin/sh")),
+            ShellVerdict::Suspect(_),
+        ));
+    }
+
+    #[test]
+    fn a_binary_first_line_is_not_a_shebang() {
+        assert_eq!(
+            check_shell("/bin/bash", Some("\u{7f}ELF\u{2}\u{1}\u{1}")),
+            ShellVerdict::Ok,
+        );
+    }
+
+    #[test]
+    fn script_extension_is_suspect_without_a_shebang() {
+        let reason = suspect_reason(check_shell(
+            "/Users/someone/bin/claude-shell.sh",
+            None,
+        ));
+        assert!(reason.contains("looks like a script"), "{reason}");
+        assert!(reason.contains("claude-shell.sh"), "{reason}");
+    }
+
+    #[test]
+    fn script_extension_matches_case_insensitively() {
+        assert!(matches!(
+            check_shell("/Users/someone/bin/Wrapper.SH", None),
+            ShellVerdict::Suspect(_),
+        ));
+    }
+
+    #[test]
+    fn fish_is_flagged_as_a_real_but_incompatible_shell() {
+        let reason =
+            suspect_reason(check_shell("/opt/homebrew/bin/fish", None));
+        assert!(reason.contains("-l -i -c"), "{reason}");
+        assert!(!reason.contains("script"), "{reason}");
+    }
+
+    #[test]
+    fn unrecognized_names_are_flagged_but_not_called_scripts() {
+        let reason = suspect_reason(check_shell("/usr/bin/mystery", None));
+        assert!(
+            reason.contains("not a recognized POSIX shell"),
+            "{reason}",
+        );
+    }
+
+    #[test]
+    fn every_warning_names_the_config_key() {
+        for shell in [
+            "/usr/bin/fish",
+            "/Users/someone/bin/wrapper.sh",
+            "/usr/bin/mystery",
+        ] {
+            let reason = suspect_reason(check_shell(shell, None));
+            assert!(reason.contains("~/.mandelbot/config.json"), "{shell}");
+        }
+    }
+
+    #[test]
+    fn env_shebang_reports_the_real_interpreter() {
+        assert_eq!(
+            shebang_interpreter("#!/usr/bin/env bash"),
+            Some("bash".to_string()),
+        );
+        assert_eq!(
+            shebang_interpreter("#!/bin/zsh -f"),
+            Some("/bin/zsh".to_string()),
+        );
+        assert_eq!(shebang_interpreter("#!"), None);
+        assert_eq!(shebang_interpreter("not a shebang"), None);
+    }
 }
