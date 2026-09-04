@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use iced::Task;
 
+use crate::router;
 use crate::tab::{AgentRank, TerminalTab};
 
 use super::super::{terminal_size, App, Message};
@@ -69,11 +70,19 @@ impl App {
             AgentRank::Project => Some(id),
             AgentRank::Task => parent.and_then(|p| p.project_id),
         };
-        let model = model_override.unwrap_or_else(|| match rank {
+        let mut model = model_override.unwrap_or_else(|| match rank {
             AgentRank::Home => self.config.models.home.clone(),
             AgentRank::Project => self.config.models.project.clone(),
             AgentRank::Task => self.config.models.task.clone(),
         });
+        // Code paths that land here (UI key bindings, replace/fork, etc.)
+        // have already decided not to go through the async router — they
+        // either lack a prompt or are restoring an existing session.
+        // Coerce "auto" to a concrete fallback so we never invoke
+        // `claude --model auto`.
+        if model == "auto" {
+            model = router::fallback_for_rank(rank).to_string();
+        }
 
         let mut tab = TerminalTab::new(
             id, rows, cols, is_claude, rank,
@@ -94,6 +103,20 @@ impl App {
                 self.tabs.len() - 1
             }
         };
+
+        // Record the resolved model on the tab so the sidebar can show
+        // which model is actually driving the session.  Done via the
+        // snapshot/write pattern since `TerminalTab` exposes meta only
+        // through `Deref<TabMeta>` (read-only).
+        if is_claude {
+            let id_to_update = self.tabs.get_by_index(inserted_idx).map(|t| t.id);
+            if let Some(tid) = id_to_update
+                && let Some(mut meta) = self.tabs.snapshot(tid)
+            {
+                meta.model = Some(model.clone());
+                self.tabs.write(meta);
+            }
+        }
 
         if let Some(tab) = self.tabs.get_by_index(inserted_idx) {
             tab.set_colors(
@@ -161,6 +184,65 @@ impl App {
 
     pub(super) fn active_rank(&self) -> Option<AgentRank> {
         self.tabs.active().map(|t| t.rank)
+    }
+
+    pub(in crate::ui) fn handle_auto_route_resolved(
+        &mut self,
+        request: crate::ui::PendingAutoSpawn,
+        result: Result<router::RouterDecision, router::RouterError>,
+    ) -> Task<Message> {
+        let (chosen_model, reason, ok) = match result {
+            Ok(decision) => (decision.model, decision.reason, true),
+            Err(e) => {
+                let fallback = router::fallback_for_rank(request.rank).to_string();
+                eprintln!("auto-route failed: {e}; falling back to {fallback}");
+                (fallback, format!("router failed: {e}"), false)
+            }
+        };
+
+        let (new_tab_id, spawn_task) = self.spawn_tab_full(
+            request.is_claude,
+            request.rank,
+            request.project_dir,
+            request.parent_id,
+            request.prompt,
+            request.branch,
+            Some(chosen_model.clone()),
+            request.base,
+            request.resume_session_id,
+            request.existing_worktree,
+            request.insert_position,
+        );
+
+        if ok
+            && let Some(mut tab) = self.tabs.snapshot(new_tab_id)
+        {
+            tab.auto_routed = true;
+            tab.route_reason = Some(reason.clone());
+            self.tabs.write(tab);
+        }
+
+        if let Some(rtid) = request.requesting_tab_id {
+            self.respond_to_tab(rtid, serde_json::json!({ "tab_id": new_tab_id }));
+        }
+
+        let toast_msg = if ok {
+            if reason.is_empty() {
+                format!("Haiku → {chosen_model}")
+            } else {
+                format!("Haiku → {chosen_model} · {reason}")
+            }
+        } else {
+            format!("Auto-route failed, using {chosen_model}")
+        };
+        let toast_task = self.handle_show_toast(
+            new_tab_id,
+            toast_msg,
+            None,
+            Some(new_tab_id),
+        );
+
+        Task::batch([spawn_task, toast_task])
     }
 
     pub(super) fn respond_to_tab(&self, tab_id: usize, response: serde_json::Value) {
