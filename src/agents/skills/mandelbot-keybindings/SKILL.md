@@ -40,4 +40,5 @@ To know the user's actual prefixes, read `~/.mandelbot/config.json`. If the file
 | `movement + ←` | Parent | Navigate up to the parent tab |
 | `movement + Space` | Next idle | Jump to the next idle agent (priority: blocked → needs review → idle task → idle project) |
 | `movement + -` | Previous tab | Toggle back to the previously focused tab |
+| `movement + b` | Toggle tab bar | Collapse/expand the tab bar (auto-collapses in narrow windows; hover to peek) |
 | `movement + 0-9` | Select by index | Focus the tab at position 0–9 in display order |

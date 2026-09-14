@@ -307,7 +307,7 @@ impl App {
         let Some(size) = self.window_size else {
             return Task::none();
         };
-        let (rows, cols) = terminal_size(size, self.config.char_width(), self.config.char_height());
+        let (rows, cols) = terminal_size(size, self.tab_bar_reserved_width(), self.config.char_width(), self.config.char_height());
         // Project tabs always hang off Home, never off the active tab — a
         // shell tab is rank Home too, and parenting under one would leave the
         // new tab out of `display_order` entirely.
