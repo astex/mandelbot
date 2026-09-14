@@ -28,6 +28,15 @@ pub struct TabBar<'a> {
     pub bell_flashes: &'a FlashState,
     pub terminal_theme: &'a TerminalTheme,
     pub config: &'a Config,
+    /// Render the narrow strip: "home", 3-letter project names, and
+    /// status dot + digit for everything else.
+    pub collapsed: bool,
+}
+
+/// Width of the collapsed strip: room for "home" plus dot and digit.
+pub fn collapsed_width(config: &Config) -> f32 {
+    let cw = config.char_width();
+    (10.0 + PADDING) * 2.0 + cw * 6.0 + SUFFIX_SPACING * 3.0
 }
 
 impl<'a> TabBar<'a> {
@@ -36,8 +45,9 @@ impl<'a> TabBar<'a> {
         let has_agents = self.tabs.iter().any(|t| t.is_claude);
         let show_separators = self.tabs.len() > 1;
 
+        let width = self.width();
         let mut tab_col = column![];
-        tab_col = tab_col.push(vspace(TAB_GROUP_GAP / 2.0));
+        tab_col = tab_col.push(vspace(width, TAB_GROUP_GAP / 2.0));
 
         // Agent tree: Home → Projects → Tasks.
         let assignments = self.tabs.number_assignments();
@@ -49,7 +59,7 @@ impl<'a> TabBar<'a> {
             if show_separators && tab.rank == AgentRank::Project {
                 tab_col = tab_col.push(self.separator());
             }
-            let indent = tab.depth as f32 * INDENT_STEP;
+            let indent = if self.collapsed { 0.0 } else { tab.depth as f32 * INDENT_STEP };
             let num = assignments.get(&tab.id).copied();
             tab_col = tab_col.push(self.tab_button(tab, num, indent));
         }
@@ -66,7 +76,7 @@ impl<'a> TabBar<'a> {
                 if show_separators {
                     tab_col = tab_col.push(self.separator());
                 } else if has_agents {
-                    tab_col = tab_col.push(vspace(TAB_GROUP_GAP));
+                    tab_col = tab_col.push(vspace(width, TAB_GROUP_GAP));
                 }
             }
             let num = assignments.get(&tab.id).copied();
@@ -74,7 +84,7 @@ impl<'a> TabBar<'a> {
         }
 
         // Toasts anchored to the bottom.
-        if !toast_elements.is_empty() {
+        if !self.collapsed && !toast_elements.is_empty() {
             tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
             let mut toast_col = column![].spacing(PADDING);
             for t in toast_elements {
@@ -84,13 +94,17 @@ impl<'a> TabBar<'a> {
         }
 
         container(tab_col.height(Fill))
-            .width(TAB_BAR_WIDTH)
+            .width(width)
             .height(Fill)
             .style(move |_theme| container::Style {
                 background: Some(inactive_bg.into()),
                 ..Default::default()
             })
             .into()
+    }
+
+    fn width(&self) -> f32 {
+        if self.collapsed { collapsed_width(self.config) } else { TAB_BAR_WIDTH }
     }
 
     fn tab_by_id(&self, id: usize) -> Option<&'a TerminalTab> {
@@ -102,14 +116,14 @@ impl<'a> TabBar<'a> {
     fn separator(&self) -> Element<'a, Message> {
         let muted = Color { a: 0.25, ..self.terminal_theme.fg };
         let line: Element<'a, Message> = container(Space::new())
-            .width(TAB_BAR_WIDTH)
+            .width(self.width())
             .height(1)
             .style(move |_theme: &Theme| container::Style {
                 background: Some(muted.into()),
                 ..Default::default()
             })
             .into();
-        column![vspace(TAB_GROUP_GAP / 2.0), line, vspace(TAB_GROUP_GAP / 2.0)].into()
+        column![vspace(self.width(), TAB_GROUP_GAP / 2.0), line, vspace(self.width(), TAB_GROUP_GAP / 2.0)].into()
     }
 
     /// A single row in the tab bar. The row composes (from left to right):
@@ -128,6 +142,10 @@ impl<'a> TabBar<'a> {
 
         let base_bg = if is_active { self.terminal_theme.bg } else { self.terminal_theme.surface };
         let bg = self.bell_flashes.blend(tab.id, base_bg, self.terminal_theme.yellow);
+
+        if self.collapsed {
+            return self.collapsed_tab_button(tab, display_number, bg);
+        }
 
         let max_label_chars = self.max_label_chars(indent);
         let label_str = self.label_text(tab, max_label_chars);
@@ -175,6 +193,45 @@ impl<'a> TabBar<'a> {
         } else {
             tab_elem
         }
+    }
+
+    fn collapsed_tab_button(
+        &self,
+        tab: &'a TerminalTab,
+        display_number: Option<usize>,
+        bg: Color,
+    ) -> Element<'a, Message> {
+        let fg = self.terminal_theme.fg;
+        let size = self.config.font_size;
+        let label: String = match tab.rank {
+            _ if !tab.is_claude => String::new(),
+            AgentRank::Home => "home".into(),
+            AgentRank::Project => self.label_text(tab, 3).chars().take(3).collect(),
+            _ => String::new(),
+        };
+
+        let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
+        let number_text = display_number.map(|n| n.to_string()).unwrap_or_else(|| " ".into());
+        let mut content = row![].align_y(Alignment::Center).spacing(SUFFIX_SPACING);
+        if !label.is_empty() {
+            content = content.push(text(label).size(size).font(Font::MONOSPACE).color(fg));
+        }
+        content = content
+            .push(Space::new().width(Fill))
+            .push(text(dot_char).size(size * 0.6).color(status_dot_color(tab.status, fg)))
+            .push(text(number_text).size(size).font(Font::MONOSPACE).color(fg));
+
+        let styled = container(content)
+            .width(self.width())
+            .padding([5.0, 10.0 + PADDING])
+            .clip(true)
+            .style(move |_theme: &Theme| container::Style {
+                background: Some(bg.into()),
+                border: Border::default(),
+                ..Default::default()
+            });
+
+        mouse_area(styled).on_press(Message::SelectTab(tab.id)).into()
     }
 
     fn max_label_chars(&self, indent: f32) -> usize {
@@ -357,8 +414,8 @@ fn assoc_chip<'a>(
         .into()
 }
 
-fn vspace(h: f32) -> Element<'static, Message> {
-    Space::new().width(TAB_BAR_WIDTH).height(h).into()
+fn vspace(width: f32, h: f32) -> Element<'static, Message> {
+    Space::new().width(width).height(h).into()
 }
 
 fn has_pending_wakeup(tab: &TerminalTab) -> bool {

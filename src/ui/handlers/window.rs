@@ -31,14 +31,27 @@ impl App {
             return task;
         }
 
+        // Crossing the auto-collapse threshold wins over any earlier toggle.
+        let was_narrow = self.window_size.is_some_and(|s| self.is_narrow(s));
+        if was_narrow != self.is_narrow(size) {
+            self.tab_bar_collapse_override = None;
+        }
         self.window_size = Some(size);
+        self.resize_all_tabs();
+        Task::none()
+    }
+
+    /// Re-flow every tab's PTY to the current window and tab-bar width.
+    pub(in crate::ui) fn resize_all_tabs(&self) {
+        let Some(size) = self.window_size else { return };
+        let bar_width = self.tab_bar_reserved_width();
         let cw = self.config.char_width();
         let ch = self.config.char_height();
         let store = &self.ckpt_store;
         let cfg = &self.config;
         for tab in self.tabs.iter() {
             let reserved = crate::widget::timeline::pixel_height(store, tab, cfg);
-            let (rows, cols) = terminal_size_with_reserved(size, cw, ch, reserved);
+            let (rows, cols) = terminal_size_with_reserved(size, bar_width, cw, ch, reserved);
             tab.resize(rows, cols, size.width as u16, size.height as u16);
             tab.set_window_size(alacritty_terminal::event::WindowSize {
                 num_lines: rows as u16,
@@ -47,6 +60,12 @@ impl App {
                 cell_height: ch as u16,
             });
         }
+    }
+
+    pub(in crate::ui) fn handle_toggle_tab_bar(&mut self) -> Task<Message> {
+        self.tab_bar_collapse_override = Some(!self.tab_bar_collapsed());
+        self.tab_bar_hovered = false;
+        self.resize_all_tabs();
         Task::none()
     }
 }

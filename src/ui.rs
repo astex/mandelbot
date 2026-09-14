@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::SinkExt;
 
-use iced::widget::{column, container, row, Space};
+use iced::widget::{column, container, mouse_area, row, stack, Space};
 use iced::{Element, Fill, Size, Subscription, Task, Theme};
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
@@ -25,6 +25,8 @@ pub mod handlers;
 pub(crate) const PADDING: f32 = 4.0;
 pub(crate) const TAB_BAR_WIDTH: f32 = 400.0;
 pub(crate) const TAB_GROUP_GAP: f32 = 28.0;
+/// Below this many terminal columns (with the full bar), the bar auto-collapses.
+const AUTO_COLLAPSE_COLS: f32 = 80.0;
 const INITIAL_ROWS: u16 = 50;
 const INITIAL_COLS: u16 = 120;
 
@@ -61,6 +63,8 @@ pub enum Message {
     NavigateRank(i32),
     FocusPreviousTab,
     NextIdle,
+    ToggleTabBar,
+    TabBarHover(bool),
     PendingInput(PendingKey),
     /// Open the native folder picker for the pending tab `tab_id`.
     OpenProjectDialog(usize),
@@ -214,19 +218,20 @@ where
     )
 }
 
-fn terminal_size(window: Size, char_width: f32, char_height: f32) -> (usize, usize) {
-    terminal_size_with_reserved(window, char_width, char_height, 0.0)
+fn terminal_size(window: Size, bar_width: f32, char_width: f32, char_height: f32) -> (usize, usize) {
+    terminal_size_with_reserved(window, bar_width, char_width, char_height, 0.0)
 }
 
 /// Same as `terminal_size` but reserves `reserved_px` vertical pixels
 /// below the terminal (e.g. for the timeline strip).
 fn terminal_size_with_reserved(
     window: Size,
+    bar_width: f32,
     char_width: f32,
     char_height: f32,
     reserved_px: f32,
 ) -> (usize, usize) {
-    let cols = ((window.width - PADDING * 2.0 - TAB_BAR_WIDTH - terminal::SCROLLBAR_WIDTH) / char_width).floor() as usize;
+    let cols = ((window.width - PADDING * 2.0 - bar_width - terminal::SCROLLBAR_WIDTH) / char_width).floor() as usize;
     let rows = ((window.height - PADDING * 2.0 - reserved_px) / char_height).floor() as usize;
     (rows.max(1), cols.max(1))
 }
@@ -251,6 +256,10 @@ pub struct App {
     /// A native folder picker is in flight; further `OpenProjectDialog`
     /// requests are ignored until its `SpawnOrFocusProjectTab` arrives.
     project_dialog_open: bool,
+    /// User toggle; `None` follows the window-width auto-collapse rule.
+    /// Cleared whenever a resize crosses the threshold.
+    tab_bar_collapse_override: Option<bool>,
+    tab_bar_hovered: bool,
 }
 
 impl App {
@@ -292,6 +301,8 @@ impl App {
             toasts: Vec::new(),
             next_toast_id: 0,
             project_dialog_open: false,
+            tab_bar_collapse_override: None,
+            tab_bar_hovered: false,
         };
 
         (app, listen_task)
@@ -328,6 +339,11 @@ impl App {
             Message::NavigateRank(delta) => self.handle_navigate_rank(delta),
             Message::FocusPreviousTab => self.handle_focus_previous_tab(),
             Message::NextIdle => self.handle_next_idle(),
+            Message::ToggleTabBar => self.handle_toggle_tab_bar(),
+            Message::TabBarHover(hovered) => {
+                self.tab_bar_hovered = hovered;
+                Task::none()
+            }
             Message::PendingInput(key) => self.handle_pending_input(key),
             Message::OpenProjectDialog(tab_id) => self.handle_open_project_dialog(tab_id),
             Message::SpawnOrFocusProjectTab { tab_id, path } => {
@@ -390,11 +406,13 @@ impl App {
             .map(|t| crate::widget::toast::view(t, &self.config))
             .collect();
 
+        let collapsed = self.tab_bar_collapsed();
         let tab_bar = crate::widget::tab_bar::TabBar {
             tabs: &self.tabs,
             bell_flashes: &self.bell_flashes,
             terminal_theme: &self.terminal_theme,
             config: &self.config,
+            collapsed: collapsed && !self.tab_bar_hovered,
         }
         .view(toast_elements);
 
@@ -431,10 +449,38 @@ impl App {
             terminal_pane.into()
         };
 
-        row![tab_bar, right_side]
+        if !collapsed {
+            return row![tab_bar, right_side].width(Fill).height(Fill).into();
+        }
+
+        // Collapsed: reserve only the narrow strip and float the bar on top
+        // so hovering expands it over the terminal without reflowing it.
+        let base = row![Space::new().width(self.tab_bar_reserved_width()), right_side]
             .width(Fill)
-            .height(Fill)
-            .into()
+            .height(Fill);
+        let overlay = mouse_area(tab_bar)
+            .on_enter(Message::TabBarHover(true))
+            .on_exit(Message::TabBarHover(false));
+        stack![base, overlay].width(Fill).height(Fill).into()
+    }
+
+    fn tab_bar_collapsed(&self) -> bool {
+        self.tab_bar_collapse_override
+            .unwrap_or_else(|| self.window_size.is_some_and(|s| self.is_narrow(s)))
+    }
+
+    /// Whether `size` is too narrow for the full bar plus a usable terminal.
+    fn is_narrow(&self, size: Size) -> bool {
+        size.width < TAB_BAR_WIDTH + AUTO_COLLAPSE_COLS * self.config.char_width()
+    }
+
+    /// Horizontal space the tab bar takes from the terminal pane.
+    fn tab_bar_reserved_width(&self) -> f32 {
+        if self.tab_bar_collapsed() {
+            crate::widget::tab_bar::collapsed_width(&self.config)
+        } else {
+            TAB_BAR_WIDTH
+        }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {

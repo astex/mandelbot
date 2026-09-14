@@ -57,6 +57,7 @@ fn movement_key_message(key: &keyboard::Key) -> Option<Message> {
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::NavigateRank(1)),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::NavigateRank(-1)),
         keyboard::Key::Character(c) if c.as_ref() == "-" => Some(Message::FocusPreviousTab),
+        keyboard::Key::Character(c) if c.as_ref() == "b" => Some(Message::ToggleTabBar),
         keyboard::Key::Character(c) => {
             c.as_ref().parse::<usize>().ok()
                 .filter(|&d| (0..=9).contains(&d))
