@@ -9,7 +9,11 @@ use serde::Deserialize;
 use crate::theme::{self, TerminalTheme};
 
 fn default_theme() -> String {
-    "dark".to_string()
+    "system".to_string()
+}
+
+fn default_system_dark() -> bool {
+    true
 }
 
 fn default_font() -> String {
@@ -121,6 +125,10 @@ pub struct Config {
 
     #[serde(default = "default_auto_checkpoint")]
     pub auto_checkpoint: bool,
+
+    /// Current OS dark/light preference, consulted when `theme` is "system".
+    #[serde(skip, default = "default_system_dark")]
+    pub system_dark: bool,
 }
 
 impl Default for Config {
@@ -137,6 +145,7 @@ impl Default for Config {
             worktree_location: default_worktree_location(),
             models: Models::default(),
             auto_checkpoint: default_auto_checkpoint(),
+            system_dark: default_system_dark(),
         }
     }
 }
@@ -214,6 +223,7 @@ impl Config {
     pub fn terminal_theme(&self) -> TerminalTheme {
         match self.theme.as_str() {
             "light" => theme::solarized_light(),
+            "system" if !self.system_dark => theme::solarized_light(),
             _ => theme::solarized_dark(),
         }
     }

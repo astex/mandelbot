@@ -12,7 +12,7 @@ Use this skill when the user asks to change mandelbot settings. Configuration li
 
 | Key | Type | Default | Values |
 |-----|------|---------|--------|
-| `theme` | string | `"dark"` | `"dark"`, `"light"` |
+| `theme` | string | `"system"` | `"dark"`, `"light"`, `"system"` (follows OS at runtime) |
 | `font` | string | `"monospace"` | Any font name installed on the system |
 | `font_size` | number | `14.0` | Any positive number |
 | `control_prefix` | string | `"ctrl+shift"` | Modifier combo (e.g. `"ctrl+shift"`, `"super"`) |
