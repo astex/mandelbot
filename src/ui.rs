@@ -53,6 +53,7 @@ pub enum Message {
     Scroll(i32),
     ScrollTo(usize),
     WindowResized(Size),
+    SystemThemeChanged(iced::theme::Mode),
     NewTab,
     SpawnAgent,
     SpawnChild,
@@ -305,12 +306,15 @@ impl App {
             tab_bar_hovered: false,
         };
 
-        (app, listen_task)
+        let theme_task = iced::system::theme().map(Message::SystemThemeChanged);
+
+        (app, Task::batch([listen_task, theme_task]))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::WindowResized(size) => self.handle_window_resized(size),
+            Message::SystemThemeChanged(mode) => self.handle_system_theme_changed(mode),
             Message::TabOutput(tab_id, bg_tasks, pr_number) => {
                 self.handle_tab_output(tab_id, bg_tasks, pr_number)
             }
@@ -484,7 +488,24 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
+        Subscription::batch([
+            iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+            iced::system::theme_changes().map(Message::SystemThemeChanged),
+        ])
+    }
+
+    fn handle_system_theme_changed(&mut self, mode: iced::theme::Mode) -> Task<Message> {
+        // Mode::None means the platform has no preference; keep the current one.
+        self.config.system_dark = match mode {
+            iced::theme::Mode::Light => false,
+            iced::theme::Mode::Dark => true,
+            iced::theme::Mode::None => return Task::none(),
+        };
+        self.terminal_theme = self.config.terminal_theme();
+        for tab in self.tabs.iter() {
+            tab.set_colors(self.terminal_theme.fg, self.terminal_theme.bg, self.terminal_theme.fg);
+        }
+        Task::none()
     }
 
     pub fn theme(&self) -> Theme {
