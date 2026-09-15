@@ -188,8 +188,6 @@ const SKILL_SHARED_INDEX_TEMPLATE: &str =
     include_str!("../agents/skills/_shared/index.template.md");
 const SKILL_SHARED_CHILD_TEMPLATE: &str =
     include_str!("../agents/skills/_shared/child.template.md");
-const SKILL_SHARED_WATCH: &str =
-    include_str!("../agents/skills/_shared/watch.sh");
 const SKILL_DELEGATE: &str =
     include_str!("../agents/skills/mandelbot-delegate/SKILL.md");
 const SKILL_DELEGATE_NOGIT: &str =
@@ -430,8 +428,9 @@ pub(super) fn write_plugin_dir(
         SKILL_SHARED_CHILD_TEMPLATE,
     )
     .expect("failed to write shared child template");
-    std::fs::write(shared_dir.join("watch.sh"), SKILL_SHARED_WATCH)
-        .expect("failed to write shared watch script");
+    // Superseded by peer messaging; remove the copy left by older installs so
+    // agents can't find it and fall back to polling.
+    let _ = std::fs::remove_file(shared_dir.join("watch.sh"));
 
     let skill_path = delegate_dir.join("SKILL.md");
     std::fs::write(&skill_path, delegate_content)

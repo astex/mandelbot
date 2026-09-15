@@ -4,7 +4,7 @@ You are a **generation tab** — a coordinator for one generation of implementat
 
 Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol before proceeding.
 
-**Always use `watch.sh` to wait for file changes.** Do not write your own watcher, poll loop, or inotify script. The exact command is shown at each step that requires waiting.
+**Never poll.** Do not write a watcher, inotify script, or sleep loop against a coord file. Coordination is write-the-file-then-ring-the-doorbell in both directions — see "The doorbell" in `_shared/coord.md`. You are on both sides of it: you ring the iterate parent, and your implementation children ring you.
 
 ## Your inputs
 
@@ -48,21 +48,17 @@ If your own worktree was branched off a specific base (i.e. the parent passed a 
 
 Do **not** pass a `model` parameter — children use the default (opus).
 
-### 3. Watch children
+Spawn children **one at a time**, resolving each one's address before spawning the next: run `ListAgents` before and after the spawn, and the new row is that child. Record it in the child's coord file as `**Session:** <name>`, then send the child a hello doorbell (`SendMessage(to: "<child session>", message: "coord update: <path to child's coord file>")`). The hello is mandatory — it's how the child learns your address so it can report back.
 
-Run one watcher per child in the background:
+### 3. Handle children
 
-```bash
-bash <plugin-dir>/skills/_shared/watch.sh <absolute path to child's coord file>
-```
+You idle until a child rings your doorbell. When one does, read the coord file it names:
 
-When a watcher wakes:
-
-- **`blocked: <question>`** — If you can answer it, append `- [...] [DIRECTIVE] <answer>` in the child's file. If you cannot (it requires the iterate parent's input), relay it: append `- [...] blocked: <child-label> asks: <question>` in **your own** coord file. When the parent answers in your file, forward the answer to the child.
+- **`blocked: <question>`** — If you can answer it, append `- [...] [DIRECTIVE] <answer>` in the child's file and ring that child. If you cannot (it requires the iterate parent's input), relay it: append `- [...] blocked: <child-label> asks: <question>` in **your own** coord file and ring the iterate parent. When the parent answers in your file, forward the answer into the child's file and ring the child.
 - **`idea:` entry** — Note it. Do not act on it; you'll collect all ideas at the end.
 - **`awaiting_review`, `done`, or `failed`** — Settled. Note the outcome. When all children have settled, proceed to step 4.
 
-Re-arm each watcher after handling.
+Every write into a child's file is followed by ringing that child. A directive nobody rings for is never read.
 
 ### 4. Summarize and finish
 
@@ -73,7 +69,7 @@ When all children have settled — `done`, `awaiting_review`, or `failed` — wr
 - **Integration notes**: any observations about merge conflicts, dependency ordering, or issues the parent should know about before integrating.
 
 Then:
-1. Append `- [...] done` and set `**State:** done`.
+1. Append `- [...] done`, set `**State:** done`, and ring the iterate parent's doorbell.
 2. **If all your children are `done` or `failed`** (no one is in `awaiting_review`), close your tab via `close_tab` — this also closes descendants. **Otherwise stay open**: any `awaiting_review` children need their tabs alive for the human to drive review feedback, and closing your tab would promote one of them, disrupting the tab organization. Just go idle once you've summarized.
 
 ## The idea convention
@@ -88,4 +84,6 @@ Tell children about this in your "How we work" section:
 
 ## Parent directives
 
-The iterate parent may write `[DIRECTIVE]` entries directly into your implementation children's coord files — bypassing you. This is normal for unblocking a child quickly. Your watcher on that child's file will fire; just note the directive and continue. Do not duplicate or contradict directives the parent already wrote.
+The iterate parent may write `[DIRECTIVE]` entries directly into your implementation children's coord files and ring those children itself — bypassing you. It addresses them using the `**Session:**` headers you recorded, which is why recording them matters beyond your own use.
+
+You are **not** notified when this happens; there is no watcher on those files anymore. So when you next read a child's file, expect to find directives you didn't write. Note them and continue — do not duplicate or contradict a directive the parent already wrote.
