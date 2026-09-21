@@ -66,6 +66,8 @@ pub enum Message {
     NextIdle,
     ToggleTabBar,
     TabBarHover(bool),
+    /// Global modifier state; holding the movement prefix peeks the bar.
+    ModifiersChanged(iced::keyboard::Modifiers),
     PendingInput(PendingKey),
     /// Open the native folder picker for the pending tab `tab_id`.
     OpenProjectDialog(usize),
@@ -261,6 +263,8 @@ pub struct App {
     /// Cleared whenever a resize crosses the threshold.
     tab_bar_collapse_override: Option<bool>,
     tab_bar_hovered: bool,
+    /// Movement prefix is held; expands a collapsed bar like hover does.
+    tab_bar_peek: bool,
 }
 
 impl App {
@@ -304,6 +308,7 @@ impl App {
             project_dialog_open: false,
             tab_bar_collapse_override: None,
             tab_bar_hovered: false,
+            tab_bar_peek: false,
         };
 
         let theme_task = iced::system::theme().map(Message::SystemThemeChanged);
@@ -346,6 +351,11 @@ impl App {
             Message::ToggleTabBar => self.handle_toggle_tab_bar(),
             Message::TabBarHover(hovered) => {
                 self.tab_bar_hovered = hovered;
+                Task::none()
+            }
+            Message::ModifiersChanged(modifiers) => {
+                self.tab_bar_peek =
+                    !modifiers.is_empty() && self.config.matches_movement(modifiers);
                 Task::none()
             }
             Message::PendingInput(key) => self.handle_pending_input(key),
@@ -416,7 +426,7 @@ impl App {
             bell_flashes: &self.bell_flashes,
             terminal_theme: &self.terminal_theme,
             config: &self.config,
-            collapsed: collapsed && !self.tab_bar_hovered,
+            collapsed: collapsed && !self.tab_bar_hovered && !self.tab_bar_peek,
         }
         .view(toast_elements);
 
@@ -491,6 +501,16 @@ impl App {
         Subscription::batch([
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(m)) => {
+                    Some(Message::ModifiersChanged(m))
+                }
+                // Releases while unfocused never arrive; don't stay stuck open.
+                iced::Event::Window(iced::window::Event::Unfocused) => {
+                    Some(Message::ModifiersChanged(iced::keyboard::Modifiers::empty()))
+                }
+                _ => None,
+            }),
         ])
     }
 
