@@ -63,6 +63,16 @@ pub fn fifo_stream(
                         {
                             break;
                         }
+                    } else if trimmed == "subagent_tool" {
+                        if futures::executor::block_on(
+                            sender.send(Message::SubagentToolUse(
+                                tab_id,
+                            )),
+                        )
+                        .is_err()
+                        {
+                            break;
+                        }
                     } else if trimmed == "checkpoint" {
                         if futures::executor::block_on(
                             sender.send(Message::AutoCheckpoint(

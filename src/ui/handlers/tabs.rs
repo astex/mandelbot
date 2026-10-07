@@ -153,8 +153,21 @@ impl App {
 
     pub(in crate::ui) fn handle_set_status(&mut self, tab_id: usize, status: AgentStatus) -> Task<Message> {
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            if status == AgentStatus::Blocked && tab.status != AgentStatus::Blocked {
+                tab.status_before_block = tab.status;
+            }
             tab.status = status;
             self.tabs.write(tab);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_subagent_tool_use(&mut self, tab_id: usize) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            if tab.status == AgentStatus::Blocked {
+                tab.status = tab.status_before_block;
+                self.tabs.write(tab);
+            }
         }
         Task::none()
     }
