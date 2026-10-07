@@ -323,13 +323,13 @@ impl<'a> TerminalWidget<'a> {
         // Build per-row (line, start_col, end_col_exclusive) spans.
         let mut line = start_line;
         loop {
-            let row_start = if line == start_line { start_col } else { 0 };
+            let row_start = if line == start_line { start_col } else { logical.row_skip(line) };
             let row_end = if line == end_line { end_col + 1 } else { logical.cols };
             cells.push((line, row_start, row_end));
             if line == end_line {
                 break;
             }
-            line = line - 1; // move down one screen row
+            line = line + 1; // move down one screen row
         }
 
         Some(Interaction::HoveringLink { url: url_match.url, cells })
