@@ -52,10 +52,6 @@ impl App {
         existing_worktree: Option<PathBuf>,
         insert_position: Option<usize>,
     ) -> (usize, Task<Message>) {
-        if let Some(pid) = parent_id {
-            self.tabs.unfold_ancestors(pid);
-        }
-
         let Some(size) = self.window_size else {
             return (0, Task::none());
         };
