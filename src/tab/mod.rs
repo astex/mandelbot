@@ -121,6 +121,9 @@ pub struct TabMeta {
     pub project_id: Option<usize>,
     pub title: Option<String>,
     pub status: AgentStatus,
+    /// Status to return to when a subagent's tool call resolves a
+    /// `Blocked` permission prompt. Captured on entry to `Blocked`.
+    pub status_before_block: AgentStatus,
     pub background_tasks: usize,
     /// PR number detected by the status-line scraper. Written on every
     /// Claude output tick. Use `pr_number()` to read, not this field —
@@ -229,6 +232,7 @@ impl TerminalTab {
             } else {
                 AgentStatus::Idle
             },
+            status_before_block: AgentStatus::Idle,
             background_tasks: 0,
             pr_scraped: None,
             pr_override: None,
