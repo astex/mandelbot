@@ -98,6 +98,17 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
             })
         };
 
+    // Tool hooks also fire for subagents and for forked background
+    // agents Claude Code runs after a turn ends (e.g. memory
+    // extraction), whose hook input carries `agent_id`. Those must not
+    // flip an idle tab back to working, since no Stop hook follows them.
+    // The `":"` suffix keeps an escaped `\"agent_id\"` inside
+    // `tool_input` from matching.
+    let tool_activity = serde_json::json!({
+        "type": "command",
+        "command": r#"if grep -q '"agent_id":"'; then echo subagent_tool > $MANDELBOT_FIFO; else echo status:working > $MANDELBOT_FIFO; fi"#,
+    });
+
     let settings = serde_json::json!({
         "hooks": {
             "SessionStart": [{
@@ -114,7 +125,7 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
             }],
             "PreToolUse": [{
                 "matcher": "",
-                "hooks": [set_status("working")],
+                "hooks": [tool_activity.clone()],
             }],
             "PermissionRequest": [
                 {
@@ -128,7 +139,7 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
             "PostToolUse": [
                 {
                     "matcher": "",
-                    "hooks": [set_status("working")],
+                    "hooks": [tool_activity.clone()],
                 },
                 {
                     // Capture ScheduleWakeup tool calls so the tab can
@@ -147,7 +158,7 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
                 },
             ],
             "PostToolUseFailure": [{
-                "hooks": [set_status("working")],
+                "hooks": [tool_activity],
             }],
             "PreCompact": [{
                 "hooks": [set_status("compacting")],

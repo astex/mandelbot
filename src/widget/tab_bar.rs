@@ -1,8 +1,8 @@
 //! Left-hand tab bar: agent tree (Home → Projects → Tasks), shell tabs,
 //! and any toasts anchored to the bottom.
 
-use iced::widget::{button, column, container, mouse_area, row, text, Space};
-use iced::{Alignment, Border, Color, Element, Fill, Font, Theme};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Space};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Font, Theme};
 
 use crate::animation::FlashState;
 use crate::config::Config;
@@ -83,17 +83,30 @@ impl<'a> TabBar<'a> {
             tab_col = tab_col.push(self.tab_button(tab, num, 0.0));
         }
 
+        // The tab list scrolls once it outgrows the window; toasts stay
+        // pinned below it.
+        let thumb = Color { a: 0.3, ..self.terminal_theme.fg };
+        let thumb_hover = Color { a: 0.6, ..self.terminal_theme.fg };
+        let tabs_scroll = scrollable(tab_col)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(move |_: &Theme, status| scroll_style(status, thumb, thumb_hover))
+            .width(width)
+            .height(Fill);
+
+        let mut bar_col = column![tabs_scroll];
+
         // Toasts anchored to the bottom.
         if !self.collapsed && !toast_elements.is_empty() {
-            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
             let mut toast_col = column![].spacing(PADDING);
             for t in toast_elements {
                 toast_col = toast_col.push(t);
             }
-            tab_col = tab_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
+            bar_col = bar_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
         }
 
-        container(tab_col.height(Fill))
+        container(bar_col.height(Fill))
             .width(width)
             .height(Fill)
             .style(move |_theme| container::Style {
@@ -412,6 +425,40 @@ fn assoc_chip<'a>(
             ..Default::default()
         })
         .into()
+}
+
+/// Overlay scrollbar with no visible rail: just a muted thumb that
+/// brightens while hovered or dragged.
+fn scroll_style(status: scrollable::Status, thumb: Color, thumb_hover: Color) -> scrollable::Style {
+    let active = match status {
+        scrollable::Status::Hovered { is_vertical_scrollbar_hovered, .. } => {
+            is_vertical_scrollbar_hovered
+        }
+        scrollable::Status::Dragged { is_vertical_scrollbar_dragged, .. } => {
+            is_vertical_scrollbar_dragged
+        }
+        _ => false,
+    };
+    let rail = scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: scrollable::Scroller {
+            background: Background::Color(if active { thumb_hover } else { thumb }),
+            border: Border { radius: 2.0.into(), ..Border::default() },
+        },
+    };
+    scrollable::Style {
+        container: container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        auto_scroll: scrollable::AutoScroll {
+            background: Background::Color(Color::TRANSPARENT),
+            border: Border::default(),
+            shadow: iced::Shadow::default(),
+            icon: Color::TRANSPARENT,
+        },
+    }
 }
 
 fn vspace(width: f32, h: f32) -> Element<'static, Message> {

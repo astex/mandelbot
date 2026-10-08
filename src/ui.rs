@@ -84,6 +84,11 @@ pub enum Message {
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
+    /// A subagent or forked background agent (e.g. Claude Code's
+    /// post-turn memory extraction) ran a tool. Unlike main-thread tool
+    /// hooks this must not mark an idle tab as working — it only clears
+    /// a `Blocked` state left by that subagent's permission prompt.
+    SubagentToolUse(usize),
     /// Agent-set PR number. `Some(n)` locks the PR to `n` and disables
     /// the status-line scraper for that tab; `None` clears both.
     SetPr(usize, Option<u32>),
@@ -329,6 +334,7 @@ impl App {
                 self.handle_mcp_spawn_agent(rtid, wd, ptid, prompt, branch, model, base)
             }
             Message::SetStatus(tab_id, status) => self.handle_set_status(tab_id, status),
+            Message::SubagentToolUse(tab_id) => self.handle_subagent_tool_use(tab_id),
             Message::SetPr(tab_id, pr) => self.handle_set_pr(tab_id, pr),
             Message::SetFile(tab_id, path) => self.handle_set_file(tab_id, path),
             Message::SetTicket(tab_id, url) => self.handle_set_ticket(tab_id, url),
