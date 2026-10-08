@@ -119,7 +119,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "close_tab",
-                    "description": "Close a tab by ID. You can close yourself or any of your descendant tabs. Closing a tab also closes all of its descendants.",
+                    "description": "Close a tab by ID. You can close yourself or any of your descendant tabs. Closing a descendant also closes all of its descendants; closing yourself promotes your first child into your place.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
