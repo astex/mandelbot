@@ -483,9 +483,16 @@ impl App {
         requesting_tab_id: usize,
         target_tab_id: usize,
     ) -> Task<Message> {
-        let authorized = if requesting_tab_id == target_tab_id {
-            true
-        } else {
+        // A tab closing itself goes through the same path as a user close,
+        // so its children are promoted rather than closed with it.
+        if requesting_tab_id == target_tab_id {
+            self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                "message": "Closed tab"
+            }));
+            return self.close_tab(target_tab_id);
+        }
+
+        let authorized = {
             let mut current = Some(target_tab_id);
             let mut found = false;
             while let Some(id) = current {
