@@ -1,14 +1,14 @@
 ---
 name: mandelbot-adversarial
 description: Use this skill when correctness is adversarial — a persistent builder agent writes code while fresh breaker agents each round probe it and report what's broken, looping until the breaker reports clean or a round cap is hit. Good fit for algorithm-heavy, parser, or security-adjacent work where "what could go wrong" is the real risk and a single implementer is likely to miss cases.
-allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab]
+allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, ListAgents, SendMessage, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab]
 ---
 
 # Adversarial loop
 
 A two-role game built on top of `mandelbot-delegate`. A single **builder** child, persistent across rounds, writes code on one branch. Each round, a fresh ephemeral **breaker** child spawns on the builder's current branch tip, probes the code, and reports what's broken in prose. The builder reads the report, writes tests that capture the failures, fixes the code, and blocks again. One branch accumulates the whole run; when the loop ends, the parent takes over and does whatever its own prompting dictates (open a PR, chain into another skill, escalate further up).
 
-Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelbot-delegate`'s SKILL.md for the parent workflow. This file covers only what's specific to the adversarial loop.
+Read `<plugin-dir>/skills/_shared/coord.md` for the shared protocol and `mandelbot-delegate`'s SKILL.md for the parent workflow. This file covers only what's specific to the adversarial loop. Note that every `[DIRECTIVE]` below must be followed by ringing that child's doorbell — the builder blocks and unblocks each round, and a directive nobody rings for is never read.
 
 ## When to use
 

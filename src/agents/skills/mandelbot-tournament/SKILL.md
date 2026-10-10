@@ -1,7 +1,7 @@
 ---
 name: mandelbot-tournament
 description: Use this skill when you want multiple attempts at the same task and will pick the best one. Spawns N contestant agents in parallel, then a judge agent scores their outputs against user-supplied criteria and picks a winner. Good fit when the right approach is unclear and you'd rather try several in parallel than commit to one up front.
-allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab, AskUserQuestion]
+allowed-tools: [Read, Edit, Write, Bash, Glob, Grep, ListAgents, SendMessage, mcp__mandelbot__spawn_tab, mcp__mandelbot__close_tab, AskUserQuestion]
 ---
 
 # Tournament
@@ -56,9 +56,9 @@ Spawn all N contestants in a single round via `spawn_tab`, each with its own `br
 >
 > You are contestant <i> of <N>. Your job: <one-line task summary>. Write a `## Summary` section in your coord file before marking `done` — the judge will read it.
 
-### 4. Watch contestants
+### 4. Handle contestants
 
-Run one `watch.sh` per contestant in the background (see `mandelbot-delegate` for the pattern). Handle blocks via `[DIRECTIVE]` as usual.
+Resolve each contestant's address and send it a hello doorbell as it is spawned (see `mandelbot-delegate` step 4), then idle until a contestant rings you. Handle blocks via `[DIRECTIVE]` as usual — write the answer into the contestant's coord file, then ring it.
 
 **Keep contestants isolated.** Do not share information from one contestant's coord file into another's. Answer blocks using only what the parent and the governing plan provide. Cross-pollination defeats the point — you want independent attempts.
 
