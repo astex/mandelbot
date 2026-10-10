@@ -6,6 +6,7 @@ mod keys;
 mod links;
 mod mcp;
 mod pty;
+mod router;
 mod tab;
 mod tabs;
 mod theme;
