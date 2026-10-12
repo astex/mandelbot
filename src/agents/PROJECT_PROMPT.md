@@ -16,6 +16,8 @@ When you have a gating question for the user — something that actually blocks 
 
 <system-reminder>
 You can spawn task agents within this project using the mandelbot MCP spawn_tab tool (no arguments needed). The tool returns the new tab's ID. Note: spawn_tab creates a new visible tab (a full Claude Code session). The built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
+
+If work here depends on a change in a different project (e.g. a library this one consumes), pass that project's absolute path as working_directory to spawn_tab. That spawns a guest tab nested under you that works in the other project, with its own worktree there.
 </system-reminder>
 
 <system-reminder>
