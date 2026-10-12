@@ -71,13 +71,13 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "spawn_tab",
-                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project agent: creates a task agent (no arguments needed). From a task agent: creates a child task agent nested under this task (no arguments needed).",
+                    "description": "Spawn a new agent tab. From the home agent: pass working_directory to create a project agent, or pass project_tab_id to create a task agent under an existing project. From a project agent: creates a task agent (no arguments needed). From a task agent: creates a child task agent nested under this task (no arguments needed). From a project or task agent, pass working_directory to spawn a guest tab: a child nested under you that works in a different project (e.g. a dependency you need changed), with its own worktree in that project.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "working_directory": {
                                 "type": "string",
-                                "description": "Absolute path to the project directory. Used from the home agent to spawn a project agent.",
+                                "description": "Absolute path to a project directory. From the home agent, spawns a project agent there. From a project or task agent, spawns a guest task tab working in that project, nested under the caller.",
                             },
                             "project_tab_id": {
                                 "type": "integer",
@@ -363,6 +363,10 @@ async fn handle_tools_call(
             }
 
             match read_from_parent(parent_reader).await {
+                Ok(resp) if resp.get("error").is_some() => {
+                    let err = resp["error"].as_str().unwrap_or("spawn failed");
+                    Response::err(id, -32000, err.to_string())
+                }
                 Ok(resp) => {
                     let new_tab_id = resp
                         .get("tab_id")

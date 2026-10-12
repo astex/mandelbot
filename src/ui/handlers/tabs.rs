@@ -136,12 +136,22 @@ impl App {
                     (AgentRank::Project, Some(canonical), Some(requesting_tab_id))
                 }
             }
-            AgentRank::Project => {
-                let dir = requester.project_dir.clone();
-                (AgentRank::Task, dir, Some(requesting_tab_id))
-            }
-            AgentRank::Task => {
-                let dir = self.tabs.project_dir_for(requesting_tab_id);
+            // From a project or task agent, `working_directory` spawns a
+            // guest tab: nested under the requester, working in another
+            // project.
+            AgentRank::Project | AgentRank::Task => {
+                let dir = match working_directory {
+                    Some(wd) => match std::fs::canonicalize(&wd) {
+                        Ok(dir) if dir.is_dir() => Some(dir),
+                        _ => {
+                            self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                                "error": format!("working_directory {} is not a directory", wd.display()),
+                            }));
+                            return Task::none();
+                        }
+                    },
+                    None => self.tabs.project_dir_for(requesting_tab_id),
+                };
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
         };
