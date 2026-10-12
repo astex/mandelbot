@@ -76,6 +76,7 @@ pub enum Message {
     SpawnOrFocusProjectTab { tab_id: usize, path: Option<PathBuf> },
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
+    McpFocusTab(usize, usize),
     McpCheckpoint(usize),
     McpReplace(usize, String),
     McpFork(usize, String, Option<String>),
@@ -371,6 +372,7 @@ impl App {
             }
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::McpCloseTab(rtid, target) => self.handle_mcp_close_tab(rtid, target),
+            Message::McpFocusTab(rtid, target) => self.handle_mcp_focus_tab(rtid, target),
             Message::SelectTab(tab_id) => self.handle_select_tab(tab_id),
             Message::SelectTabByIndex(index) => self.handle_select_tab_by_index(index),
             Message::ToggleFoldTab(tab_id) => self.handle_toggle_fold_tab(tab_id),
@@ -636,6 +638,18 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpCloseTab(tab_id, target_tab_id))
+                                }
+                                "focus_tab" => {
+                                    let target_tab_id = msg
+                                        .get("target_tab_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize)
+                                        .unwrap_or(0);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpFocusTab(tab_id, target_tab_id))
                                 }
                                 "set_status" => {
                                     msg.get("status")

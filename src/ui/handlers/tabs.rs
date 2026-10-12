@@ -575,6 +575,21 @@ impl App {
         Task::none()
     }
 
+    pub(in crate::ui) fn handle_mcp_focus_tab(
+        &mut self,
+        requesting_tab_id: usize,
+        target_tab_id: usize,
+    ) -> Task<Message> {
+        let response = if self.tabs.contains(target_tab_id) {
+            self.focus_tab(target_tab_id);
+            serde_json::json!({ "message": format!("Focused tab {target_tab_id}") })
+        } else {
+            serde_json::json!({ "error": format!("no tab with id {target_tab_id}") })
+        };
+        self.respond_to_tab(requesting_tab_id, response);
+        Task::none()
+    }
+
     pub(in crate::ui) fn handle_select_tab(&mut self, tab_id: usize) -> Task<Message> {
         if self.tabs.contains(tab_id) {
             self.focus_tab(tab_id);
