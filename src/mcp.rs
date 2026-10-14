@@ -254,6 +254,20 @@ fn handle_tools_list(id: Value) -> Response {
                         "required": ["tab_id"],
                     },
                 },
+                {
+                    "name": "respawn",
+                    "description": "Replace this tab's Claude session with a fresh one, seeded with `prompt`. The tab keeps its id, position, children, and worktree (uncommitted files included); only the conversation is discarded. Use it when your context is getting full mid-task, especially in loops. The new session remembers nothing, so `prompt` must be a complete handoff: the goal, what's done, what's next, and any IDs, paths, or decisions it needs. This call ends your session.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "Initial prompt for the fresh session — a self-contained handoff.",
+                            },
+                        },
+                        "required": ["prompt"],
+                    },
+                },
             ],
         }),
     )
@@ -752,6 +766,45 @@ async fn handle_tools_call(
                 Err(e) => Response::err(id, -32000, e),
             }
         }
+        "respawn" => {
+            let prompt = params
+                .get("arguments")
+                .and_then(|a| a.get("prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if prompt.trim().is_empty() {
+                return Response::err(id, -32602, "respawn requires a non-empty prompt".into());
+            }
+
+            let msg = serde_json::json!({
+                "type": "respawn",
+                "tab_id": tab_id,
+                "prompt": prompt,
+            });
+
+            if let Err(e) = send_to_parent(parent_writer, msg).await {
+                return Response::err(id, -32000, e);
+            }
+
+            match read_from_parent(parent_reader).await {
+                Ok(resp) => {
+                    if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+                        return Response::err(id, -32000, err.into());
+                    }
+                    let text = resp
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Respawning");
+                    Response::ok(
+                        id,
+                        serde_json::json!({
+                            "content": [{ "type": "text", "text": text }],
+                        }),
+                    )
+                }
+                Err(e) => Response::err(id, -32000, e),
+            }
+        }
         _ => Response::err(id, -32601, format!("Unknown tool: {tool_name}")),
     }
 }
@@ -899,6 +952,7 @@ mod tests {
         assert_eq!(resp["result"]["tools"][10]["name"], "list_tabs");
         assert_eq!(resp["result"]["tools"][11]["name"], "notify");
         assert_eq!(resp["result"]["tools"][12]["name"], "focus_tab");
+        assert_eq!(resp["result"]["tools"][13]["name"], "respawn");
 
         // -- tools/call set_title --
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_title","arguments":{"title":"my cool tab"}}}"#;
@@ -1152,6 +1206,38 @@ mod tests {
         child_reader.read_line(&mut resp_line).unwrap();
         let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
         assert_eq!(resp["error"]["message"], "no tab with id 99");
+
+        // -- tools/call respawn --
+        let call = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"respawn","arguments":{"prompt":"pick up at step 3"}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        parent_line.clear();
+        parent_reader.read_line(&mut parent_line).unwrap();
+        let parent_msg: serde_json::Value = serde_json::from_str(&parent_line).unwrap();
+        assert_eq!(parent_msg["type"], "respawn");
+        assert_eq!(parent_msg["tab_id"], "tab-42");
+        assert_eq!(parent_msg["prompt"], "pick up at step 3");
+
+        parent_writer.write_all(b"{\"message\":\"Respawning\"}\n").unwrap();
+        parent_writer.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["result"]["content"][0]["text"], "Respawning");
+
+        // -- tools/call respawn (empty prompt is rejected locally) --
+        let call = r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"respawn","arguments":{"prompt":"  "}}}"#;
+        child_stdin.write_all(call.as_bytes()).unwrap();
+        child_stdin.write_all(b"\n").unwrap();
+        child_stdin.flush().unwrap();
+
+        resp_line.clear();
+        child_reader.read_line(&mut resp_line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
+        assert_eq!(resp["error"]["message"], "respawn requires a non-empty prompt");
 
         // Close stdin to shut down the server.
         drop(child_stdin);

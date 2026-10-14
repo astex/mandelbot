@@ -548,6 +548,19 @@ pub fn tab_stream(
                                     ),
                                 );
                         }
+                        Ok(TabEvent::Restart) => {
+                            if pty_alive {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            // Clear the screen and scrollback so the
+                            // successor starts on a blank terminal.
+                            parser.advance(
+                                &mut *term.lock().unwrap(),
+                                b"\x1bc",
+                            );
+                            break;
+                        }
                         Ok(TabEvent::Shutdown) | Err(_) => {
                             if pty_alive {
                                 let _ = child.kill();
