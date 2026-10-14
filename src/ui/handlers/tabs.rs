@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use iced::Task;
+use uuid::Uuid;
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
-use crate::tab::{AgentRank, AgentStatus, TerminalTab};
+use crate::tab::{AgentRank, AgentStatus, TabSpawnParams, TerminalTab};
 
 use super::super::{terminal_size, App, Message, PendingKey};
 
@@ -489,6 +491,76 @@ impl App {
             Some(path) => self.open_project_from_path(tab_id, path),
             None => Task::none(),
         }
+    }
+
+    /// Restart the Claude process in tab `tab_id` with a fresh
+    /// conversation seeded by `prompt`. The tab keeps its id, position,
+    /// children, and worktree; only the session changes.
+    pub(in crate::ui) fn handle_mcp_respawn(
+        &mut self,
+        tab_id: usize,
+        prompt: String,
+    ) -> Task<Message> {
+        let Some(size) = self.window_size else {
+            return Task::none();
+        };
+        let Some(tab) = self.tabs.get(tab_id) else {
+            return Task::none();
+        };
+        if !tab.is_claude || !tab.has_stream() {
+            self.respond_to_tab(tab_id, serde_json::json!({
+                "error": "only a running Claude tab can respawn"
+            }));
+            return Task::none();
+        }
+        if prompt.trim().is_empty() {
+            self.respond_to_tab(tab_id, serde_json::json!({
+                "error": "respawn requires a non-empty prompt"
+            }));
+            return Task::none();
+        }
+
+        let model = tab.model.clone().unwrap_or_else(|| match tab.rank {
+            AgentRank::Home => self.config.models.home.clone(),
+            AgentRank::Project => self.config.models.project.clone(),
+            AgentRank::Task => self.config.models.task.clone(),
+        });
+        let (rows, cols) = terminal_size(size, self.tab_bar_reserved_width(), self.config.char_width(), self.config.char_height());
+        let params = TabSpawnParams {
+            id: tab_id,
+            rows,
+            cols,
+            is_claude: true,
+            rank: tab.rank,
+            project_dir: tab.project_dir.clone(),
+            shell: self.config.shell.clone(),
+            workflow: self.config.workflow.clone(),
+            worktree_location: self.config.worktree_location.clone(),
+            model,
+            parent_socket: self.parent_socket_path.clone(),
+            prompt: Some(prompt),
+            branch: None,
+            base: None,
+            control_prefix: self.config.control_prefix.to_string(),
+            session_id: Some(Uuid::new_v4().to_string()),
+            resume_session_id: None,
+            existing_worktree: tab.worktree_dir.clone(),
+        };
+
+        // Answer before the old process (and its MCP server) is killed.
+        self.respond_to_tab(tab_id, serde_json::json!({
+            "message": "Respawning"
+        }));
+
+        let (event_tx, event_rx) = mpsc::channel();
+        let pty_tx = event_tx.clone();
+        self.tabs.restart(tab_id, event_tx);
+        if let Some(mut meta) = self.tabs.snapshot(tab_id) {
+            meta.status = AgentStatus::Working;
+            meta.redo_path.clear();
+            self.tabs.write(meta);
+        }
+        self.run_tab_stream(params, event_rx, pty_tx)
     }
 
     pub(in crate::ui) fn handle_mcp_close_tab(
