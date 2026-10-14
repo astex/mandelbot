@@ -80,6 +80,7 @@ pub enum Message {
     McpCheckpoint(usize),
     McpReplace(usize, String),
     McpFork(usize, String, Option<String>),
+    McpRespawn(usize, String),
     McpListTabs(usize),
     AutoCheckpoint(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
@@ -395,6 +396,7 @@ impl App {
             Message::McpFork(tab_id, ckpt_id, prompt) => {
                 self.handle_fork(tab_id, ckpt_id, prompt)
             }
+            Message::McpRespawn(tab_id, prompt) => self.handle_mcp_respawn(tab_id, prompt),
             Message::McpListTabs(tab_id) => self.handle_mcp_list_tabs(tab_id),
             Message::AutoCheckpoint(tab_id) => self.handle_auto_checkpoint(tab_id),
             Message::ToggleTimeline(tab_id) => self.handle_toggle_timeline(tab_id),
@@ -716,6 +718,17 @@ fn parent_socket_stream(
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpFork(tab_id, ckpt_id, prompt))
+                                }
+                                "respawn" => {
+                                    let prompt = msg.get("prompt")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpRespawn(tab_id, prompt))
                                 }
                                 "list_tabs" => {
                                     let resp_writer = writer.try_clone()

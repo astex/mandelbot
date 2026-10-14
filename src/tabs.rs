@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
 
-use crate::tab::{AgentRank, TabMeta, TerminalTab};
+use crate::tab::{AgentRank, TabEvent, TabMeta, TerminalTab};
 
 /// Collection of `TerminalTab`s with O(1) id lookup, indexed children, and
 /// cached per-frame views (`display_order`, `number_assignments`).
@@ -192,6 +193,13 @@ impl Tabs {
         self.tabs[idx].meta = meta;
         if parent_changed {
             self.recompute_all();
+        }
+    }
+
+    /// Swap tab `id` onto a new event stream. See [`TerminalTab::restart`].
+    pub fn restart(&mut self, id: usize, tx: mpsc::Sender<TabEvent>) {
+        if let Some(&idx) = self.by_id.get(&id) {
+            self.tabs[idx].restart(tx);
         }
     }
 
