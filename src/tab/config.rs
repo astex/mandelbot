@@ -222,6 +222,13 @@ const SKILL_MANDELBOT_GIT_MONITOR_WATCH: &str =
     include_str!("../agents/skills/mandelbot-git-monitor/watch-prs.sh");
 const SKILL_MANDELBOT_PR_TABS: &str =
     include_str!("../agents/skills/mandelbot-pr-tabs/SKILL.md");
+const SKILL_MANDELBOT_DEVLOOP: &str =
+    include_str!("../agents/skills/mandelbot-devloop/SKILL.md");
+const SKILL_MANDELBOT_DEVLOOP_NOGIT: &str =
+    include_str!("../agents/skills/mandelbot-devloop/SKILL.nogit.md");
+const SKILL_MANDELBOT_DEVLOOP_HACK_LOOP: &str = include_str!(
+    "../agents/skills/mandelbot-devloop/references/hack-loop.md"
+);
 
 const SHELL_INTEGRATION_ZSH: &str = r#"
 # Mandelbot shell integration — sets tab title to cwd + running command.
@@ -496,6 +503,24 @@ pub(super) fn write_plugin_dir(
         SKILL_MANDELBOT_IMPLEMENT_ITERATE_GENERATION,
     )
     .expect("failed to write mandelbot-implement-iterate generation protocol");
+
+    let devloop_dir =
+        plugin_dir.join("skills").join("mandelbot-devloop");
+    let devloop_references_dir = devloop_dir.join("references");
+    std::fs::create_dir_all(&devloop_references_dir)
+        .expect("failed to create mandelbot-devloop skill dir");
+    let devloop_content = if workflow == "git" {
+        SKILL_MANDELBOT_DEVLOOP
+    } else {
+        SKILL_MANDELBOT_DEVLOOP_NOGIT
+    };
+    std::fs::write(devloop_dir.join("SKILL.md"), devloop_content)
+        .expect("failed to write mandelbot-devloop skill");
+    std::fs::write(
+        devloop_references_dir.join("hack-loop.md"),
+        SKILL_MANDELBOT_DEVLOOP_HACK_LOOP,
+    )
+    .expect("failed to write mandelbot-devloop hack-loop example");
 
     if workflow == "git" {
         let tournament_dir =

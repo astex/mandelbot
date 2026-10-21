@@ -40,6 +40,8 @@ In git projects, task agents automatically get their own worktree — an isolate
 
 When a task is large enough to parallelize, agents can use the `/mandelbot-delegate` skill to break work into subtasks and coordinate child agents via a shared status file. Each subtask gets its own worktree and branch.
 
+For work that runs over hours or days — burning down a queue of fixes, one PR at a time — run `/mandelbot-devloop <goal>`. The tab becomes a coordinator that keeps a log doc, spawns a short-lived child tab per unit of work, and caps how many children wait on your review at once.
+
 ## Configuration
 
 Run `/mandelbot-config` to change theme, font, font size, shell, or keybinding prefixes. Settings live in `~/.mandelbot/config.json`.
