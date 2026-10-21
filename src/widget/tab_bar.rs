@@ -2,7 +2,7 @@
 //! and any toasts anchored to the bottom.
 
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Space};
-use iced::{Alignment, Background, Border, Color, Element, Fill, Font, Theme};
+use iced::{mouse, Alignment, Background, Border, Color, Element, Fill, Font, Theme};
 
 use crate::animation::FlashState;
 use crate::config::Config;
@@ -31,6 +31,8 @@ pub struct TabBar<'a> {
     /// Render the narrow strip: "home", 3-letter project names, and
     /// status dot + digit for everything else.
     pub collapsed: bool,
+    /// A tab is being dragged; show the grabbing cursor over the bar.
+    pub dragging: bool,
 }
 
 /// Width of the collapsed strip: room for "home" plus dot and digit.
@@ -106,14 +108,18 @@ impl<'a> TabBar<'a> {
             bar_col = bar_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
         }
 
-        container(bar_col.height(Fill))
+        let bar = container(bar_col.height(Fill))
             .width(width)
             .height(Fill)
             .style(move |_theme| container::Style {
                 background: Some(inactive_bg.into()),
                 ..Default::default()
-            })
-            .into()
+            });
+        if self.dragging {
+            mouse_area(bar).interaction(mouse::Interaction::Grabbing).into()
+        } else {
+            bar.into()
+        }
     }
 
     fn width(&self) -> f32 {
@@ -205,9 +211,7 @@ impl<'a> TabBar<'a> {
                 ..Default::default()
             });
 
-        let tab_elem: Element<'a, Message> = mouse_area(styled)
-            .on_press(Message::SelectTab(tab.id))
-            .into();
+        let tab_elem = draggable(styled.into(), tab.id);
 
         if indent > 0.0 {
             row![Space::new().width(indent), tab_elem]
@@ -254,7 +258,7 @@ impl<'a> TabBar<'a> {
                 ..Default::default()
             });
 
-        mouse_area(styled).on_press(Message::SelectTab(tab.id)).into()
+        draggable(styled.into(), tab.id)
     }
 
     fn max_label_chars(&self, indent: f32) -> usize {
@@ -470,6 +474,15 @@ fn scroll_style(status: scrollable::Status, thumb: Color, thumb_hover: Color) ->
             icon: Color::TRANSPARENT,
         },
     }
+}
+
+/// Wrap a tab row so pressing selects and grabs it, and entering it
+/// mid-drag pulls the grabbed tab into its slot.
+fn draggable<'a>(row: Element<'a, Message>, tab_id: usize) -> Element<'a, Message> {
+    mouse_area(row)
+        .on_press(Message::TabPressed(tab_id))
+        .on_enter(Message::TabDragOver(tab_id))
+        .into()
 }
 
 fn vspace(width: f32, h: f32) -> Element<'static, Message> {

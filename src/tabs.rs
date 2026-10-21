@@ -286,6 +286,37 @@ impl Tabs {
         self.recompute_all();
     }
 
+    /// Move `id` into `target`'s slot among their siblings, shifting the
+    /// tabs in between by one. Agent tabs are siblings when they share a
+    /// parent; shell tabs are all siblings. Home never moves. Returns
+    /// whether anything moved.
+    pub fn move_to_sibling(&mut self, id: usize, target: usize) -> bool {
+        let (Some(from), Some(to)) = (self.index_of(id), self.index_of(target)) else {
+            return false;
+        };
+        let (a, b) = (&self.tabs[from], &self.tabs[to]);
+        let siblings = a.is_claude == b.is_claude
+            && (!a.is_claude || a.parent_id == b.parent_id);
+        if from == to || from == 0 || to == 0 || !siblings {
+            return false;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.recompute_all();
+        true
+    }
+
+    /// Ids of every tab below `id` in the tree, excluding `id` itself.
+    fn descendants(&self, id: usize) -> Vec<usize> {
+        let mut out = self.children_of(Some(id)).to_vec();
+        let mut i = 0;
+        while i < out.len() {
+            out.extend_from_slice(self.children_of(Some(out[i])));
+            i += 1;
+        }
+        out
+    }
+
     pub fn has_claude_children(&self, parent_id: usize) -> bool {
         self.children_of(Some(parent_id))
             .iter()
@@ -374,19 +405,49 @@ impl Tabs {
         let Some(closing) = self.get(tab_id) else { return };
         let closing_parent_id = closing.parent_id;
         let closing_depth = closing.depth;
+        let closing_is_project = closing.rank == AgentRank::Project;
+        let closing_project_dir = closing.project_dir.clone();
 
         let children: Vec<usize> = self.children_of(Some(tab_id)).to_vec();
         let first_child_id = children.first().copied();
 
         if let Some(promoted_id) = first_child_id {
+            // The promoted tab moves up a level, and its subtree with it.
+            for id in self.descendants(promoted_id) {
+                if let Some(mut meta) = self.snapshot(id) {
+                    meta.depth = meta.depth.saturating_sub(1);
+                    self.write(meta);
+                }
+            }
             if let Some(mut promoted) = self.snapshot(promoted_id) {
                 promoted.depth = closing_depth;
+                if closing_is_project {
+                    // Heading a project's tree makes it the project.
+                    promoted.rank = AgentRank::Project;
+                    promoted.project_id = Some(promoted_id);
+                    promoted.project_dir = promoted.project_dir.or(closing_project_dir);
+                }
                 self.write(promoted);
+            }
+            if closing_is_project {
+                let members: Vec<usize> = self.iter()
+                    .filter(|t| t.project_id == Some(tab_id))
+                    .map(|t| t.id)
+                    .collect();
+                for id in members {
+                    if let Some(mut meta) = self.snapshot(id) {
+                        meta.project_id = Some(promoted_id);
+                        self.write(meta);
+                    }
+                }
             }
             self.reparent(promoted_id, closing_parent_id);
             for &cid in children.iter().skip(1) {
                 self.reparent(cid, Some(promoted_id));
             }
+            // Children needn't follow their parent in vec order, so move
+            // the promoted tab into the closing tab's slot among siblings.
+            self.move_to_sibling(promoted_id, tab_id);
         }
 
         self.remove(tab_id);
@@ -675,6 +736,68 @@ mod tests {
     }
 
     #[test]
+    fn close_with_promotion_takes_closing_slot() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(project(2, "/repo/a"));
+        tabs.push(project(3, "/repo/b"));
+        tabs.reparent(2, Some(1));
+        tabs.reparent(3, Some(1));
+        // Spawned later, so they sit after both projects in vec order.
+        tabs.push(task_in_project(4, Some(2), 2, 2));
+        tabs.push(task_in_project(5, Some(3), 3, 2));
+
+        tabs.close_with_promotion(2);
+
+        assert_eq!(tabs.children_of(Some(1)), &[4, 3]);
+        assert_eq!(tabs.display_order(), &[1, 4, 3, 5]);
+    }
+
+    #[test]
+    fn close_with_promotion_upgrades_task_to_project() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        let mut proj = project(2, "/repo/a");
+        proj.meta.depth = 1;
+        tabs.push(proj);
+        tabs.reparent(2, Some(1));
+        let mut first = task_in_project(3, Some(2), 2, 2);
+        first.meta.project_dir = None;
+        tabs.push(first);
+        tabs.push(task_in_project(4, Some(2), 2, 2));
+        tabs.push(task_in_project(5, Some(3), 2, 3));
+
+        tabs.close_with_promotion(2);
+
+        let promoted = tabs.get(3).unwrap();
+        assert_eq!(promoted.rank, AgentRank::Project);
+        assert_eq!(promoted.project_id, Some(3));
+        assert_eq!(promoted.depth, 1);
+        assert_eq!(tabs.get(4).unwrap().project_id, Some(3));
+        assert_eq!(tabs.get(5).unwrap().project_id, Some(3));
+        assert_eq!(tabs.get(4).unwrap().depth, 2);
+        assert_eq!(tabs.get(5).unwrap().depth, 2);
+        assert_eq!(
+            tabs.find_project_for_dir(std::path::Path::new("/repo/a")),
+            Some(3),
+        );
+    }
+
+    #[test]
+    fn close_with_promotion_keeps_task_rank_under_task() {
+        let mut tabs = Tabs::new();
+        tabs.push(project(1, "/repo/a"));
+        tabs.push(task_in_project(2, Some(1), 1, 1));
+        tabs.push(task_in_project(3, Some(2), 1, 2));
+
+        tabs.close_with_promotion(2);
+
+        let promoted = tabs.get(3).unwrap();
+        assert_eq!(promoted.rank, AgentRank::Task);
+        assert_eq!(promoted.project_id, Some(1));
+    }
+
+    #[test]
     fn close_with_promotion_no_children_just_removes() {
         let mut tabs = Tabs::new();
         tabs.push(tab(1, None));
@@ -682,6 +805,49 @@ mod tests {
         tabs.close_with_promotion(2);
         assert!(!tabs.contains(2));
         assert_eq!(tabs.children_of(Some(1)), &[] as &[usize]);
+    }
+
+    #[test]
+    fn move_to_sibling_reorders_within_parent() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+        tabs.push(tab(4, Some(1)));
+
+        assert!(tabs.move_to_sibling(2, 4));
+        assert_eq!(tabs.children_of(Some(1)), &[3, 4, 2]);
+        assert!(tabs.move_to_sibling(2, 3));
+        assert_eq!(tabs.children_of(Some(1)), &[2, 3, 4]);
+        assert_eq!(tabs.display_order(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn move_to_sibling_rejects_non_siblings_and_home() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(2)));
+        tabs.push(tab(4, None));
+        tabs.push(shell(5, Some(1)));
+
+        assert!(!tabs.move_to_sibling(3, 2));
+        assert!(!tabs.move_to_sibling(4, 1));
+        assert!(!tabs.move_to_sibling(5, 2));
+        assert!(!tabs.move_to_sibling(2, 2));
+        assert_eq!(tabs.index_of(1), Some(0));
+    }
+
+    #[test]
+    fn move_to_sibling_treats_all_shells_as_siblings() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(shell(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+        tabs.push(shell(4, None));
+
+        assert!(tabs.move_to_sibling(4, 2));
+        assert_eq!(tabs.display_order(), &[1, 3, 4, 2]);
     }
 
     #[test]

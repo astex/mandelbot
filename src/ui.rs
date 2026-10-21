@@ -59,6 +59,12 @@ pub enum Message {
     SpawnChild,
     CloseTab(usize),
     SelectTab(usize),
+    /// Mouse down on a tab-bar row: select it and start dragging it.
+    TabPressed(usize),
+    /// Cursor entered tab `id`'s row; mid-drag, the dragged tab takes
+    /// its slot if the two are siblings.
+    TabDragOver(usize),
+    TabDragEnd,
     SelectTabByIndex(usize),
     NavigateSibling(i32),
     NavigateRank(i32),
@@ -271,6 +277,8 @@ pub struct App {
     tab_bar_hovered: bool,
     /// Movement prefix is held; expands a collapsed bar like hover does.
     tab_bar_peek: bool,
+    /// Tab being dragged in the tab bar; set from press until release.
+    dragging_tab: Option<usize>,
 }
 
 impl App {
@@ -315,6 +323,7 @@ impl App {
             tab_bar_collapse_override: None,
             tab_bar_hovered: false,
             tab_bar_peek: false,
+            dragging_tab: None,
         };
 
         let theme_task = iced::system::theme().map(Message::SystemThemeChanged);
@@ -374,6 +383,12 @@ impl App {
             Message::McpCloseTab(rtid, target) => self.handle_mcp_close_tab(rtid, target),
             Message::McpFocusTab(rtid, target) => self.handle_mcp_focus_tab(rtid, target),
             Message::SelectTab(tab_id) => self.handle_select_tab(tab_id),
+            Message::TabPressed(tab_id) => self.handle_tab_pressed(tab_id),
+            Message::TabDragOver(tab_id) => self.handle_tab_drag_over(tab_id),
+            Message::TabDragEnd => {
+                self.dragging_tab = None;
+                Task::none()
+            }
             Message::SelectTabByIndex(index) => self.handle_select_tab_by_index(index),
             Message::ToggleFoldTab(tab_id) => self.handle_toggle_fold_tab(tab_id),
             Message::SetSelection(sel) => self.handle_set_selection(sel),
@@ -435,6 +450,7 @@ impl App {
             terminal_theme: &self.terminal_theme,
             config: &self.config,
             collapsed: collapsed && !self.tab_bar_hovered && !self.tab_bar_peek,
+            dragging: self.dragging_tab.is_some(),
         }
         .view(toast_elements);
 
@@ -506,7 +522,22 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        // Listen for the release only mid-drag; it may land anywhere.
+        let drag_end = if self.dragging_tab.is_some() {
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                ))
+                | iced::Event::Window(iced::window::Event::Unfocused) => {
+                    Some(Message::TabDragEnd)
+                }
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
+            drag_end,
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
             iced::event::listen_with(|event, _, _| match event {

@@ -607,6 +607,20 @@ impl App {
         Task::none()
     }
 
+    pub(in crate::ui) fn handle_tab_pressed(&mut self, tab_id: usize) -> Task<Message> {
+        if self.tabs.contains(tab_id) {
+            self.dragging_tab = Some(tab_id);
+        }
+        self.handle_select_tab(tab_id)
+    }
+
+    pub(in crate::ui) fn handle_tab_drag_over(&mut self, target_id: usize) -> Task<Message> {
+        if let Some(dragged) = self.dragging_tab {
+            self.tabs.move_to_sibling(dragged, target_id);
+        }
+        Task::none()
+    }
+
     pub(in crate::ui) fn handle_select_tab_by_index(&mut self, index: usize) -> Task<Message> {
         let target = self.tabs.number_assignments()
             .iter()
