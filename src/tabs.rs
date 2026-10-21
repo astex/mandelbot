@@ -286,6 +286,26 @@ impl Tabs {
         self.recompute_all();
     }
 
+    /// Move `id` into `target`'s slot among their siblings, shifting the
+    /// tabs in between by one. Agent tabs are siblings when they share a
+    /// parent; shell tabs are all siblings. Home never moves. Returns
+    /// whether anything moved.
+    pub fn move_to_sibling(&mut self, id: usize, target: usize) -> bool {
+        let (Some(from), Some(to)) = (self.index_of(id), self.index_of(target)) else {
+            return false;
+        };
+        let (a, b) = (&self.tabs[from], &self.tabs[to]);
+        let siblings = a.is_claude == b.is_claude
+            && (!a.is_claude || a.parent_id == b.parent_id);
+        if from == to || from == 0 || to == 0 || !siblings {
+            return false;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.recompute_all();
+        true
+    }
+
     pub fn has_claude_children(&self, parent_id: usize) -> bool {
         self.children_of(Some(parent_id))
             .iter()
@@ -682,6 +702,49 @@ mod tests {
         tabs.close_with_promotion(2);
         assert!(!tabs.contains(2));
         assert_eq!(tabs.children_of(Some(1)), &[] as &[usize]);
+    }
+
+    #[test]
+    fn move_to_sibling_reorders_within_parent() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+        tabs.push(tab(4, Some(1)));
+
+        assert!(tabs.move_to_sibling(2, 4));
+        assert_eq!(tabs.children_of(Some(1)), &[3, 4, 2]);
+        assert!(tabs.move_to_sibling(2, 3));
+        assert_eq!(tabs.children_of(Some(1)), &[2, 3, 4]);
+        assert_eq!(tabs.display_order(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn move_to_sibling_rejects_non_siblings_and_home() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(tab(2, Some(1)));
+        tabs.push(tab(3, Some(2)));
+        tabs.push(tab(4, None));
+        tabs.push(shell(5, Some(1)));
+
+        assert!(!tabs.move_to_sibling(3, 2));
+        assert!(!tabs.move_to_sibling(4, 1));
+        assert!(!tabs.move_to_sibling(5, 2));
+        assert!(!tabs.move_to_sibling(2, 2));
+        assert_eq!(tabs.index_of(1), Some(0));
+    }
+
+    #[test]
+    fn move_to_sibling_treats_all_shells_as_siblings() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(shell(2, Some(1)));
+        tabs.push(tab(3, Some(1)));
+        tabs.push(shell(4, None));
+
+        assert!(tabs.move_to_sibling(4, 2));
+        assert_eq!(tabs.display_order(), &[1, 3, 4, 2]);
     }
 
     #[test]
