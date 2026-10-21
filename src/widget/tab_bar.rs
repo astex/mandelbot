@@ -163,14 +163,24 @@ impl<'a> TabBar<'a> {
         let max_label_chars = self.max_label_chars(indent);
         let label_str = self.label_text(tab, max_label_chars);
         let label_len = label_str.len();
-        let label = container(
-            text(label_str)
-                .size(self.config.font_size)
-                .font(Font::MONOSPACE)
-                .color(fg),
-        )
-        .width(Fill)
-        .clip(true);
+        let title = text(label_str)
+            .size(self.config.font_size)
+            .font(Font::MONOSPACE)
+            .color(fg);
+        // Guest tabs work in a different project than the tree they sit
+        // in — name that project in small muted text above the title.
+        let label_body: Element<'a, Message> = match self.tabs.guest_project_dir(tab.id) {
+            Some(dir) => column![
+                text(dir_name(dir))
+                    .size(self.config.font_size * 0.7)
+                    .font(Font::MONOSPACE)
+                    .color(Color { a: 0.6, ..fg }),
+                title,
+            ]
+            .into(),
+            None => title.into(),
+        };
+        let label = container(label_body).width(Fill).clip(true);
 
         let toggle = self.toggle_element(tab.id, is_foldable, has_children, is_folded);
         let suffix = self.suffix_row(tab, display_number, bg, label_len >= max_label_chars.saturating_sub(2));
@@ -265,13 +275,7 @@ impl<'a> TabBar<'a> {
             };
         }
         if tab.rank == AgentRank::Project {
-            if let Some(dir) = &tab.project_dir {
-                return dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| dir.to_string_lossy().into_owned());
-            }
-            return String::new();
+            return tab.project_dir.as_deref().map(dir_name).unwrap_or_default();
         }
         if !tab.is_claude {
             return "shell".into();
@@ -400,6 +404,13 @@ impl<'a> TabBar<'a> {
 
         suffix
     }
+}
+
+/// Display name for a project directory: its final path component.
+fn dir_name(dir: &std::path::Path) -> String {
+    dir.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dir.to_string_lossy().into_owned())
 }
 
 /// A right-aligned association chip: a bare glyph button that emits

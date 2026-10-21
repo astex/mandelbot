@@ -320,11 +320,28 @@ impl Tabs {
             .map(|t| t.id)
     }
 
-    /// Resolve the project directory associated with `tab_id` by following
-    /// `project_id` to the owning Project tab and returning its `project_dir`.
+    /// Resolve the project directory `tab_id` works in: its own
+    /// `project_dir` when set (a guest tab's differs from its owning
+    /// project's), otherwise the owning Project tab's via `project_id`.
     pub fn project_dir_for(&self, tab_id: usize) -> Option<std::path::PathBuf> {
-        let project_id = self.get(tab_id)?.project_id?;
-        self.get(project_id)?.project_dir.clone()
+        let tab = self.get(tab_id)?;
+        if let Some(dir) = &tab.project_dir {
+            return Some(dir.clone());
+        }
+        self.get(tab.project_id?)?.project_dir.clone()
+    }
+
+    /// For a guest tab — a task nested under one project but working in
+    /// another — the directory of the project it works in. `None` for
+    /// tabs working in their owning project.
+    pub fn guest_project_dir(&self, tab_id: usize) -> Option<&std::path::Path> {
+        let tab = self.get(tab_id)?;
+        if tab.rank != AgentRank::Task {
+            return None;
+        }
+        let dir = tab.project_dir.as_deref()?;
+        let owner = self.get(tab.project_id?)?.project_dir.as_deref();
+        (owner != Some(dir)).then_some(dir)
     }
 
     /// Find a sensible new active tab after closing `closing_ids` (a contiguous
@@ -549,6 +566,40 @@ mod tests {
         );
         assert_eq!(tabs.project_dir_for(1), Some(std::path::PathBuf::from("/repo/a")));
         assert_eq!(tabs.project_dir_for(99), None);
+    }
+
+    fn guest_in_project(id: usize, parent_id: usize, project_id: usize, dir: &str) -> TerminalTab {
+        TerminalTab::new(
+            id, 24, 80, true, AgentRank::Task,
+            Some(std::path::PathBuf::from(dir)), Some(parent_id), 2, Some(project_id),
+        )
+    }
+
+    #[test]
+    fn project_dir_for_prefers_guest_dir() {
+        let mut tabs = Tabs::new();
+        tabs.push(project(1, "/repo/a"));
+        tabs.push(guest_in_project(2, 1, 1, "/repo/b"));
+        assert_eq!(
+            tabs.project_dir_for(2),
+            Some(std::path::PathBuf::from("/repo/b")),
+        );
+    }
+
+    #[test]
+    fn guest_project_dir_only_for_foreign_tasks() {
+        let mut tabs = Tabs::new();
+        tabs.push(project(1, "/repo/a"));
+        tabs.push(guest_in_project(2, 1, 1, "/repo/a"));
+        tabs.push(guest_in_project(3, 1, 1, "/repo/b"));
+        tabs.push(task_in_project(4, Some(1), 1, 1));
+        assert_eq!(tabs.guest_project_dir(1), None);
+        assert_eq!(tabs.guest_project_dir(2), None);
+        assert_eq!(
+            tabs.guest_project_dir(3),
+            Some(std::path::Path::new("/repo/b")),
+        );
+        assert_eq!(tabs.guest_project_dir(4), None);
     }
 
     #[test]
