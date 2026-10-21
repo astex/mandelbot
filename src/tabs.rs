@@ -306,6 +306,17 @@ impl Tabs {
         true
     }
 
+    /// Ids of every tab below `id` in the tree, excluding `id` itself.
+    fn descendants(&self, id: usize) -> Vec<usize> {
+        let mut out = self.children_of(Some(id)).to_vec();
+        let mut i = 0;
+        while i < out.len() {
+            out.extend_from_slice(self.children_of(Some(out[i])));
+            i += 1;
+        }
+        out
+    }
+
     pub fn has_claude_children(&self, parent_id: usize) -> bool {
         self.children_of(Some(parent_id))
             .iter()
@@ -394,14 +405,41 @@ impl Tabs {
         let Some(closing) = self.get(tab_id) else { return };
         let closing_parent_id = closing.parent_id;
         let closing_depth = closing.depth;
+        let closing_is_project = closing.rank == AgentRank::Project;
+        let closing_project_dir = closing.project_dir.clone();
 
         let children: Vec<usize> = self.children_of(Some(tab_id)).to_vec();
         let first_child_id = children.first().copied();
 
         if let Some(promoted_id) = first_child_id {
+            // The promoted tab moves up a level, and its subtree with it.
+            for id in self.descendants(promoted_id) {
+                if let Some(mut meta) = self.snapshot(id) {
+                    meta.depth = meta.depth.saturating_sub(1);
+                    self.write(meta);
+                }
+            }
             if let Some(mut promoted) = self.snapshot(promoted_id) {
                 promoted.depth = closing_depth;
+                if closing_is_project {
+                    // Heading a project's tree makes it the project.
+                    promoted.rank = AgentRank::Project;
+                    promoted.project_id = Some(promoted_id);
+                    promoted.project_dir = promoted.project_dir.or(closing_project_dir);
+                }
                 self.write(promoted);
+            }
+            if closing_is_project {
+                let members: Vec<usize> = self.iter()
+                    .filter(|t| t.project_id == Some(tab_id))
+                    .map(|t| t.id)
+                    .collect();
+                for id in members {
+                    if let Some(mut meta) = self.snapshot(id) {
+                        meta.project_id = Some(promoted_id);
+                        self.write(meta);
+                    }
+                }
             }
             self.reparent(promoted_id, closing_parent_id);
             for &cid in children.iter().skip(1) {
@@ -713,6 +751,50 @@ mod tests {
 
         assert_eq!(tabs.children_of(Some(1)), &[4, 3]);
         assert_eq!(tabs.display_order(), &[1, 4, 3, 5]);
+    }
+
+    #[test]
+    fn close_with_promotion_upgrades_task_to_project() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        let mut proj = project(2, "/repo/a");
+        proj.meta.depth = 1;
+        tabs.push(proj);
+        tabs.reparent(2, Some(1));
+        let mut first = task_in_project(3, Some(2), 2, 2);
+        first.meta.project_dir = None;
+        tabs.push(first);
+        tabs.push(task_in_project(4, Some(2), 2, 2));
+        tabs.push(task_in_project(5, Some(3), 2, 3));
+
+        tabs.close_with_promotion(2);
+
+        let promoted = tabs.get(3).unwrap();
+        assert_eq!(promoted.rank, AgentRank::Project);
+        assert_eq!(promoted.project_id, Some(3));
+        assert_eq!(promoted.depth, 1);
+        assert_eq!(tabs.get(4).unwrap().project_id, Some(3));
+        assert_eq!(tabs.get(5).unwrap().project_id, Some(3));
+        assert_eq!(tabs.get(4).unwrap().depth, 2);
+        assert_eq!(tabs.get(5).unwrap().depth, 2);
+        assert_eq!(
+            tabs.find_project_for_dir(std::path::Path::new("/repo/a")),
+            Some(3),
+        );
+    }
+
+    #[test]
+    fn close_with_promotion_keeps_task_rank_under_task() {
+        let mut tabs = Tabs::new();
+        tabs.push(project(1, "/repo/a"));
+        tabs.push(task_in_project(2, Some(1), 1, 1));
+        tabs.push(task_in_project(3, Some(2), 1, 2));
+
+        tabs.close_with_promotion(2);
+
+        let promoted = tabs.get(3).unwrap();
+        assert_eq!(promoted.rank, AgentRank::Task);
+        assert_eq!(promoted.project_id, Some(1));
     }
 
     #[test]
