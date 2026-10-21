@@ -407,6 +407,9 @@ impl Tabs {
             for &cid in children.iter().skip(1) {
                 self.reparent(cid, Some(promoted_id));
             }
+            // Children needn't follow their parent in vec order, so move
+            // the promoted tab into the closing tab's slot among siblings.
+            self.move_to_sibling(promoted_id, tab_id);
         }
 
         self.remove(tab_id);
@@ -692,6 +695,24 @@ mod tests {
         // 4 and 5 now live under 3
         assert_eq!(tabs.children_of(Some(3)), &[4, 5]);
         assert_eq!(tabs.children_of(Some(1)), &[3]);
+    }
+
+    #[test]
+    fn close_with_promotion_takes_closing_slot() {
+        let mut tabs = Tabs::new();
+        tabs.push(tab(1, None));
+        tabs.push(project(2, "/repo/a"));
+        tabs.push(project(3, "/repo/b"));
+        tabs.reparent(2, Some(1));
+        tabs.reparent(3, Some(1));
+        // Spawned later, so they sit after both projects in vec order.
+        tabs.push(task_in_project(4, Some(2), 2, 2));
+        tabs.push(task_in_project(5, Some(3), 3, 2));
+
+        tabs.close_with_promotion(2);
+
+        assert_eq!(tabs.children_of(Some(1)), &[4, 3]);
+        assert_eq!(tabs.display_order(), &[1, 4, 3, 5]);
     }
 
     #[test]

@@ -58,7 +58,9 @@ impl<'a> TabBar<'a> {
             if !tab.is_claude {
                 continue;
             }
-            if show_separators && tab.rank == AgentRank::Project {
+            // Split before each top-level group — a project, or a task
+            // promoted under Home when its project closed.
+            if show_separators && tab.parent_id.is_some() && tab.parent_id == self.tabs.home_id() {
                 tab_col = tab_col.push(self.separator());
             }
             let indent = if self.collapsed { 0.0 } else { tab.depth as f32 * INDENT_STEP };
