@@ -17,7 +17,7 @@ PR children at five.
   idle child is a TODO for the user. Breakdown children open no PR and do not
   count against the cap.
 - Child model: `sonnet` for PRs, `opus` for breakdowns.
-- Reply address: from the environment table in [SKILL.md](../SKILL.md).
+- Reply address: the coordinator's session name, as in [SKILL.md](../SKILL.md).
 
 ## Log doc
 
@@ -59,9 +59,9 @@ take the same HACK.
 
 ## Child prompts
 
-Fill `<reply address>`, `<finish>`, and `<wait>` from the environment table in
-[SKILL.md](../SKILL.md) before you send a prompt. In mandelbot, spawn each
-child with `branch` set to its child name (`hack-1`, `hack-2`, ...).
+Fill `<reply address>`, `<finish>`, and `<wait>` from the table in
+[SKILL.md](../SKILL.md) before you send a prompt. Spawn each child with
+`branch` set to its child name (`hack-1`, `hack-2`, ...).
 
 ### Find and fix (`sonnet`)
 
@@ -77,8 +77,8 @@ Claimed HACKs; do not edit the doc).
    If none remain, send "no HACKs left" and <finish>.
 3. Fix the code the comment describes and delete the comment. Run
    `cargo build` and `cargo test`. Commit (new commits only, never amend),
-   push, and open a draft PR against master with
-   `gh pr create --draft`. SendMessage: "PR <url> up".
+   push, and open a draft PR against master with `gh pr create --draft`.
+   Call `set_pr` with its number. SendMessage: "PR <url> up".
 4. <wait> for the user's go-ahead, then handle review. Merge your own PR
    after approval.
 5. SendMessage: "merged <url> <sha>", then <finish>.
@@ -109,8 +109,8 @@ SendMessage the coordinator: "chunks <file:line>:" then one line per chunk,
 
 The find-and-fix prompt with steps 1–2 replaced by: "Your unit is chunk
 <k>/<n> of the HACK at <file:line>: <description>. Do only this chunk. Delete
-the HACK comment only if this is the last chunk." In mandelbot, spawn it with
-`base` set to master after the chunks it depends on have merged.
+the HACK comment only if this is the last chunk." Spawn it with `base` set to
+master after the chunks it depends on have merged.
 
 ## Coordinator turns
 
@@ -119,7 +119,7 @@ the HACK comment only if this is the last chunk." In mandelbot, spawn it with
 | `claimed <file:line>` | Add a row to Claimed HACKs. Log it. If a slot is free, fill it. |
 | `PR <url> up` | Fill the PR column. Tell the user the PR is ready to look at. |
 | User: "send #N for review" | `gh pr ready N`, add reviewers, tell the child "sent for review". |
-| The PR gets review activity while its child has ended its turn | Resume the child with SendMessage: "#N has review activity". |
+| The PR gets review activity | SendMessage the child: "#N has review activity". |
 | `merged <url> <sha>` | Move the row (or chunk) to Done. Check that the child finished. Fill the slot. |
 | `too large: <file:line> — <why>` | Set the row's state to `breaking down`. Spawn a break-down child. Fill the slot. |
 | `chunks <file:line>: ...` | Add each chunk to the Queue. Set the row's state to `chunked`. Fill free slots. |

@@ -12,23 +12,18 @@ coordinator holds the plan and the log. Children do one unit of work each,
 report back with SendMessage, and finish. The coordinator's context grows by one
 short report per unit, and never by the details of the work.
 
-The mechanics depend on the environment. This skill uses the words in the
-left column; write the matching column into every child prompt.
+The coordinator is the mandelbot tab that runs this skill (a project or task
+tab). Children are child tabs. This skill uses the words in the left column;
+write the matching text into every child prompt.
 
-| | In mandelbot | Outside mandelbot |
-|---|---|---|
-| Coordinator | The tab that runs this skill (a project or task tab) | The main session |
-| Spawn a child | `spawn_tab` with `prompt`, `model`, and a unique `branch` (the child gets its own worktree on that branch); it returns the child's tab ID | `Agent` with `run_in_background: true`, `model`, and a unique `name` |
-| Reply address | The coordinator's session name: the name `ListAgents` prints after "This session is". A tab ID is not a SendMessage address | `main` |
-| Finish | `close_tab` with the child's own tab ID (from its system prompt, or the `is_me` row of `list_tabs`) | Return the final report; the agent ends |
-| Wait on a human | The child stays open in its tab | The child ends its turn; the coordinator resumes it with SendMessage to its name when the human acts |
-| Watch a PR | The child runs `gh pr checks <N> --watch` in the background and handles what it finds | The coordinator runs `gh pr checks <N> --watch` in the background; the child must not |
-| Check a child | `list_tabs` (status, `pr`) | The agent's completion notification |
-
-Before Step 1, ask yourself: am I in mandelbot? The answer is yes if the
-mandelbot MCP tools (`mcp__mandelbot__spawn_tab`, `mcp__mandelbot__list_tabs`)
-are listed, either loaded or deferred. Use the matching column (In mandelbot or
-Outside mandelbot) for the rest of the loop.
+| | Mechanics |
+|---|---|
+| Spawn a child | `spawn_tab` with `prompt`, `model`, and a unique `branch` (the child gets its own worktree on that branch). It returns the child's tab ID. |
+| Reply address | The coordinator's session name: the name `ListAgents` prints after "This session is". A tab ID is not a SendMessage address. |
+| Finish | `close_tab` with the child's own tab ID (from its system prompt, or the `is_me` row of `list_tabs`). |
+| Wait on a human | The child stays open in its tab until the human acts. |
+| Watch a PR | The child runs `gh pr checks <N> --watch` in the background and handles what it finds. |
+| Check a child | `list_tabs` (status, `pr`). |
 
 Worked example: [references/hack-loop.md](references/hack-loop.md).
 
@@ -51,9 +46,9 @@ Write the answers into the log doc before the first spawn.
 ## Step 2. Create the log doc
 
 Create `~/Documents/mandelbot/devloop-<slug>.md`, outside the repo so that no
-branch or worktree owns it. Every child can read it by that absolute path. In
-mandelbot, call `set_file` with that path so the doc is one click from the
-coordinator's tab. Use these sections:
+branch or worktree owns it. Every child can read it by that absolute path.
+Call `set_file` with that path so the doc is one click from the coordinator's
+tab. Use these sections:
 
 ```markdown
 # Devloop: <goal>
@@ -97,8 +92,7 @@ Record the cap and the reason in the Charter.
 
 ## Step 4. Write the child prompt
 
-Fill the environment words from the table at the top. Every child prompt
-contains:
+Fill the words from the table at the top. Every child prompt contains:
 
 - The unit of work and its end state. Do not restate the whole plan; give the
   log doc path if the child needs more.
@@ -111,12 +105,9 @@ contains:
   review.
 - When to stop: the child finishes after its final report.
 - For PR children: "Branch from master. Run `cargo build` and `cargo test`
-  before you push. Make new commits; never amend or force-push.
-  Open the PR against master with `gh pr create --draft`. Merge your own PR
-  after approval."
-  In mandelbot, add: "Call `set_pr` with the PR number right after
-  `gh pr create`." Outside mandelbot, add: "Do not watch the PR. The
-  coordinator watches it and resumes you when it changes."
+  before you push. Make new commits; never amend or force-push. Open the PR
+  against master with `gh pr create --draft`, then call `set_pr` with its
+  number. Merge your own PR after approval."
 
 ## Step 5. Run the loop
 
@@ -127,25 +118,22 @@ On each event, do the smallest thing and end the turn:
 | A slot is free and the Queue has a unit | Spawn the next child. Check that it started. Log it. |
 | A child reports a new unit | Add it to the Queue. Log it. |
 | A child reports progress | Update In flight. Log it. |
-| A child waits on a human, and the human acts | Resume the child if it ended its turn (see Wait on a human). |
 | A child reports done | Move it to Done, check that the child finished, refill the slot. |
 | A child is blocked | Decide if you can. Else tell the user in prose and relay the answer, quoting the user. |
 | The user gives a direction for a child | SendMessage the child the new end state. Do not replace it with a new child. |
 | The user approves a send-for-review | Run `gh pr ready <N>` and add reviewers yourself, then tell the child in one line. |
-| Outside mandelbot: a PR goes out for review, or a child pushes a review round | Start `gh pr checks <N> --watch` in the background. |
-| Outside mandelbot: a PR watcher exits | Resume the child with SendMessage: "#N changed". Restart the watcher unless the PR merged or closed. |
+| A PR gets review activity | SendMessage the child: "#N has review activity". |
 | The stop condition holds | Check that every child finished and every branch is pushed. Log the end. |
 
 `gh pr checks --watch` only covers CI. For review activity, rely on the user,
-or, from a project tab in mandelbot, the bundled `mandelbot-git-monitor` skill,
-which raises a toast when a PR you authored gets a review decision. Relay
-review activity to the child with SendMessage: "#N has review activity".
+or, from a project tab, the bundled `mandelbot-git-monitor` skill, which
+raises a toast when a PR you authored gets a review decision.
 
 The coordinator never blocks:
 
 - No `AskUserQuestion` after Step 1. Report open questions as prose status.
-  In mandelbot, `notify` with the child's `tab_id` points the user at a child
-  that needs them.
+  `notify` with the child's `tab_id` points the user at a child that needs
+  them.
 - No long foreground commands or deep investigation. Give them to a child or
   a background agent.
 - If a watcher (Monitor, `/loop`, `ScheduleWakeup`) drives the loop, restart it
