@@ -23,6 +23,7 @@ libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rfd = "0.17"
+md5 = "0.7"
 
 # The profile that 'dist' will build with
 [profile.dist]

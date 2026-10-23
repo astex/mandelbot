@@ -109,12 +109,155 @@ pub fn setup_script(
     (script, wt_path)
 }
 
-/// Remove a git worktree previously created by [`create`].
+/// Directory that holds Bazel output bases: `_bazel_$USER` under the platform cache directory.
+fn bazel_cache_root() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    let user = std::env::var_os("USER")?;
+    let cache = if cfg!(target_os = "macos") {
+        home.join("Library/Caches/bazel")
+    } else {
+        home.join(".cache/bazel")
+    };
+    Some(cache.join(format!("_bazel_{}", user.to_string_lossy())))
+}
+
+/// Find the Bazel output base of a worktree. Bazel names the base after the md5 of the workspace
+/// path, and writes that path to `DO_NOT_BUILD_HERE`. Return the base only if the file confirms it.
+fn bazel_output_base(cache_root: &Path, worktree_path: &Path) -> Option<PathBuf> {
+    let base = cache_root.join(format!("{:x}", md5::compute(worktree_path.to_string_lossy().as_bytes())));
+    let owner = std::fs::read_to_string(base.join("DO_NOT_BUILD_HERE")).ok()?;
+    (Path::new(owner.trim()) == worktree_path).then_some(base)
+}
+
+/// Run a command, and kill it if it runs longer than `timeout`. Return whether it exited with success.
+fn run_with_timeout(cmd: &mut std::process::Command, timeout: std::time::Duration) -> bool {
+    let Ok(mut child) = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
+/// Delete a Bazel output base. Bazel makes its external files read-only, so make them writable first.
+fn remove_output_base(base: &Path) -> std::io::Result<()> {
+    run_with_timeout(
+        std::process::Command::new("chmod").args(["-R", "u+w"]).arg(base),
+        std::time::Duration::from_secs(60),
+    );
+    std::fs::remove_dir_all(base)
+}
+
+/// Stop the Bazel server and delete the output base of a worktree, if it has one. Best effort:
+/// failures are logged and never propagate.
+fn teardown_bazel_output_base(cache_root: &Path, worktree_path: &Path) {
+    let canonical = worktree_path.canonicalize().ok();
+    let base = bazel_output_base(cache_root, worktree_path)
+        .or_else(|| canonical.and_then(|c| bazel_output_base(cache_root, &c)));
+    let Some(base) = base else { return };
+    let stopped = run_with_timeout(
+        std::process::Command::new("bazel")
+            .arg(format!("--output_base={}", base.display()))
+            .arg("shutdown"),
+        std::time::Duration::from_secs(10),
+    );
+    if !stopped {
+        eprintln!("bazel shutdown did not finish for {}", base.display());
+    }
+    if let Err(e) = remove_output_base(&base) {
+        eprintln!("failed to remove bazel output base {}: {e}", base.display());
+    }
+}
+
+/// Remove a git worktree previously created by [`create`], and its Bazel output base.
 pub fn remove(project_dir: &Path, worktree_path: &Path) {
+    if let Some(cache_root) = bazel_cache_root() {
+        teardown_bazel_output_base(&cache_root, worktree_path);
+    }
     let _ = std::process::Command::new("git")
         .args(["worktree", "remove", "--force", &worktree_path.to_string_lossy()])
         .current_dir(project_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("mandelbot-wt-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn make_base(root: &Path, wt: &Path, owner: &str) -> PathBuf {
+        let base = root.join(format!("{:x}", md5::compute(wt.to_string_lossy().as_bytes())));
+        std::fs::create_dir_all(base.join("external/dep")).unwrap();
+        std::fs::write(base.join("DO_NOT_BUILD_HERE"), owner).unwrap();
+        std::fs::write(base.join("external/dep/file"), "x").unwrap();
+        std::fs::set_permissions(base.join("external/dep/file"), std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::fs::set_permissions(base.join("external/dep"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        base
+    }
+
+    #[test]
+    fn md5_matches_bazel_naming() {
+        // Derived from a real base: `md5(DO_NOT_BUILD_HERE contents)` is the directory name.
+        let wt = "/Users/phil/.mandelbot/worktrees/watch-pr-always-exit-conflict";
+        assert_eq!(format!("{:x}", md5::compute(wt.as_bytes())), "168854541fdd969c8491c42ad8b39824");
+    }
+
+    #[test]
+    fn removes_read_only_base_and_keeps_cache_and_install() {
+        let root = temp_root("remove");
+        let wt = PathBuf::from("/nonexistent/wt-a");
+        let base = make_base(&root, &wt, "/nonexistent/wt-a");
+        std::fs::create_dir_all(root.join("cache")).unwrap();
+        std::fs::create_dir_all(root.join("install")).unwrap();
+        teardown_bazel_output_base(&root, &wt);
+        assert!(!base.exists());
+        assert!(root.join("cache").exists());
+        assert!(root.join("install").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn keeps_base_owned_by_another_path() {
+        let root = temp_root("mismatch");
+        let wt = PathBuf::from("/nonexistent/wt-b");
+        let base = make_base(&root, &wt, "/nonexistent/other");
+        teardown_bazel_output_base(&root, &wt);
+        assert!(base.exists());
+        std::fs::set_permissions(base.join("external/dep"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_base_is_a_no_op() {
+        let root = temp_root("missing");
+        teardown_bazel_output_base(&root, Path::new("/nonexistent/wt-c"));
+        assert!(root.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
