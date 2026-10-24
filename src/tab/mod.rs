@@ -292,11 +292,24 @@ impl TerminalTab {
     }
 
     /// Stop the current stream (keeping the worktree) and route future
-    /// events to `tx`, whose stream will take over this tab.
+    /// events to `tx`, whose stream will take over this tab. The tab
+    /// gets a fresh terminal so the old stream's last writes land on
+    /// one nobody renders.
     pub fn restart(&mut self, tx: mpsc::Sender<TabEvent>) {
         if let Some(old) = self.event_tx.replace(tx) {
             let _ = old.send(TabEvent::Restart);
         }
+        let (cols, rows) = {
+            let t = self.term.lock().unwrap();
+            (t.grid().columns(), t.grid().screen_lines())
+        };
+        let (term, mut listener) = new_term(cols, rows);
+        // Theme colors and window size are only set on change, so carry
+        // them over rather than starting from defaults.
+        listener.colors = self.listener.colors.clone();
+        listener.window_size = self.listener.window_size.clone();
+        self.term = Arc::new(Mutex::new(term));
+        self.listener = listener;
     }
 
     pub fn has_stream(&self) -> bool {

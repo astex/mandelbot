@@ -256,7 +256,7 @@ fn handle_tools_list(id: Value) -> Response {
                 },
                 {
                     "name": "respawn",
-                    "description": "Replace this tab's Claude session with a fresh one, seeded with `prompt`. The tab keeps its id, position, children, and worktree (uncommitted files included); only the conversation is discarded. Use it when your context is getting full mid-task, especially in loops. The new session remembers nothing, so `prompt` must be a complete handoff: the goal, what's done, what's next, and any IDs, paths, or decisions it needs. This call ends your session.",
+                    "description": "Replace this tab's Claude session with a fresh one, seeded with `prompt`. The tab keeps its id, position, children, and worktree (uncommitted files included); only the conversation is discarded. Use it when your context is getting full mid-task, especially in loops. The new session remembers nothing, so `prompt` must be a complete handoff: the goal, what's done, what's next, and any IDs, paths, or decisions it needs. If that's too much for a prompt, write it to a markdown file first and point the prompt at its absolute path. This call ends your session.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
