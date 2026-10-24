@@ -548,6 +548,13 @@ pub fn tab_stream(
                                     ),
                                 );
                         }
+                        Ok(TabEvent::Restart) => {
+                            if pty_alive {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            break;
+                        }
                         Ok(TabEvent::Shutdown) | Err(_) => {
                             if pty_alive {
                                 let _ = child.kill();

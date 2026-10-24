@@ -75,6 +75,9 @@ pub enum TabEvent {
     SetSelection(Option<Selection>),
     UpdateSelection(Point, Side),
     Shutdown,
+    /// Kill the process and end the stream, keeping the worktree so a
+    /// fresh stream can take over the same tab (`respawn`).
+    Restart,
 }
 
 pub struct TabSpawnParams {
@@ -152,6 +155,8 @@ pub struct TabMeta {
     pub pending_input: Option<String>,
     /// Claude session UUID for this tab (if `is_claude`).
     pub session_id: Option<String>,
+    /// Model the tab's Claude was launched with, reused on `respawn`.
+    pub model: Option<String>,
     /// Worktree path (if task+git spawn).
     pub worktree_dir: Option<PathBuf>,
     /// Whether the checkpoint timeline strip is open under this tab.
@@ -242,6 +247,7 @@ impl TerminalTab {
             next_wakeup_at_ms: None,
             pending_input: None,
             session_id: None,
+            model: None,
             worktree_dir: None,
             timeline_visible: false,
             timeline_cursor: None,
@@ -283,6 +289,31 @@ impl TerminalTab {
         tx: mpsc::Sender<TabEvent>,
     ) {
         self.event_tx = Some(tx);
+    }
+
+    /// Stop the current stream (keeping the worktree) and route future
+    /// events to `tx`, whose stream will take over this tab. The tab
+    /// gets a fresh terminal so the old stream's last writes land on
+    /// one nobody renders.
+    pub fn restart(&mut self, tx: mpsc::Sender<TabEvent>) {
+        if let Some(old) = self.event_tx.replace(tx) {
+            let _ = old.send(TabEvent::Restart);
+        }
+        let (cols, rows) = {
+            let t = self.term.lock().unwrap();
+            (t.grid().columns(), t.grid().screen_lines())
+        };
+        let (term, mut listener) = new_term(cols, rows);
+        // Theme colors and window size are only set on change, so carry
+        // them over rather than starting from defaults.
+        listener.colors = self.listener.colors.clone();
+        listener.window_size = self.listener.window_size.clone();
+        self.term = Arc::new(Mutex::new(term));
+        self.listener = listener;
+    }
+
+    pub fn has_stream(&self) -> bool {
+        self.event_tx.is_some()
     }
 
     pub(crate) fn lock_term(
