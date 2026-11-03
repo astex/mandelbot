@@ -659,11 +659,9 @@ impl App {
         &mut self,
         tab_id: usize,
         worktree_dir: Option<PathBuf>,
-        session_id: Option<String>,
     ) -> Task<Message> {
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.worktree_dir = worktree_dir;
-            tab.session_id = session_id;
             self.tabs.write(tab);
         }
         Task::none()

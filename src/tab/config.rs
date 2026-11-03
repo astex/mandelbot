@@ -104,13 +104,7 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
                 "hooks": [set_status("idle")],
             }],
             "UserPromptSubmit": [{
-                "hooks": [
-                    set_status("working"),
-                    {
-                        "type": "command",
-                        "command": "echo checkpoint > $MANDELBOT_FIFO",
-                    },
-                ],
+                "hooks": [set_status("working")],
             }],
             "PreToolUse": [{
                 "matcher": "",
