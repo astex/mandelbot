@@ -1,8 +1,8 @@
 //! Left-hand tab bar: agent tree (Home → Projects → Tasks), shell tabs,
 //! and any toasts anchored to the bottom.
 
-use iced::widget::{button, column, container, mouse_area, row, text, Space};
-use iced::{Alignment, Border, Color, Element, Fill, Font, Theme};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Space};
+use iced::{mouse, Alignment, Background, Border, Color, Element, Fill, Font, Theme};
 
 use crate::animation::FlashState;
 use crate::config::Config;
@@ -31,6 +31,8 @@ pub struct TabBar<'a> {
     /// Render the narrow strip: "home", 3-letter project names, and
     /// status dot + digit for everything else.
     pub collapsed: bool,
+    /// A tab is being dragged; show the grabbing cursor over the bar.
+    pub dragging: bool,
 }
 
 /// Width of the collapsed strip: room for "home" plus dot and digit.
@@ -83,24 +85,41 @@ impl<'a> TabBar<'a> {
             tab_col = tab_col.push(self.tab_button(tab, num, 0.0));
         }
 
+        // The tab list scrolls once it outgrows the window; toasts stay
+        // pinned below it.
+        let thumb = Color { a: 0.3, ..self.terminal_theme.fg };
+        let thumb_hover = Color { a: 0.6, ..self.terminal_theme.fg };
+        let tabs_scroll = scrollable(tab_col)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().width(4).scroller_width(4),
+            ))
+            .style(move |_: &Theme, status| scroll_style(status, thumb, thumb_hover))
+            .width(width)
+            .height(Fill);
+
+        let mut bar_col = column![tabs_scroll];
+
         // Toasts anchored to the bottom.
         if !self.collapsed && !toast_elements.is_empty() {
-            tab_col = tab_col.push(Space::new().width(TAB_BAR_WIDTH).height(Fill));
             let mut toast_col = column![].spacing(PADDING);
             for t in toast_elements {
                 toast_col = toast_col.push(t);
             }
-            tab_col = tab_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
+            bar_col = bar_col.push(container(toast_col).width(TAB_BAR_WIDTH).padding(PADDING));
         }
 
-        container(tab_col.height(Fill))
+        let bar = container(bar_col.height(Fill))
             .width(width)
             .height(Fill)
             .style(move |_theme| container::Style {
                 background: Some(inactive_bg.into()),
                 ..Default::default()
-            })
-            .into()
+            });
+        if self.dragging {
+            mouse_area(bar).interaction(mouse::Interaction::Grabbing).into()
+        } else {
+            bar.into()
+        }
     }
 
     fn width(&self) -> f32 {
@@ -150,14 +169,24 @@ impl<'a> TabBar<'a> {
         let max_label_chars = self.max_label_chars(indent);
         let label_str = self.label_text(tab, max_label_chars);
         let label_len = label_str.len();
-        let label = container(
-            text(label_str)
-                .size(self.config.font_size)
-                .font(Font::MONOSPACE)
-                .color(fg),
-        )
-        .width(Fill)
-        .clip(true);
+        let title = text(label_str)
+            .size(self.config.font_size)
+            .font(Font::MONOSPACE)
+            .color(fg);
+        // Guest tabs work in a different project than the tree they sit
+        // in — name that project in small muted text above the title.
+        let label_body: Element<'a, Message> = match self.tabs.guest_project_dir(tab.id) {
+            Some(dir) => column![
+                text(dir_name(dir))
+                    .size(self.config.font_size * 0.7)
+                    .font(Font::MONOSPACE)
+                    .color(Color { a: 0.6, ..fg }),
+                title,
+            ]
+            .into(),
+            None => title.into(),
+        };
+        let label = container(label_body).width(Fill).clip(true);
 
         let toggle = self.toggle_element(tab.id, is_foldable, has_children, is_folded);
         let suffix = self.suffix_row(tab, display_number, bg, label_len >= max_label_chars.saturating_sub(2));
@@ -182,9 +211,7 @@ impl<'a> TabBar<'a> {
                 ..Default::default()
             });
 
-        let tab_elem: Element<'a, Message> = mouse_area(styled)
-            .on_press(Message::SelectTab(tab.id))
-            .into();
+        let tab_elem = draggable(styled.into(), tab.id);
 
         if indent > 0.0 {
             row![Space::new().width(indent), tab_elem]
@@ -231,7 +258,7 @@ impl<'a> TabBar<'a> {
                 ..Default::default()
             });
 
-        mouse_area(styled).on_press(Message::SelectTab(tab.id)).into()
+        draggable(styled.into(), tab.id)
     }
 
     fn max_label_chars(&self, indent: f32) -> usize {
@@ -252,13 +279,7 @@ impl<'a> TabBar<'a> {
             };
         }
         if tab.rank == AgentRank::Project {
-            if let Some(dir) = &tab.project_dir {
-                return dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| dir.to_string_lossy().into_owned());
-            }
-            return String::new();
+            return tab.project_dir.as_deref().map(dir_name).unwrap_or_default();
         }
         if !tab.is_claude {
             return "shell".into();
@@ -389,6 +410,13 @@ impl<'a> TabBar<'a> {
     }
 }
 
+/// Display name for a project directory: its final path component.
+fn dir_name(dir: &std::path::Path) -> String {
+    dir.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dir.to_string_lossy().into_owned())
+}
+
 /// A right-aligned association chip: a bare glyph button that emits
 /// `msg` when clicked. PR uses the monospace font; pictograph chips
 /// (file/ticket) fall back to the system emoji/symbol font.
@@ -411,6 +439,49 @@ fn assoc_chip<'a>(
             border: Border::default(),
             ..Default::default()
         })
+        .into()
+}
+
+/// Overlay scrollbar with no visible rail: just a muted thumb that
+/// brightens while hovered or dragged.
+fn scroll_style(status: scrollable::Status, thumb: Color, thumb_hover: Color) -> scrollable::Style {
+    let active = match status {
+        scrollable::Status::Hovered { is_vertical_scrollbar_hovered, .. } => {
+            is_vertical_scrollbar_hovered
+        }
+        scrollable::Status::Dragged { is_vertical_scrollbar_dragged, .. } => {
+            is_vertical_scrollbar_dragged
+        }
+        _ => false,
+    };
+    let rail = scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: scrollable::Scroller {
+            background: Background::Color(if active { thumb_hover } else { thumb }),
+            border: Border { radius: 2.0.into(), ..Border::default() },
+        },
+    };
+    scrollable::Style {
+        container: container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        auto_scroll: scrollable::AutoScroll {
+            background: Background::Color(Color::TRANSPARENT),
+            border: Border::default(),
+            shadow: iced::Shadow::default(),
+            icon: Color::TRANSPARENT,
+        },
+    }
+}
+
+/// Wrap a tab row so pressing selects and grabs it, and entering it
+/// mid-drag pulls the grabbed tab into its slot.
+fn draggable<'a>(row: Element<'a, Message>, tab_id: usize) -> Element<'a, Message> {
+    mouse_area(row)
+        .on_press(Message::TabPressed(tab_id))
+        .on_enter(Message::TabDragOver(tab_id))
         .into()
 }
 

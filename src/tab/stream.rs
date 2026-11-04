@@ -63,6 +63,16 @@ pub fn fifo_stream(
                         {
                             break;
                         }
+                    } else if trimmed == "subagent_tool" {
+                        if futures::executor::block_on(
+                            sender.send(Message::SubagentToolUse(
+                                tab_id,
+                            )),
+                        )
+                        .is_err()
+                        {
+                            break;
+                        }
                     } else if let Some(ts) = trimmed
                         .strip_prefix("wakeup_at:")
                         .and_then(|s| s.parse::<u64>().ok())
@@ -184,7 +194,25 @@ pub fn tab_stream(
 
                     let setup_script;
                     (setup_script, worktree_dir) =
-                        if rank == super::AgentRank::Task
+                        if let Some(existing) = params.existing_worktree.clone() {
+                            // respawn: reuse the tab's worktree. Still
+                            // mirror `.claude/settings.local.json` from the
+                            // project root.
+                            let wt_str = existing.to_string_lossy();
+                            let copy = project_dir
+                                .as_ref()
+                                .map(|dir| worktree::copy_settings_snippet(dir, &existing))
+                                .unwrap_or_default();
+                            let script = if copy.is_empty() {
+                                format!("cd {}", pty::shell_quote(&wt_str))
+                            } else {
+                                format!(
+                                    "{copy} && cd {}",
+                                    pty::shell_quote(&wt_str),
+                                )
+                            };
+                            (script, Some(existing))
+                        } else if rank == super::AgentRank::Task
                             && workflow == "git"
                             && let Some(dir) =
                                 project_dir.as_ref()
@@ -497,6 +525,13 @@ pub fn tab_stream(
                                         ),
                                     ),
                                 );
+                        }
+                        Ok(TabEvent::Restart) => {
+                            if pty_alive {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            break;
                         }
                         Ok(TabEvent::Shutdown) | Err(_) => {
                             if pty_alive {

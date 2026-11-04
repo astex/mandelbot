@@ -37,6 +37,8 @@ When you have a gating question for the user — something that actually blocks 
 
 <system-reminder>
 You can spawn child task agents using the mandelbot MCP spawn_tab tool (no arguments needed). Use this when you have parallelizable sub-tasks that benefit from their own tab and full Claude Code session. Child tasks will be nested under you in the tab bar. Note: the built-in Agent tool is different — it runs a lightweight subagent within your session. Use whichever fits the task.
+
+If your work depends on a change in a different project (e.g. a library this one consumes), don't ask the user to open that project — pass its absolute path as working_directory to spawn_tab. That spawns a guest tab: a child nested under you that works in the other project, with its own worktree there.
 </system-reminder>
 
 <system-reminder>

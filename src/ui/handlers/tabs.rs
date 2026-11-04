@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use iced::Task;
+use uuid::Uuid;
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
 use alacritty_terminal::selection::Selection;
 
-use crate::tab::{AgentRank, AgentStatus, TerminalTab};
+use crate::tab::{AgentRank, AgentStatus, TabSpawnParams, TerminalTab};
 
 use super::super::{terminal_size, App, Message, PendingKey};
 
@@ -136,12 +138,22 @@ impl App {
                     (AgentRank::Project, Some(canonical), Some(requesting_tab_id))
                 }
             }
-            AgentRank::Project => {
-                let dir = requester.project_dir.clone();
-                (AgentRank::Task, dir, Some(requesting_tab_id))
-            }
-            AgentRank::Task => {
-                let dir = self.tabs.project_dir_for(requesting_tab_id);
+            // From a project or task agent, `working_directory` spawns a
+            // guest tab: nested under the requester, working in another
+            // project.
+            AgentRank::Project | AgentRank::Task => {
+                let dir = match working_directory {
+                    Some(wd) => match std::fs::canonicalize(&wd) {
+                        Ok(dir) if dir.is_dir() => Some(dir),
+                        _ => {
+                            self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                                "error": format!("working_directory {} is not a directory", wd.display()),
+                            }));
+                            return Task::none();
+                        }
+                    },
+                    None => self.tabs.project_dir_for(requesting_tab_id),
+                };
                 (AgentRank::Task, dir, Some(requesting_tab_id))
             }
         };
@@ -153,8 +165,21 @@ impl App {
 
     pub(in crate::ui) fn handle_set_status(&mut self, tab_id: usize, status: AgentStatus) -> Task<Message> {
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            if status == AgentStatus::Blocked && tab.status != AgentStatus::Blocked {
+                tab.status_before_block = tab.status;
+            }
             tab.status = status;
             self.tabs.write(tab);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_subagent_tool_use(&mut self, tab_id: usize) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            if tab.status == AgentStatus::Blocked {
+                tab.status = tab.status_before_block;
+                self.tabs.write(tab);
+            }
         }
         Task::none()
     }
@@ -478,14 +503,89 @@ impl App {
         }
     }
 
+    /// Restart the Claude process in tab `tab_id` with a fresh
+    /// conversation seeded by `prompt`. The tab keeps its id, position,
+    /// children, and worktree; only the session changes.
+    pub(in crate::ui) fn handle_mcp_respawn(
+        &mut self,
+        tab_id: usize,
+        prompt: String,
+    ) -> Task<Message> {
+        let Some(size) = self.window_size else {
+            return Task::none();
+        };
+        let Some(tab) = self.tabs.get(tab_id) else {
+            return Task::none();
+        };
+        if !tab.is_claude || !tab.has_stream() {
+            self.respond_to_tab(tab_id, serde_json::json!({
+                "error": "only a running Claude tab can respawn"
+            }));
+            return Task::none();
+        }
+        if prompt.trim().is_empty() {
+            self.respond_to_tab(tab_id, serde_json::json!({
+                "error": "respawn requires a non-empty prompt"
+            }));
+            return Task::none();
+        }
+
+        let model = tab.model.clone().unwrap_or_else(|| match tab.rank {
+            AgentRank::Home => self.config.models.home.clone(),
+            AgentRank::Project => self.config.models.project.clone(),
+            AgentRank::Task => self.config.models.task.clone(),
+        });
+        let (rows, cols) = terminal_size(size, self.tab_bar_reserved_width(), self.config.char_width(), self.config.char_height());
+        let params = TabSpawnParams {
+            id: tab_id,
+            rows,
+            cols,
+            is_claude: true,
+            rank: tab.rank,
+            project_dir: tab.project_dir.clone(),
+            shell: self.config.shell.clone(),
+            workflow: self.config.workflow.clone(),
+            worktree_location: self.config.worktree_location.clone(),
+            model,
+            parent_socket: self.parent_socket_path.clone(),
+            prompt: Some(prompt),
+            branch: None,
+            base: None,
+            control_prefix: self.config.control_prefix.to_string(),
+            session_id: Some(Uuid::new_v4().to_string()),
+            existing_worktree: tab.worktree_dir.clone(),
+        };
+
+        // Answer before the old process (and its MCP server) is killed.
+        self.respond_to_tab(tab_id, serde_json::json!({
+            "message": "Respawning"
+        }));
+
+        let (event_tx, event_rx) = mpsc::channel();
+        let pty_tx = event_tx.clone();
+        self.tabs.restart(tab_id, event_tx);
+        if let Some(mut meta) = self.tabs.snapshot(tab_id) {
+            meta.status = AgentStatus::Working;
+            self.tabs.write(meta);
+        }
+        self.run_tab_stream(params, event_rx, pty_tx)
+    }
+
     pub(in crate::ui) fn handle_mcp_close_tab(
         &mut self,
         requesting_tab_id: usize,
         target_tab_id: usize,
     ) -> Task<Message> {
-        let authorized = if requesting_tab_id == target_tab_id {
-            true
-        } else {
+        // A tab closing itself goes through the same path as a user close,
+        // so its children are promoted rather than closed with it.
+        if requesting_tab_id == target_tab_id {
+            self.respond_to_tab(requesting_tab_id, serde_json::json!({
+                "message": "Closed tab"
+            }));
+            return self.close_tab(target_tab_id);
+        }
+
+        let authorized = {
             let mut current = Some(target_tab_id);
             let mut found = false;
             while let Some(id) = current {
@@ -555,9 +655,38 @@ impl App {
         Task::none()
     }
 
+    pub(in crate::ui) fn handle_mcp_focus_tab(
+        &mut self,
+        requesting_tab_id: usize,
+        target_tab_id: usize,
+    ) -> Task<Message> {
+        let response = if self.tabs.contains(target_tab_id) {
+            self.focus_tab(target_tab_id);
+            serde_json::json!({ "message": format!("Focused tab {target_tab_id}") })
+        } else {
+            serde_json::json!({ "error": format!("no tab with id {target_tab_id}") })
+        };
+        self.respond_to_tab(requesting_tab_id, response);
+        Task::none()
+    }
+
     pub(in crate::ui) fn handle_select_tab(&mut self, tab_id: usize) -> Task<Message> {
         if self.tabs.contains(tab_id) {
             self.focus_tab(tab_id);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_tab_pressed(&mut self, tab_id: usize) -> Task<Message> {
+        if self.tabs.contains(tab_id) {
+            self.dragging_tab = Some(tab_id);
+        }
+        self.handle_select_tab(tab_id)
+    }
+
+    pub(in crate::ui) fn handle_tab_drag_over(&mut self, target_id: usize) -> Task<Message> {
+        if let Some(dragged) = self.dragging_tab {
+            self.tabs.move_to_sibling(dragged, target_id);
         }
         Task::none()
     }

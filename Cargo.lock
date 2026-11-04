@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "mandelbot"
-version = "0.4.5"
+version = "0.4.9"
 dependencies = [
  "alacritty_terminal",
  "fontdb",

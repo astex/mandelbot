@@ -75,6 +75,9 @@ pub enum TabEvent {
     SetSelection(Option<Selection>),
     UpdateSelection(Point, Side),
     Shutdown,
+    /// Kill the process and end the stream, keeping the worktree so a
+    /// fresh stream can take over the same tab (`respawn`).
+    Restart,
 }
 
 pub struct TabSpawnParams {
@@ -95,6 +98,10 @@ pub struct TabSpawnParams {
     pub control_prefix: String,
     /// Fresh session UUID to pass via `--session-id` when launching claude.
     pub session_id: Option<String>,
+    /// If set, skip worktree creation and `cd` into this existing
+    /// worktree instead (still mirroring `.claude/settings.local.json`
+    /// from the project root). Used by `respawn`.
+    pub existing_worktree: Option<PathBuf>,
 }
 
 /// Mutable per-tab state. Cloning produces an inert data-only snapshot
@@ -110,6 +117,9 @@ pub struct TabMeta {
     pub project_id: Option<usize>,
     pub title: Option<String>,
     pub status: AgentStatus,
+    /// Status to return to when a subagent's tool call resolves a
+    /// `Blocked` permission prompt. Captured on entry to `Blocked`.
+    pub status_before_block: AgentStatus,
     pub background_tasks: usize,
     /// PR number detected by the status-line scraper. Written on every
     /// Claude output tick. Use `pr_number()` to read, not this field —
@@ -136,6 +146,8 @@ pub struct TabMeta {
     /// passed or no wake-up has been scheduled.
     pub next_wakeup_at_ms: Option<u64>,
     pub pending_input: Option<String>,
+    /// Model the tab's Claude was launched with, reused on `respawn`.
+    pub model: Option<String>,
     /// Worktree path (if task+git spawn).
     pub worktree_dir: Option<PathBuf>,
 }
@@ -206,6 +218,7 @@ impl TerminalTab {
             } else {
                 AgentStatus::Idle
             },
+            status_before_block: AgentStatus::Idle,
             background_tasks: 0,
             pr_scraped: None,
             pr_override: None,
@@ -214,6 +227,7 @@ impl TerminalTab {
             associations_expanded: false,
             next_wakeup_at_ms: None,
             pending_input: None,
+            model: None,
             worktree_dir: None,
         };
         Self {
@@ -252,6 +266,31 @@ impl TerminalTab {
         tx: mpsc::Sender<TabEvent>,
     ) {
         self.event_tx = Some(tx);
+    }
+
+    /// Stop the current stream (keeping the worktree) and route future
+    /// events to `tx`, whose stream will take over this tab. The tab
+    /// gets a fresh terminal so the old stream's last writes land on
+    /// one nobody renders.
+    pub fn restart(&mut self, tx: mpsc::Sender<TabEvent>) {
+        if let Some(old) = self.event_tx.replace(tx) {
+            let _ = old.send(TabEvent::Restart);
+        }
+        let (cols, rows) = {
+            let t = self.term.lock().unwrap();
+            (t.grid().columns(), t.grid().screen_lines())
+        };
+        let (term, mut listener) = new_term(cols, rows);
+        // Theme colors and window size are only set on change, so carry
+        // them over rather than starting from defaults.
+        listener.colors = self.listener.colors.clone();
+        listener.window_size = self.listener.window_size.clone();
+        self.term = Arc::new(Mutex::new(term));
+        self.listener = listener;
+    }
+
+    pub fn has_stream(&self) -> bool {
+        self.event_tx.is_some()
     }
 
     pub(crate) fn lock_term(

@@ -59,6 +59,12 @@ pub enum Message {
     SpawnChild,
     CloseTab(usize),
     SelectTab(usize),
+    /// Mouse down on a tab-bar row: select it and start dragging it.
+    TabPressed(usize),
+    /// Cursor entered tab `id`'s row; mid-drag, the dragged tab takes
+    /// its slot if the two are siblings.
+    TabDragOver(usize),
+    TabDragEnd,
     SelectTabByIndex(usize),
     NavigateSibling(i32),
     NavigateRank(i32),
@@ -76,10 +82,17 @@ pub enum Message {
     SpawnOrFocusProjectTab { tab_id: usize, path: Option<PathBuf> },
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
+    McpFocusTab(usize, usize),
+    McpRespawn(usize, String),
     McpListTabs(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
+    /// A subagent or forked background agent (e.g. Claude Code's
+    /// post-turn memory extraction) ran a tool. Unlike main-thread tool
+    /// hooks this must not mark an idle tab as working — it only clears
+    /// a `Blocked` state left by that subagent's permission prompt.
+    SubagentToolUse(usize),
     /// Agent-set PR number. `Some(n)` locks the PR to `n` and disables
     /// the status-line scraper for that tab; `None` clears both.
     SetPr(usize, Option<u32>),
@@ -153,6 +166,8 @@ pub struct App {
     tab_bar_hovered: bool,
     /// Movement prefix is held; expands a collapsed bar like hover does.
     tab_bar_peek: bool,
+    /// Tab being dragged in the tab bar; set from press until release.
+    dragging_tab: Option<usize>,
 }
 
 impl App {
@@ -191,6 +206,7 @@ impl App {
             tab_bar_collapse_override: None,
             tab_bar_hovered: false,
             tab_bar_peek: false,
+            dragging_tab: None,
         };
 
         let theme_task = iced::system::theme().map(Message::SystemThemeChanged);
@@ -211,6 +227,7 @@ impl App {
                 self.handle_mcp_spawn_agent(rtid, wd, ptid, prompt, branch, model, base)
             }
             Message::SetStatus(tab_id, status) => self.handle_set_status(tab_id, status),
+            Message::SubagentToolUse(tab_id) => self.handle_subagent_tool_use(tab_id),
             Message::SetPr(tab_id, pr) => self.handle_set_pr(tab_id, pr),
             Message::SetFile(tab_id, path) => self.handle_set_file(tab_id, path),
             Message::SetTicket(tab_id, url) => self.handle_set_ticket(tab_id, url),
@@ -247,7 +264,14 @@ impl App {
             }
             Message::CloseTab(tab_id) => self.close_tab(tab_id),
             Message::McpCloseTab(rtid, target) => self.handle_mcp_close_tab(rtid, target),
+            Message::McpFocusTab(rtid, target) => self.handle_mcp_focus_tab(rtid, target),
             Message::SelectTab(tab_id) => self.handle_select_tab(tab_id),
+            Message::TabPressed(tab_id) => self.handle_tab_pressed(tab_id),
+            Message::TabDragOver(tab_id) => self.handle_tab_drag_over(tab_id),
+            Message::TabDragEnd => {
+                self.dragging_tab = None;
+                Task::none()
+            }
             Message::SelectTabByIndex(index) => self.handle_select_tab_by_index(index),
             Message::ToggleFoldTab(tab_id) => self.handle_toggle_fold_tab(tab_id),
             Message::SetSelection(sel) => self.handle_set_selection(sel),
@@ -262,6 +286,7 @@ impl App {
             Message::TabReady { tab_id, worktree_dir } => {
                 self.handle_tab_ready(tab_id, worktree_dir)
             }
+            Message::McpRespawn(tab_id, prompt) => self.handle_mcp_respawn(tab_id, prompt),
             Message::McpListTabs(tab_id) => self.handle_mcp_list_tabs(tab_id),
             Message::ShowToast { source_tab_id, message, prompt, target_tab_id } => {
                 self.handle_show_toast(source_tab_id, message, prompt, target_tab_id)
@@ -289,6 +314,7 @@ impl App {
             terminal_theme: &self.terminal_theme,
             config: &self.config,
             collapsed: collapsed && !self.tab_bar_hovered && !self.tab_bar_peek,
+            dragging: self.dragging_tab.is_some(),
         }
         .view(toast_elements);
 
@@ -343,7 +369,22 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        // Listen for the release only mid-drag; it may land anywhere.
+        let drag_end = if self.dragging_tab.is_some() {
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                ))
+                | iced::Event::Window(iced::window::Event::Unfocused) => {
+                    Some(Message::TabDragEnd)
+                }
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
+            drag_end,
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             iced::system::theme_changes().map(Message::SystemThemeChanged),
             iced::event::listen_with(|event, _, _| match event {
@@ -476,6 +517,18 @@ fn parent_socket_stream(
                                         .insert(tab_id, resp_writer);
                                     Some(Message::McpCloseTab(tab_id, target_tab_id))
                                 }
+                                "focus_tab" => {
+                                    let target_tab_id = msg
+                                        .get("target_tab_id")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize)
+                                        .unwrap_or(0);
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpFocusTab(tab_id, target_tab_id))
+                                }
                                 "set_status" => {
                                     msg.get("status")
                                         .and_then(|v| v.as_str())
@@ -509,6 +562,17 @@ fn parent_socket_stream(
                                         .filter(|s| !s.is_empty())
                                         .map(String::from);
                                     Some(Message::SetTicket(tab_id, url))
+                                }
+                                "respawn" => {
+                                    let prompt = msg.get("prompt")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let resp_writer = writer.try_clone()
+                                        .expect("failed to clone writer for response");
+                                    response_writers.lock().unwrap()
+                                        .insert(tab_id, resp_writer);
+                                    Some(Message::McpRespawn(tab_id, prompt))
                                 }
                                 "list_tabs" => {
                                     let resp_writer = writer.try_clone()

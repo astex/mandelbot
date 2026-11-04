@@ -60,6 +60,10 @@ impl App {
             project_dir.clone(), parent_id, depth, project_id,
         );
 
+        if is_claude {
+            tab.meta.model = Some(model.clone());
+        }
+
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let pty_tx = event_tx.clone();
         tab.set_event_tx(event_tx);
@@ -106,19 +110,10 @@ impl App {
             base,
             control_prefix: self.config.control_prefix.to_string(),
             session_id,
+            existing_worktree: None,
         };
 
-        let tab = self.tabs.get_by_index(inserted_idx).expect("just inserted");
-        let tab_task = Task::run(
-            crate::tab::tab_stream(
-                params,
-                event_rx,
-                pty_tx,
-                tab.term_arc(),
-                tab.listener(),
-            ),
-            |msg| msg,
-        );
+        let tab_task = self.run_tab_stream(params, event_rx, pty_tx);
 
         let fifo_path = crate::tab::runtime_dir().join(format!("{id}.fifo"));
         crate::tab::create_fifo(&fifo_path);
@@ -127,6 +122,23 @@ impl App {
             |msg| msg,
         );
         (id, Task::batch([tab_task, fifo_task]))
+    }
+
+    /// Run the PTY stream for the tab with id `params.id`.
+    pub(super) fn run_tab_stream(
+        &self,
+        params: crate::tab::TabSpawnParams,
+        event_rx: std::sync::mpsc::Receiver<crate::tab::TabEvent>,
+        pty_tx: std::sync::mpsc::Sender<crate::tab::TabEvent>,
+    ) -> Task<Message> {
+        let Some(tab) = self.tabs.get(params.id) else {
+            return Task::none();
+        };
+        let (term, listener) = (tab.term_arc(), tab.listener());
+        Task::run(
+            crate::tab::tab_stream(params, event_rx, pty_tx, term, listener),
+            |msg| msg,
+        )
     }
 
     pub(super) fn active_rank(&self) -> Option<AgentRank> {
