@@ -4,6 +4,5 @@ pub mod keybindings;
 pub mod mouse_report;
 pub mod tab_bar;
 pub mod terminal;
-pub mod timeline;
 pub mod toast;
 mod text_decorations;

@@ -553,7 +553,6 @@ impl App {
             base: None,
             control_prefix: self.config.control_prefix.to_string(),
             session_id: Some(Uuid::new_v4().to_string()),
-            resume_session_id: None,
             existing_worktree: tab.worktree_dir.clone(),
         };
 
@@ -567,7 +566,6 @@ impl App {
         self.tabs.restart(tab_id, event_tx);
         if let Some(mut meta) = self.tabs.snapshot(tab_id) {
             meta.status = AgentStatus::Working;
-            meta.redo_path.clear();
             self.tabs.write(meta);
         }
         self.run_tab_stream(params, event_rx, pty_tx)
@@ -790,11 +788,9 @@ impl App {
         &mut self,
         tab_id: usize,
         worktree_dir: Option<PathBuf>,
-        session_id: Option<String>,
     ) -> Task<Message> {
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             tab.worktree_dir = worktree_dir;
-            tab.session_id = session_id;
             self.tabs.write(tab);
         }
         Task::none()

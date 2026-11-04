@@ -4,7 +4,7 @@ use iced::{Size, Task};
 
 use crate::tab::AgentRank;
 
-use super::super::{terminal_size_with_reserved, App, Message};
+use super::super::{terminal_size, App, Message};
 
 impl App {
     pub(in crate::ui) fn handle_window_resized(&mut self, size: Size) -> Task<Message> {
@@ -47,11 +47,8 @@ impl App {
         let bar_width = self.tab_bar_reserved_width();
         let cw = self.config.char_width();
         let ch = self.config.char_height();
-        let store = &self.ckpt_store;
-        let cfg = &self.config;
         for tab in self.tabs.iter() {
-            let reserved = crate::widget::timeline::pixel_height(store, tab, cfg);
-            let (rows, cols) = terminal_size_with_reserved(size, bar_width, cw, ch, reserved);
+            let (rows, cols) = terminal_size(size, bar_width, cw, ch);
             tab.resize(rows, cols, size.width as u16, size.height as u16);
             tab.set_window_size(alacritty_terminal::event::WindowSize {
                 num_lines: rows as u16,

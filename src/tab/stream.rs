@@ -73,16 +73,6 @@ pub fn fifo_stream(
                         {
                             break;
                         }
-                    } else if trimmed == "checkpoint" {
-                        if futures::executor::block_on(
-                            sender.send(Message::AutoCheckpoint(
-                                tab_id,
-                            )),
-                        )
-                        .is_err()
-                        {
-                            break;
-                        }
                     } else if let Some(ts) = trimmed
                         .strip_prefix("wakeup_at:")
                         .and_then(|s| s.parse::<u64>().ok())
@@ -205,10 +195,9 @@ pub fn tab_stream(
                     let setup_script;
                     (setup_script, worktree_dir) =
                         if let Some(existing) = params.existing_worktree.clone() {
-                            // replace/fork flow: the worktree was pre-created
-                            // by the time-travel handlers. Still mirror
-                            // `.claude/settings.local.json` from the project
-                            // root so the new tab inherits local settings.
+                            // respawn: reuse the tab's worktree. Still
+                            // mirror `.claude/settings.local.json` from the
+                            // project root.
                             let wt_str = existing.to_string_lossy();
                             let copy = project_dir
                                 .as_ref()
@@ -255,12 +244,7 @@ pub fn tab_stream(
                             &mandelbot_dir.to_string_lossy()
                         ),
                     ));
-                    if let Some(sid) = params.resume_session_id.as_deref() {
-                        claude_args.push_str(&format!(
-                            " --resume {}",
-                            pty::shell_quote(sid),
-                        ));
-                    } else if let Some(sid) = params.session_id.as_deref() {
+                    if let Some(sid) = params.session_id.as_deref() {
                         claude_args.push_str(&format!(
                             " --session-id {}",
                             pty::shell_quote(sid),
@@ -342,18 +326,12 @@ pub fn tab_stream(
                     cwd = None;
                 }
 
-                // Tell the UI about the worktree + session so
-                // checkpoint/replace/fork can find the jsonl + repo.
+                // Tell the UI where the tab's worktree lives.
                 if is_claude {
-                    let session_id = params
-                        .resume_session_id
-                        .clone()
-                        .or_else(|| params.session_id.clone());
                     let _ = futures::executor::block_on(sender.send(
                         Message::TabReady {
                             tab_id: id,
                             worktree_dir: worktree_dir.clone(),
-                            session_id,
                         },
                     ));
                 }

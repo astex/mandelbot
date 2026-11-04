@@ -54,10 +54,7 @@ pub fn worktree_path(project_dir: &Path, worktree_location: &str, name: &str) ->
 }
 
 /// Shell snippet that copies `<project>/.claude/settings.local.json` into
-/// `<worktree>/.claude/settings.local.json`, if the source exists. Used by
-/// both the fresh-worktree flow (`setup_script`) and the time-travel flow
-/// (`replace` / `fork` spawn into a pre-existing worktree) so both inherit
-/// the project's local Claude settings.
+/// `<worktree>/.claude/settings.local.json`, if the source exists.
 pub fn copy_settings_snippet(project_dir: &Path, worktree_path: &Path) -> String {
     let dir_str = project_dir.to_string_lossy();
     let wt_str = worktree_path.to_string_lossy();

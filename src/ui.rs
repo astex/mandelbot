@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::os::unix::net as unix;
 use std::path::PathBuf;
@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::SinkExt;
 
-use iced::widget::{column, container, mouse_area, row, stack, Space};
+use iced::widget::{container, mouse_area, row, stack, Space};
 use iced::{Element, Fill, Size, Subscription, Task, Theme};
 
 use alacritty_terminal::index::{Point as GridPoint, Side};
@@ -83,13 +83,9 @@ pub enum Message {
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
     McpFocusTab(usize, usize),
-    McpCheckpoint(usize),
-    McpReplace(usize, String),
-    McpFork(usize, String, Option<String>),
     McpRespawn(usize, String),
     McpListTabs(usize),
-    AutoCheckpoint(usize),
-    TabReady { tab_id: usize, worktree_dir: Option<PathBuf>, session_id: Option<String> },
+    TabReady { tab_id: usize, worktree_dir: Option<PathBuf> },
     SetTitle(usize, String),
     SetStatus(usize, AgentStatus),
     /// A subagent or forked background agent (e.g. Claude Code's
@@ -128,11 +124,6 @@ pub enum Message {
     /// Toggle the expanded/collapsed state of a tab's association chips
     /// (the `…` control shown when a tab has 2+ of PR/file/ticket).
     ToggleAssociations(usize),
-    ToggleTimeline(usize),
-    TimelineScrub(usize, TimelineDir),
-    TimelineActivate(usize, TimelineMode),
-    Undo(usize),
-    Redo(usize),
     ShowToast {
         source_tab_id: usize,
         message: String,
@@ -142,113 +133,11 @@ pub enum Message {
     DismissToast(usize),
     SpawnFromToast(usize),
     FocusFromToast(usize),
-    CheckpointDone {
-        tab_id: usize,
-        reason: CheckpointReason,
-        result: Box<Result<crate::checkpoint::CheckpointOutcome, String>>,
-    },
-    ForkDone {
-        source_tab_id: usize,
-        action: ForkAction,
-        result: Box<Result<crate::checkpoint::ForkOutcome, String>>,
-    },
-    /// Completion signal for background work whose result we discard
-    /// (e.g. `save_tree`, or a dropped oneshot). No-op in `update`.
-    BackgroundDone,
-}
-
-#[derive(Debug, Clone)]
-pub enum CheckpointReason {
-    /// `Message::AutoCheckpoint` — no MCP response, no UI follow-up.
-    Auto,
-    /// `Message::McpCheckpoint` — respond over the parent socket.
-    Mcp,
-    /// `Message::ToggleTimeline` opening — scroll timeline to cursor
-    /// after the new tip lands.
-    TimelineOpen,
-}
-
-#[derive(Debug, Clone)]
-pub enum ForkAction {
-    /// Spawn a new tab branched from the checkpoint; keep the source.
-    Fork { prompt: Option<String> },
-    /// Spawn, then close the source tab. `new_redo` is moved onto the
-    /// new tab before the close — non-empty only on undo/redo.
-    Replace { new_redo: Vec<String> },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TimelineDir {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TimelineMode {
-    Replace,
-    Fork,
-}
-
-/// Run a blocking closure off the UI thread and turn its output into a
-/// `Task<Message>`. Uses `std::thread::spawn` + a oneshot so we don't
-/// depend on any particular async executor being current — iced 0.14
-/// doesn't bind to the tokio runtime for `Task::perform` by default.
-fn spawn_blocking_task<T, F>(
-    f: F,
-    on_done: impl FnOnce(T) -> Message + Send + 'static,
-) -> Task<Message>
-where
-    T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-{
-    Task::perform(
-        async move {
-            let (tx, rx) = futures::channel::oneshot::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(f());
-            });
-            rx.await
-        },
-        move |res| match res {
-            Ok(v) => on_done(v),
-            Err(_) => Message::BackgroundDone,
-        },
-    )
-}
-
-/// Fire-and-forget variant for background work whose result we don't
-/// need back on the UI thread (e.g. persisting the checkpoint tree to
-/// disk). The completion message is `Message::BackgroundDone`, which is a
-/// no-op in `update`.
-fn spawn_blocking_discard<F>(f: F) -> Task<Message>
-where
-    F: FnOnce() + Send + 'static,
-{
-    spawn_blocking_task(
-        move || {
-            f();
-        },
-        |()| Message::BackgroundDone,
-    )
 }
 
 fn terminal_size(window: Size, bar_width: f32, char_width: f32, char_height: f32) -> (usize, usize) {
-    terminal_size_with_reserved(window, bar_width, char_width, char_height, 0.0)
-}
-
-/// Same as `terminal_size` but reserves `reserved_px` vertical pixels
-/// below the terminal (e.g. for the timeline strip).
-fn terminal_size_with_reserved(
-    window: Size,
-    bar_width: f32,
-    char_width: f32,
-    char_height: f32,
-    reserved_px: f32,
-) -> (usize, usize) {
     let cols = ((window.width - PADDING * 2.0 - bar_width - terminal::SCROLLBAR_WIDTH) / char_width).floor() as usize;
-    let rows = ((window.height - PADDING * 2.0 - reserved_px) / char_height).floor() as usize;
+    let rows = ((window.height - PADDING * 2.0) / char_height).floor() as usize;
     (rows.max(1), cols.max(1))
 }
 
@@ -266,7 +155,6 @@ pub struct App {
     parent_socket_path: PathBuf,
     response_writers: ResponseWriters,
     bell_flashes: FlashState,
-    ckpt_store: crate::checkpoint_store::CheckpointStore,
     toasts: Vec<Toast>,
     next_toast_id: usize,
     /// A native folder picker is in flight; further `OpenProjectDialog`
@@ -286,11 +174,6 @@ impl App {
     pub fn boot() -> (Self, Task<Message>) {
         let config = Config::load();
         let terminal_theme = config.terminal_theme();
-
-        let mut ckpt_store = crate::checkpoint_store::load_all().unwrap_or_default();
-        for outcome in ckpt_store.gc_orphans(&HashSet::new()) {
-            let _ = outcome.persist(&ckpt_store);
-        }
 
         let parent_socket_dir = crate::tab::runtime_dir();
         std::fs::create_dir_all(&parent_socket_dir).expect("failed to create socket dir");
@@ -317,7 +200,6 @@ impl App {
             parent_socket_path,
             response_writers,
             bell_flashes: FlashState::default(),
-            ckpt_store,
             toasts: Vec::new(),
             next_toast_id: 0,
             project_dialog_open: false,
@@ -401,31 +283,11 @@ impl App {
             Message::OpenFile(tab_id) => self.handle_open_file(tab_id),
             Message::OpenTicket(tab_id) => self.handle_open_ticket(tab_id),
             Message::ToggleAssociations(tab_id) => self.handle_toggle_associations(tab_id),
-            Message::TabReady { tab_id, worktree_dir, session_id } => {
-                self.handle_tab_ready(tab_id, worktree_dir, session_id)
-            }
-            Message::McpCheckpoint(tab_id) => {
-                self.kick_checkpoint(tab_id, CheckpointReason::Mcp)
-            }
-            Message::McpReplace(tab_id, ckpt_id) => self.handle_replace(tab_id, ckpt_id),
-            Message::McpFork(tab_id, ckpt_id, prompt) => {
-                self.handle_fork(tab_id, ckpt_id, prompt)
+            Message::TabReady { tab_id, worktree_dir } => {
+                self.handle_tab_ready(tab_id, worktree_dir)
             }
             Message::McpRespawn(tab_id, prompt) => self.handle_mcp_respawn(tab_id, prompt),
             Message::McpListTabs(tab_id) => self.handle_mcp_list_tabs(tab_id),
-            Message::AutoCheckpoint(tab_id) => self.handle_auto_checkpoint(tab_id),
-            Message::ToggleTimeline(tab_id) => self.handle_toggle_timeline(tab_id),
-            Message::CheckpointDone { tab_id, reason, result } => {
-                self.finish_checkpoint(tab_id, reason, *result)
-            }
-            Message::ForkDone { source_tab_id, action, result } => {
-                self.finish_fork(source_tab_id, action, *result)
-            }
-            Message::BackgroundDone => Task::none(),
-            Message::TimelineScrub(tab_id, dir) => self.handle_timeline_scrub(tab_id, dir),
-            Message::TimelineActivate(tab_id, mode) => self.handle_timeline_activate(tab_id, mode),
-            Message::Undo(tab_id) => self.handle_undo(tab_id),
-            Message::Redo(tab_id) => self.handle_redo(tab_id),
             Message::ShowToast { source_tab_id, message, prompt, target_tab_id } => {
                 self.handle_show_toast(source_tab_id, message, prompt, target_tab_id)
             }
@@ -456,23 +318,10 @@ impl App {
         }
         .view(toast_elements);
 
-        let (term_element, timeline_element): (Element<'_, Message>, Option<Element<'_, Message>>) =
-            if let Some(tab) = self.tabs.active() {
-                let term: Element<'_, Message> = TerminalWidget::new(tab, &self.config).into();
-                if tab.timeline_visible {
-                    let timeline = crate::widget::timeline::view(
-                        &self.ckpt_store,
-                        tab,
-                        &self.terminal_theme,
-                        &self.config,
-                    );
-                    (term, Some(timeline))
-                } else {
-                    (term, None)
-                }
-            } else {
-                (Space::new().width(Fill).height(Fill).into(), None)
-            };
+        let term_element: Element<'_, Message> = match self.tabs.active() {
+            Some(tab) => TerminalWidget::new(tab, &self.config).into(),
+            None => Space::new().width(Fill).height(Fill).into(),
+        };
 
         let terminal_pane = container(term_element)
             .padding(PADDING)
@@ -483,11 +332,7 @@ impl App {
                 ..Default::default()
             });
 
-        let right_side: Element<'_, Message> = if let Some(timeline) = timeline_element {
-            column![terminal_pane, timeline].into()
-        } else {
-            terminal_pane.into()
-        };
+        let right_side: Element<'_, Message> = terminal_pane.into();
 
         if !collapsed {
             return row![tab_bar, right_side].width(Fill).height(Fill).into();
@@ -717,38 +562,6 @@ fn parent_socket_stream(
                                         .filter(|s| !s.is_empty())
                                         .map(String::from);
                                     Some(Message::SetTicket(tab_id, url))
-                                }
-                                "checkpoint" => {
-                                    let resp_writer = writer.try_clone()
-                                        .expect("failed to clone writer for response");
-                                    response_writers.lock().unwrap()
-                                        .insert(tab_id, resp_writer);
-                                    Some(Message::McpCheckpoint(tab_id))
-                                }
-                                "replace" => {
-                                    let ckpt_id = msg.get("checkpoint_id")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from)
-                                        .unwrap_or_default();
-                                    let resp_writer = writer.try_clone()
-                                        .expect("failed to clone writer for response");
-                                    response_writers.lock().unwrap()
-                                        .insert(tab_id, resp_writer);
-                                    Some(Message::McpReplace(tab_id, ckpt_id))
-                                }
-                                "fork" => {
-                                    let ckpt_id = msg.get("checkpoint_id")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from)
-                                        .unwrap_or_default();
-                                    let prompt = msg.get("prompt")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from);
-                                    let resp_writer = writer.try_clone()
-                                        .expect("failed to clone writer for response");
-                                    response_writers.lock().unwrap()
-                                        .insert(tab_id, resp_writer);
-                                    Some(Message::McpFork(tab_id, ckpt_id, prompt))
                                 }
                                 "respawn" => {
                                     let prompt = msg.get("prompt")

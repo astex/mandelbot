@@ -264,11 +264,6 @@ impl Tabs {
         self.recompute_all();
     }
 
-    pub fn insert(&mut self, pos: usize, tab: TerminalTab) {
-        self.tabs.insert(pos, tab);
-        self.recompute_all();
-    }
-
     pub fn retain<F: FnMut(&TerminalTab) -> bool>(&mut self, f: F) {
         self.tabs.retain(f);
         let alive: HashSet<usize> = self.tabs.iter().map(|t| t.id).collect();
@@ -491,20 +486,6 @@ mod tests {
         assert_eq!(tabs.index_of(30), Some(2));
         assert_eq!(tabs.children_of(None), &[10]);
         assert_eq!(tabs.children_of(Some(10)), &[20, 30]);
-    }
-
-    #[test]
-    fn insert_preserves_order_in_children_of() {
-        let mut tabs = Tabs::new();
-        tabs.push(tab(1, None));
-        tabs.push(tab(2, Some(1)));
-        tabs.push(tab(4, Some(1)));
-        // Insert child 3 between 2 and 4 in vec order.
-        tabs.insert(2, tab(3, Some(1)));
-
-        assert_eq!(tabs.children_of(Some(1)), &[2, 3, 4]);
-        assert_eq!(tabs.index_of(3), Some(2));
-        assert_eq!(tabs.index_of(4), Some(3));
     }
 
     #[test]

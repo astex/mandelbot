@@ -98,12 +98,9 @@ pub struct TabSpawnParams {
     pub control_prefix: String,
     /// Fresh session UUID to pass via `--session-id` when launching claude.
     pub session_id: Option<String>,
-    /// If set, resume this existing session (pre-placed jsonl) instead of
-    /// starting a fresh one. Used for replace/fork.
-    pub resume_session_id: Option<String>,
-    /// If set, skip worktree creation — the caller (replace/fork) has
-    /// already placed a worktree here; the tab should cd into it and
-    /// still mirror `.claude/settings.local.json` from the project root.
+    /// If set, skip worktree creation and `cd` into this existing
+    /// worktree instead (still mirroring `.claude/settings.local.json`
+    /// from the project root). Used by `respawn`.
     pub existing_worktree: Option<PathBuf>,
 }
 
@@ -112,10 +109,6 @@ pub struct TabSpawnParams {
 #[derive(Clone)]
 pub struct TabMeta {
     pub id: usize,
-    /// Stable per-tab UUID. Unlike the numeric `id`, this survives across
-    /// mandelbot restarts when a tab's durable state is rehydrated.
-    /// Used as the on-disk key for `checkpoint_store`.
-    pub uuid: String,
     pub is_claude: bool,
     pub rank: AgentRank,
     pub project_dir: Option<PathBuf>,
@@ -153,21 +146,10 @@ pub struct TabMeta {
     /// passed or no wake-up has been scheduled.
     pub next_wakeup_at_ms: Option<u64>,
     pub pending_input: Option<String>,
-    /// Claude session UUID for this tab (if `is_claude`).
-    pub session_id: Option<String>,
     /// Model the tab's Claude was launched with, reused on `respawn`.
     pub model: Option<String>,
     /// Worktree path (if task+git spawn).
     pub worktree_dir: Option<PathBuf>,
-    /// Whether the checkpoint timeline strip is open under this tab.
-    pub timeline_visible: bool,
-    /// Cursor position in the timeline. `None` defaults to the tab's
-    /// tip (its current checkpoint); arrow keys set `Some(id)` to
-    /// scrub elsewhere in the tree.
-    pub timeline_cursor: Option<String>,
-    /// Stack of checkpoint ids to redo back into. Pushed on undo, popped
-    /// on redo, cleared on any non-undo/non-redo activity. In-memory only.
-    pub redo_path: Vec<String>,
 }
 
 impl TabMeta {
@@ -220,7 +202,6 @@ impl TerminalTab {
         let (term, listener) = new_term(cols, rows);
         let meta = TabMeta {
             id,
-            uuid: uuid::Uuid::new_v4().to_string(),
             is_claude,
             rank,
             project_dir,
@@ -246,12 +227,8 @@ impl TerminalTab {
             associations_expanded: false,
             next_wakeup_at_ms: None,
             pending_input: None,
-            session_id: None,
             model: None,
             worktree_dir: None,
-            timeline_visible: false,
-            timeline_cursor: None,
-            redo_path: Vec::new(),
         };
         Self {
             meta,

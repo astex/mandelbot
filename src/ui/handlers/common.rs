@@ -32,26 +32,10 @@ impl App {
         model_override: Option<String>,
         base: Option<String>,
     ) -> (usize, Task<Message>) {
-        self.spawn_tab_full(
-            is_claude, rank, project_dir, parent_id, prompt,
-            branch, model_override, base, None, None, None,
-        )
-    }
+        if let Some(pid) = parent_id {
+            self.tabs.unfold_ancestors(pid);
+        }
 
-    pub(super) fn spawn_tab_full(
-        &mut self,
-        is_claude: bool,
-        rank: AgentRank,
-        project_dir: Option<PathBuf>,
-        parent_id: Option<usize>,
-        prompt: Option<String>,
-        branch: Option<String>,
-        model_override: Option<String>,
-        base: Option<String>,
-        resume_session_id: Option<String>,
-        existing_worktree: Option<PathBuf>,
-        insert_position: Option<usize>,
-    ) -> (usize, Task<Message>) {
         let Some(size) = self.window_size else {
             return (0, Task::none());
         };
@@ -84,16 +68,8 @@ impl App {
         let pty_tx = event_tx.clone();
         tab.set_event_tx(event_tx);
 
-        let inserted_idx = match insert_position {
-            Some(pos) if pos <= self.tabs.len() => {
-                self.tabs.insert(pos, tab);
-                pos
-            }
-            _ => {
-                self.tabs.push(tab);
-                self.tabs.len() - 1
-            }
-        };
+        self.tabs.push(tab);
+        let inserted_idx = self.tabs.len() - 1;
 
         if let Some(tab) = self.tabs.get_by_index(inserted_idx) {
             tab.set_colors(
@@ -111,7 +87,7 @@ impl App {
             });
         }
 
-        let session_id = if is_claude && resume_session_id.is_none() {
+        let session_id = if is_claude {
             Some(Uuid::new_v4().to_string())
         } else {
             None
@@ -134,8 +110,7 @@ impl App {
             base,
             control_prefix: self.config.control_prefix.to_string(),
             session_id,
-            resume_session_id,
-            existing_worktree,
+            existing_worktree: None,
         };
 
         let tab_task = self.run_tab_stream(params, event_rx, pty_tx);
@@ -184,11 +159,7 @@ impl App {
             return Task::none();
         };
 
-        let (tab_uuid, closing_parent_id) = {
-            let closing = self.tabs.get(tab_id).expect("just found");
-            (closing.uuid.clone(), closing.parent_id)
-        };
-        let _ = self.ckpt_store.close_tab(&tab_uuid).persist(&self.ckpt_store);
+        let closing_parent_id = self.tabs.get(tab_id).expect("just found").parent_id;
 
         self.tabs.close_with_promotion(tab_id);
 
