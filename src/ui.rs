@@ -59,7 +59,7 @@ pub enum Message {
     SpawnChild,
     CloseTab(usize),
     SelectTab(usize),
-    /// Mouse down on a tab-bar row: select it and start dragging it.
+    /// Double-click on a tab-bar row: select it and start dragging it.
     TabPressed(usize),
     /// Cursor entered tab `id`'s row; mid-drag, the dragged tab takes
     /// its slot if the two are siblings.
@@ -166,7 +166,7 @@ pub struct App {
     tab_bar_hovered: bool,
     /// Movement prefix is held; expands a collapsed bar like hover does.
     tab_bar_peek: bool,
-    /// Tab being dragged in the tab bar; set from press until release.
+    /// Tab being dragged in the tab bar; set from double-click until release.
     dragging_tab: Option<usize>,
 }
 
