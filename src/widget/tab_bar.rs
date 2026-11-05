@@ -476,11 +476,13 @@ fn scroll_style(status: scrollable::Status, thumb: Color, thumb_hover: Color) ->
     }
 }
 
-/// Wrap a tab row so pressing selects and grabs it, and entering it
-/// mid-drag pulls the grabbed tab into its slot.
+/// Wrap a tab row so a click selects it, a double-click (held) grabs it,
+/// and entering it mid-drag pulls the grabbed tab into its slot. Requiring
+/// the double-click keeps a slightly sloppy single click from reordering.
 fn draggable<'a>(row: Element<'a, Message>, tab_id: usize) -> Element<'a, Message> {
     mouse_area(row)
-        .on_press(Message::TabPressed(tab_id))
+        .on_press(Message::SelectTab(tab_id))
+        .on_double_click(Message::TabPressed(tab_id))
         .on_enter(Message::TabDragOver(tab_id))
         .into()
 }
