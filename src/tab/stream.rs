@@ -3,6 +3,7 @@ use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::test::TermSize;
@@ -20,6 +21,14 @@ use super::{
 use crate::pty;
 use crate::ui::Message;
 use crate::worktree;
+
+/// Wrap `text` in bracketed-paste markers so multi-line prompts arrive as
+/// one paste instead of being submitted line by line. Any embedded end
+/// marker is stripped so the prompt can't terminate the paste early.
+fn bracketed_paste(text: &str) -> Vec<u8> {
+    let clean = text.replace("\x1b[201~", "");
+    format!("\x1b[200~{clean}\x1b[201~").into_bytes()
+}
 
 /// Read status updates from a FIFO and emit `SetStatus` messages.
 /// Opens the FIFO with O_RDWR to avoid EOF when writers close.
@@ -169,8 +178,10 @@ pub fn tab_stream(
                     .to_string_lossy()
                     .into_owned();
 
-                let prompt_flag =
-                    params.prompt.unwrap_or_default();
+                let mut pending_prompt = params
+                    .prompt
+                    .filter(|p| !p.is_empty())
+                    .filter(|_| is_claude);
                 let command: String;
                 let args_owned: Vec<String>;
                 let mut env: HashMap<String, String>;
@@ -256,12 +267,11 @@ pub fn tab_stream(
                             pty::shell_quote(sid),
                         ));
                     }
-                    if !prompt_flag.is_empty() {
-                        claude_args.push_str(" -- ");
-                        claude_args.push_str(
-                            &pty::shell_quote(&prompt_flag),
-                        );
-                    }
+                    // The first-turn prompt is deliberately NOT passed as
+                    // argv: it would show up in `ps`, and any
+                    // `pkill -f <word>` would match every sibling whose
+                    // brief mentions <word>. It is typed into the PTY once
+                    // claude's input frame is on screen instead.
 
                     let wrapped_cmd = if setup_script.is_empty()
                     {
@@ -425,13 +435,30 @@ pub fn tab_stream(
                             }
                             if is_claude {
                                 let t = term.lock().unwrap();
-                                if let Some(count) =
-                                    detect_prompt_shell_count(&t)
-                                {
+                                let frame_ready =
+                                    detect_prompt_shell_count(&t);
+                                if let Some(count) = frame_ready {
                                     bg_tasks = count;
                                 }
                                 pr_number =
                                     detect_prompt_pr_number(&t);
+                                drop(t);
+                                if frame_ready.is_some()
+                                    && let Some(prompt) =
+                                        pending_prompt.take()
+                                {
+                                    let _ = writer.write_all(
+                                        &bracketed_paste(&prompt),
+                                    );
+                                    let _ = writer.flush();
+                                    // Let claude finish ingesting the
+                                    // paste before submitting it.
+                                    std::thread::sleep(
+                                        Duration::from_millis(150),
+                                    );
+                                    let _ = writer.write_all(b"\r");
+                                    let _ = writer.flush();
+                                }
                             }
                             let _ =
                                 futures::executor::block_on(
@@ -560,4 +587,25 @@ pub fn tab_stream(
             let _ = exit_receiver.await;
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bracketed_paste;
+
+    #[test]
+    fn paste_wraps_text() {
+        assert_eq!(
+            bracketed_paste("a\nb"),
+            b"\x1b[200~a\nb\x1b[201~".to_vec(),
+        );
+    }
+
+    #[test]
+    fn paste_strips_embedded_end_marker() {
+        assert_eq!(
+            bracketed_paste("a\x1b[201~b"),
+            b"\x1b[200~ab\x1b[201~".to_vec(),
+        );
+    }
 }
