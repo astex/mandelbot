@@ -98,6 +98,9 @@ pub struct TabSpawnParams {
     pub control_prefix: String,
     /// Fresh session UUID to pass via `--session-id` when launching claude.
     pub session_id: Option<String>,
+    /// Session name to pass via `--name` (its ListAgents address).
+    /// `None` lets Claude derive one. Used by `respawn`.
+    pub session_name: Option<String>,
     /// If set, skip worktree creation and `cd` into this existing
     /// worktree instead (still mirroring `.claude/settings.local.json`
     /// from the project root). Used by `respawn`.

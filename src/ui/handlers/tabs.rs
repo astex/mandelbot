@@ -505,11 +505,13 @@ impl App {
 
     /// Restart the Claude process in tab `tab_id` with a fresh
     /// conversation seeded by `prompt`. The tab keeps its id, position,
-    /// children, and worktree; only the session changes.
+    /// children, and worktree; only the session changes. `session_name`
+    /// is the old session's name, reused so its address stays the same.
     pub(in crate::ui) fn handle_mcp_respawn(
         &mut self,
         tab_id: usize,
         prompt: String,
+        session_name: Option<String>,
     ) -> Task<Message> {
         let Some(size) = self.window_size else {
             return Task::none();
@@ -553,6 +555,7 @@ impl App {
             base: None,
             control_prefix: self.config.control_prefix.to_string(),
             session_id: Some(Uuid::new_v4().to_string()),
+            session_name,
             existing_worktree: tab.worktree_dir.clone(),
         };
 
