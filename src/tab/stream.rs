@@ -250,6 +250,12 @@ pub fn tab_stream(
                             pty::shell_quote(sid),
                         ));
                     }
+                    if let Some(name) = params.session_name.as_deref() {
+                        claude_args.push_str(&format!(
+                            " --name {}",
+                            pty::shell_quote(name),
+                        ));
+                    }
                     if !prompt_flag.is_empty() {
                         claude_args.push_str(" -- ");
                         claude_args.push_str(

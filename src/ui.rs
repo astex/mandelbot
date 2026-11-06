@@ -83,7 +83,7 @@ pub enum Message {
     McpSpawnAgent(usize, Option<PathBuf>, Option<usize>, Option<String>, Option<String>, Option<String>, Option<String>),
     McpCloseTab(usize, usize),
     McpFocusTab(usize, usize),
-    McpRespawn(usize, String),
+    McpRespawn(usize, String, Option<String>),
     McpListTabs(usize),
     TabReady { tab_id: usize, worktree_dir: Option<PathBuf> },
     SetTitle(usize, String),
@@ -286,7 +286,7 @@ impl App {
             Message::TabReady { tab_id, worktree_dir } => {
                 self.handle_tab_ready(tab_id, worktree_dir)
             }
-            Message::McpRespawn(tab_id, prompt) => self.handle_mcp_respawn(tab_id, prompt),
+            Message::McpRespawn(tab_id, prompt, name) => self.handle_mcp_respawn(tab_id, prompt, name),
             Message::McpListTabs(tab_id) => self.handle_mcp_list_tabs(tab_id),
             Message::ShowToast { source_tab_id, message, prompt, target_tab_id } => {
                 self.handle_show_toast(source_tab_id, message, prompt, target_tab_id)
@@ -568,11 +568,16 @@ fn parent_socket_stream(
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("")
                                         .to_string();
+                                    let name = msg.get("name")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(String::from);
                                     let resp_writer = writer.try_clone()
                                         .expect("failed to clone writer for response");
                                     response_writers.lock().unwrap()
                                         .insert(tab_id, resp_writer);
-                                    Some(Message::McpRespawn(tab_id, prompt))
+                                    Some(Message::McpRespawn(tab_id, prompt, name))
                                 }
                                 "list_tabs" => {
                                     let resp_writer = writer.try_clone()

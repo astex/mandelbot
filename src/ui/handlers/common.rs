@@ -110,6 +110,7 @@ impl App {
             base,
             control_prefix: self.config.control_prefix.to_string(),
             session_id,
+            session_name: None,
             existing_worktree: None,
         };
 

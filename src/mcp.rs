@@ -233,6 +233,24 @@ fn handle_tools_list(id: Value) -> Response {
     )
 }
 
+/// Claude Code's config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
+fn claude_config_dir() -> std::path::PathBuf {
+    match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) if !dir.is_empty() => dir.into(),
+        _ => Path::new(&std::env::var("HOME").unwrap_or_default()).join(".claude"),
+    }
+}
+
+/// The current name of the Claude session running as `pid`, read from
+/// the registry Claude Code keeps at `<config_dir>/sessions/<pid>.json`.
+/// Read live so a name changed from the prompt is picked up.
+fn claude_session_name(config_dir: &Path, pid: u32) -> Option<String> {
+    let path = config_dir.join("sessions").join(format!("{pid}.json"));
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let name = data.get("name")?.as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 async fn send_to_parent(
     parent_writer: &mut tokio::io::WriteHalf<UnixStream>,
     msg: Value,
@@ -639,11 +657,19 @@ async fn handle_tools_call(
                 return Response::err(id, -32602, "respawn requires a non-empty prompt".into());
             }
 
-            let msg = serde_json::json!({
+            let mut msg = serde_json::json!({
                 "type": "respawn",
                 "tab_id": tab_id,
                 "prompt": prompt,
             });
+            // Carry the session's name (its ListAgents address) over to
+            // the fresh session. Claude launched this server directly,
+            // so our parent is the Claude process.
+            if let Some(name) =
+                claude_session_name(&claude_config_dir(), std::os::unix::process::parent_id())
+            {
+                msg["name"] = Value::String(name);
+            }
 
             if let Err(e) = send_to_parent(parent_writer, msg).await {
                 return Response::err(id, -32000, e);
@@ -739,6 +765,31 @@ pub async fn run(
 mod tests {
     use std::io::{BufRead, Write};
     use std::os::unix::net as unix;
+
+    #[test]
+    fn claude_session_name_reads_registry() {
+        let dir = std::env::temp_dir()
+            .join(format!("mandelbot-session-name-{}", std::process::id()));
+        let sessions = dir.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("101.json"),
+            r#"{"pid":101,"name":"fair-heron-798-60","nameSource":"derived"}"#,
+        )
+        .unwrap();
+        std::fs::write(sessions.join("102.json"), r#"{"pid":102,"name":"  "}"#).unwrap();
+        std::fs::write(sessions.join("103.json"), "not json").unwrap();
+
+        assert_eq!(
+            super::claude_session_name(&dir, 101).as_deref(),
+            Some("fair-heron-798-60"),
+        );
+        assert_eq!(super::claude_session_name(&dir, 102), None);
+        assert_eq!(super::claude_session_name(&dir, 103), None);
+        assert_eq!(super::claude_session_name(&dir, 104), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn test_mcp_flow() {
