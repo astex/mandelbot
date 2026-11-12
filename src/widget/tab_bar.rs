@@ -115,11 +115,15 @@ impl<'a> TabBar<'a> {
                 background: Some(inactive_bg.into()),
                 ..Default::default()
             });
-        if self.dragging {
-            mouse_area(bar).interaction(mouse::Interaction::Grabbing).into()
+        // Always wrap, toggling only the cursor: adding or removing the
+        // wrapper changes the widget tree's shape, which rebuilds the
+        // scrollable's state and snaps the tab list back to the top.
+        let interaction = if self.dragging {
+            mouse::Interaction::Grabbing
         } else {
-            bar.into()
-        }
+            mouse::Interaction::None
+        };
+        mouse_area(bar).interaction(interaction).into()
     }
 
     fn width(&self) -> f32 {
