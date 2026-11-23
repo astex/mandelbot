@@ -79,6 +79,7 @@ impl App {
             Some(_code) => {
                 if let Some(mut tab) = self.tabs.snapshot(tab_id) {
                     tab.status = AgentStatus::Error;
+                    tab.active_subagents.clear();
                     self.tabs.write(tab);
                 }
                 Task::none()
@@ -178,6 +179,33 @@ impl App {
         if let Some(mut tab) = self.tabs.snapshot(tab_id) {
             if tab.status == AgentStatus::Blocked {
                 tab.status = tab.status_before_block;
+                self.tabs.write(tab);
+            }
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_subagent_started(&mut self, tab_id: usize, agent_id: String) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            tab.active_subagents.insert(agent_id);
+            self.tabs.write(tab);
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_subagent_stopped(&mut self, tab_id: usize, agent_id: String) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            if tab.active_subagents.remove(&agent_id) {
+                self.tabs.write(tab);
+            }
+        }
+        Task::none()
+    }
+
+    pub(in crate::ui) fn handle_subagents_reset(&mut self, tab_id: usize) -> Task<Message> {
+        if let Some(mut tab) = self.tabs.snapshot(tab_id) {
+            if !tab.active_subagents.is_empty() {
+                tab.active_subagents.clear();
                 self.tabs.write(tab);
             }
         }
@@ -394,7 +422,7 @@ impl App {
             .collect();
 
         let status_of = |id: usize| -> Option<(AgentStatus, AgentRank)> {
-            self.tabs.get(id).map(|t| (t.status, t.rank))
+            self.tabs.get(id).map(|t| (t.display_status(), t.rank))
         };
 
         let target = candidates.iter().find(|&&id| matches!(status_of(id), Some((AgentStatus::Blocked, _))))
@@ -848,7 +876,7 @@ fn build_list_tabs_json(
                 AgentRank::Project => "project",
                 AgentRank::Task => "task",
             };
-            let status = match t.status {
+            let status = match t.display_status() {
                 AgentStatus::Idle => "idle",
                 AgentStatus::Working => "working",
                 AgentStatus::Compacting => "compacting",

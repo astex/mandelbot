@@ -63,6 +63,10 @@ pub fn fifo_stream(
                         {
                             break;
                         }
+                    } else if let Some(msg) = subagent_message(tab_id, trimmed) {
+                        if futures::executor::block_on(sender.send(msg)).is_err() {
+                            break;
+                        }
                     } else if trimmed == "subagent_tool" {
                         if futures::executor::block_on(
                             sender.send(Message::SubagentToolUse(
@@ -561,4 +565,18 @@ pub fn tab_stream(
             let _ = exit_receiver.await;
         },
     )
+}
+
+/// Parse a subagent lifecycle line written by the hooks into the FIFO.
+fn subagent_message(tab_id: usize, line: &str) -> Option<Message> {
+    if line == "subagents_reset" {
+        return Some(Message::SubagentsReset(tab_id));
+    }
+    if let Some(id) = line.strip_prefix("subagent_start:").filter(|id| !id.is_empty()) {
+        return Some(Message::SubagentStarted(tab_id, id.to_string()));
+    }
+    if let Some(id) = line.strip_prefix("subagent_stop:").filter(|id| !id.is_empty()) {
+        return Some(Message::SubagentStopped(tab_id, id.to_string()));
+    }
+    None
 }

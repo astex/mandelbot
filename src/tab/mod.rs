@@ -15,6 +15,7 @@ pub(crate) use grid::{detect_prompt_pr_number, detect_prompt_shell_count};
 
 use events::{color_to_rgb, new_term, TermColors};
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -123,6 +124,11 @@ pub struct TabMeta {
     /// Status to return to when a subagent's tool call resolves a
     /// `Blocked` permission prompt. Captured on entry to `Blocked`.
     pub status_before_block: AgentStatus,
+    /// IDs of subagents currently running (between their
+    /// `SubagentStart` and `SubagentStop` hooks). Background subagents
+    /// outlive the main turn, so an idle tab with live subagents is
+    /// still doing work — see `display_status`.
+    pub active_subagents: HashSet<String>,
     pub background_tasks: usize,
     /// PR number detected by the status-line scraper. Written on every
     /// Claude output tick. Use `pr_number()` to read, not this field —
@@ -169,6 +175,17 @@ impl TabMeta {
         self.pr_number().is_some() as usize
             + self.file_path.is_some() as usize
             + self.ticket_url.is_some() as usize
+    }
+
+    /// Status as shown to the user: an idle tab whose subagents are
+    /// still running reads as `Working`. States that need the user's
+    /// attention (blocked, review, error) are left alone.
+    pub fn display_status(&self) -> AgentStatus {
+        if self.status == AgentStatus::Idle && !self.active_subagents.is_empty() {
+            AgentStatus::Working
+        } else {
+            self.status
+        }
     }
 
     pub fn is_pending(&self) -> bool {
@@ -222,6 +239,7 @@ impl TerminalTab {
                 AgentStatus::Idle
             },
             status_before_block: AgentStatus::Idle,
+            active_subagents: HashSet::new(),
             background_tasks: 0,
             pr_scraped: None,
             pr_override: None,
@@ -459,5 +477,23 @@ impl Drop for TerminalTab {
         if let Some(tx) = &self.event_tx {
             let _ = tx.send(TabEvent::Shutdown);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_tab_with_subagents_displays_working() {
+        let mut meta = TerminalTab::new(1, 24, 80, true, AgentRank::Task, None, None, 0, None).meta.clone();
+        meta.status = AgentStatus::Idle;
+        assert_eq!(meta.display_status(), AgentStatus::Idle);
+
+        meta.active_subagents.insert("a1".into());
+        assert_eq!(meta.display_status(), AgentStatus::Working);
+
+        meta.status = AgentStatus::Blocked;
+        assert_eq!(meta.display_status(), AgentStatus::Blocked);
     }
 }

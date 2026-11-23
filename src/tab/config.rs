@@ -109,10 +109,35 @@ pub(super) fn write_hooks_settings(dir: &Path) -> PathBuf {
         "command": r#"if grep -q '"agent_id":"'; then echo subagent_tool > $MANDELBOT_FIFO; else echo status:working > $MANDELBOT_FIFO; fi"#,
     });
 
+    // Track running subagents by `agent_id` so a tab whose main turn
+    // has ended but whose background subagents are still going shows
+    // as working. Extracted with grep (no jq dependency); the first
+    // `"agent_id":"…"` match is the top-level field.
+    let subagent_event = |event: &str| -> serde_json::Value {
+        serde_json::json!({
+            "type": "command",
+            "command": format!(
+                r#"id=$(grep -oE '"agent_id": ?"[^"]+"' | head -n1 | sed -E 's/.*"([^"]+)"$/\1/'); [ -n "$id" ] && echo "subagent_{event}:$id" > $MANDELBOT_FIFO"#,
+            ),
+        })
+    };
+
     let settings = serde_json::json!({
         "hooks": {
             "SessionStart": [{
-                "hooks": [set_status("idle")],
+                "hooks": [
+                    set_status("idle"),
+                    {
+                        "type": "command",
+                        "command": "echo subagents_reset > $MANDELBOT_FIFO",
+                    },
+                ],
+            }],
+            "SubagentStart": [{
+                "hooks": [subagent_event("start")],
+            }],
+            "SubagentStop": [{
+                "hooks": [subagent_event("stop")],
             }],
             "UserPromptSubmit": [{
                 "hooks": [set_status("working")],
@@ -550,4 +575,50 @@ pub(super) fn write_plugin_dir(
     }
 
     plugin_dir
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_hooks_settings;
+
+    /// Run the generated hook for `event` with `input` on stdin and
+    /// return what it wrote to the FIFO.
+    fn run_hook(event: &str, input: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "mandelbot-hooks-test-{}-{event}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(write_hooks_settings(&dir)).unwrap(),
+        )
+        .unwrap();
+        let command = settings["hooks"][event][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let out = dir.join("fifo");
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .env("MANDELBOT_FIFO", &out)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child.wait().unwrap();
+        let written = std::fs::read_to_string(&out).unwrap_or_default();
+        std::fs::remove_dir_all(&dir).unwrap();
+        written
+    }
+
+    #[test]
+    fn subagent_hooks_report_agent_id() {
+        let start = r#"{"session_id":"s","agent_id":"a4cedea3","agent_type":"general-purpose","hook_event_name":"SubagentStart"}"#;
+        assert_eq!(run_hook("SubagentStart", start), "subagent_start:a4cedea3\n");
+
+        let stop = r#"{"session_id":"s","agent_id":"a4cedea3","hook_event_name":"SubagentStop","background_tasks":[{"id":"a4cedea3","type":"subagent"}]}"#;
+        assert_eq!(run_hook("SubagentStop", stop), "subagent_stop:a4cedea3\n");
+    }
 }
