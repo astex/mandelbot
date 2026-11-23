@@ -93,6 +93,12 @@ pub enum Message {
     /// hooks this must not mark an idle tab as working — it only clears
     /// a `Blocked` state left by that subagent's permission prompt.
     SubagentToolUse(usize),
+    /// A subagent started (`SubagentStart` hook), keyed by `agent_id`.
+    SubagentStarted(usize, String),
+    /// A subagent finished (`SubagentStop` hook), keyed by `agent_id`.
+    SubagentStopped(usize, String),
+    /// A new Claude session started; forget any tracked subagents.
+    SubagentsReset(usize),
     /// Agent-set PR number. `Some(n)` locks the PR to `n` and disables
     /// the status-line scraper for that tab; `None` clears both.
     SetPr(usize, Option<u32>),
@@ -228,6 +234,9 @@ impl App {
             }
             Message::SetStatus(tab_id, status) => self.handle_set_status(tab_id, status),
             Message::SubagentToolUse(tab_id) => self.handle_subagent_tool_use(tab_id),
+            Message::SubagentStarted(tab_id, id) => self.handle_subagent_started(tab_id, id),
+            Message::SubagentStopped(tab_id, id) => self.handle_subagent_stopped(tab_id, id),
+            Message::SubagentsReset(tab_id) => self.handle_subagents_reset(tab_id),
             Message::SetPr(tab_id, pr) => self.handle_set_pr(tab_id, pr),
             Message::SetFile(tab_id, path) => self.handle_set_file(tab_id, path),
             Message::SetTicket(tab_id, url) => self.handle_set_ticket(tab_id, url),

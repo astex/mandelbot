@@ -241,7 +241,8 @@ impl<'a> TabBar<'a> {
             _ => String::new(),
         };
 
-        let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
+        let status = tab.display_status();
+        let dot_char = if status == AgentStatus::Idle { "○" } else { "●" };
         let number_text = display_number.map(|n| n.to_string()).unwrap_or_else(|| " ".into());
         let mut content = row![].align_y(Alignment::Center).spacing(SUFFIX_SPACING);
         if !label.is_empty() {
@@ -249,7 +250,7 @@ impl<'a> TabBar<'a> {
         }
         content = content
             .push(Space::new().width(Fill))
-            .push(text(dot_char).size(size * 0.6).color(status_dot_color(tab.status, fg)))
+            .push(text(dot_char).size(size * 0.6).color(status_dot_color(status, fg)))
             .push(text(number_text).size(size).font(Font::MONOSPACE).color(fg));
 
         let styled = container(content)
@@ -392,11 +393,12 @@ impl<'a> TabBar<'a> {
             suffix = suffix.push(text("⏱").size(size * 0.75).color(self.terminal_theme.cyan));
         }
 
-        let dot_char = if tab.status == AgentStatus::Idle { "○" } else { "●" };
+        let status = tab.display_status();
+        let dot_char = if status == AgentStatus::Idle { "○" } else { "●" };
         suffix = suffix.push(
             text(dot_char)
                 .size(size * 0.6)
-                .color(status_dot_color(tab.status, fg)),
+                .color(status_dot_color(status, fg)),
         );
 
         let number_text = match display_number {
